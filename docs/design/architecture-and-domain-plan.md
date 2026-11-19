@@ -1,6 +1,6 @@
 # `better-zentao` 架构与业务封装设计方案（已确认定稿 v1.0）
 
-> 基于内网禅道开源版 **22.6** 实测探测结论（见 [`docs/research/2026-11-19-zentao-22.6-api-probe.md`](../research/2026-11-19-zentao-22.6-api-probe.md)）及 7 项核心业务决策对齐结果，面向 **天宫（设计态）+ OneLink 7.0（运行态）** 研发与设计协作全链路，从零构建高语义本地 Agent 引擎（`better-zentao-mcp` + `bzt` CLI + 通用 `SKILL.md`），并为后续远程 HTTP MCP、企微待办/提单机器人、GitLab 状态联动预留清晰扩展边界。
+> 基于内网禅道开源版 **22.6** 实测探测结论（见 [`docs/research/2026-11-19-zentao-22.6-api-probe.md`](../research/2026-11-19-zentao-22.6-api-probe.md)）及 7 项核心业务决策对齐结果，面向 **天宫（设计态）+ OneLink 7.0（运行态）+ 运营交付平台（交付态，预留流程扩展）** 研发与设计协作全链路，从零构建高语义本地 Agent 引擎（`better-zentao-mcp` + `bzt` CLI + 通用 `SKILL.md`），并为后续远程 HTTP MCP、企微待办/提单机器人、GitLab 状态联动预留清晰扩展边界。
 
 ---
 
@@ -9,7 +9,7 @@
 | # | 决策主题 | 最终定稿规则 |
 | :--- | :--- | :--- |
 | **1** | **交付节奏** | **Phase 1 (MVP)** = 核心骨架 + 组织目录 + 核心只读看板（我的地盘/团队逾期/需求检索与反馈者进度）+ **标准化提单闭环（`create_story` / `assign_story` / `delete_story` / `import_stories`）**；**Phase 2** = L3 计划看板 + 研发主管月度待研发过滤 & 迭代力度 + 复合规则风险雷达 + 高效拆任务 `decompose_story_to_tasks`；**Phase 3** = 远程 HTTP MCP / 企微 / GitLab 扩展 |
-| **2** | **主力产品与双态建单** | 默认聚焦 **`#42 天宫平台（正式）`**（设计态）与 **`#43 OneLink 7.0（正式）`**（运行态），其他产品显式指定可用；双态需求时由 `create_story` 一次预览两份草稿，确认后分别在两产品建单并以同批次溯源 + 相关需求互链 |
+| **2** | **三态正式产品与多态建单** | 正式主力产品覆盖三态：**`#42 天宫平台（正式）`**（设计态）、**`#43 OneLink 7.0（正式）`**（运行态）、**`#44 运营交付平台（正式）`**（交付态，精细管理模式暂未明确先预留扩展位，但提需求与查询完整支持）；跨态需求时由 `create_story` 通过 `states`（如 `["design", "runtime"]` 或含 `"delivery"`）一次预览多份草稿，确认后分别建单并以同批次溯源 + 相关需求互链 |
 | **3** | **提单规范与安全边界** | `personal` 模式（默认）不加 AI 标题前缀和描述头，**但默认仍建 `draft`**（防 AI 误提直接流转），允许显式传参跳过评审激活；**L3 计划在 `dryRun` 中做强提醒**（未填返回警告并附目标产品活跃候选 L3 计划，不硬阻塞）；`strict-ai` 模式完整保留旧版 AI 标注与 `draft` 红线 |
 | **4** | **反馈来源与设计/研发双轨** | 口头/企微需求直接建研发需求并写入 `feedbackBy`（不强制先建用户需求）；若传入已有用户需求 `requirementId`，建完研发需求后自动双向关联回用户需求；需设计的过程默认先建设计类需求（`category: "design"`），同时支持显式开启“设计类 + 研发类双单一次预览创建并互链” |
 | **5** | **研发主管视角（Phase 2）** | 以「本月 L3 计划内的研发类需求（排除 `category=design`，按计划起止日期重叠判定）」为主池，与「本月研发迭代」交叉分层输出 **① 已入本月计划待拆解（研发主管待扫队列） ② 本月迭代在研中 ③ 上月遗留未完结**；迭代力度输出各迭代的任务数、拆解覆盖率、人天负载、进度、逾期率与跨月顺延占比 |
@@ -97,6 +97,7 @@ flowchart TD
   "defaults": {
     "designProductId": 42,
     "runtimeProductId": 43,
+    "deliveryProductId": 44,
     "defaultPri": 2
   },
   "teams": {
@@ -138,7 +139,7 @@ flowchart TD
 | `get_team_overdue` / `bzt overdue` | 团队/部门逾期雷达：支持团队别名、部门名（默认本部门）或成员名单，按人分组输出逾期数与明细（父子去重、多人任务解析） |
 | `query_stories` / `bzt stories` | 全维需求检索：跨页按产品、关键词、类别（`design/feature`）、状态、阶段、L3 计划、指派人、创建人、`feedbackBy`、三级需求类型筛选 |
 | `get_story_progress` / `bzt progress` | 需求全景 & 反馈者进度卡片：支持需求 ID / 反馈者姓名 / 用户需求 ID，聚合阶段、L3 计划、关联任务及逾期风险，生成可直接发给业务方的进度摘要 |
-| `create_story` / `bzt create` | 标准化提单：中文实体解析、`design/feature` 分类、L3 计划、`feedbackBy`、已有用户需求自动关联、支持双态建单（`dualMode`）与设计+研发双单（`createDevPair`），默认 `dryRun=true` 预览校验并回读确认 |
+| `create_story` / `bzt create` | 标准化提单：中文实体解析（完整支持 `#42` 设计态 / `#43` 运行态 / `#44` 交付态及任意指定产品）、`design/feature` 分类、L3 计划、`feedbackBy`、已有用户需求自动关联、支持多态建单（`states: ["design", "runtime", "delivery"]`）与设计+研发双单（`createDevPair`），默认 `dryRun=true` 预览校验并回读确认 |
 | `import_stories` / `bzt import` | 批量需求移交导入（默认 `dryRun=true`，支持 `--file` / `--stdin` 与中文实体解析） |
 | `assign_story` / `bzt assign` | 需求独立指派（`POST /stories/{id}/assign` + GET 回读确认） |
 | `delete_story` / `bzt delete` | 软删除需求（强制 `confirm=true` + 回读确认） |
