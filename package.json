@@ -1,0 +1,36 @@
+{
+  "name": "better-zentao",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./mcp": { "types": "./dist/adapters/mcp-factory.d.ts", "default": "./dist/adapters/mcp-factory.js" }
+  },
+  "bin": {
+    "bzt": "dist/adapters/cli.js",
+    "better-zentao-mcp": "dist/adapters/mcp-stdio.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "smoke:local": "node scripts/smoke-local.mjs",
+    "smoke:readonly": "node scripts/smoke-readonly.mjs",
+    "smoke:write:p29": "node scripts/smoke-write-p29.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "typescript": "~5.9.3",
+    "vitest": "^3.2.6"
+  },
+  "overrides": {
+    "vite": "^6.4.0"
+  }
+}
