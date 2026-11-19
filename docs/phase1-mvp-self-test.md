@@ -111,3 +111,27 @@
 - 开源版会按 `source` 决定是否保留 `feedbackBy`（已通过 `#4677` 实测确认 `source: "user"` 可完整落库 `feedbackBy`）。预检对非反馈来源给出提醒，回读遇到差异时保留已返回 ID 并禁止重试创建。
 - 实测确认 `POST /api.php/v2/story/linkStory?storyID={id}`（body `{ stories: [...] }`）在禅道 22.6 写入 `TABLE_RELATION` 双向关系，可通过 `v2/story/view` 的 `relations.story` 回读确认（`v1/stories/{id}` 仅返回旧列 `linkStories: ""`）。
 - 三端接入模板已完成静态校验，各宿主侧实际配置安装与 Skill 触发可按 `docs/onboarding/local-agent-setup.md` 直接启用。
+
+## 本轮独立复测
+
+2026-11-19 · `feat/phase1-mvp@865c02c`。`npm run typecheck`、`npm run build`、`npm test`、`npm run smoke:local`、`npm run smoke:readonly` 全通过。Node.js 24.11.0 和 18.19.0 均通过 67 个测试，49 个 Tier 1–3 编号都有通过记录。
+
+| 编号 | 评审回归覆盖 |
+| --- | --- |
+| `TC-CORE-01` | 五个可选环境变量为空字符串或纯空白时使用默认 profile 或默认值，显式 TTL 0 保留 |
+| `TC-CORE-07` | `/v1/user` 角色对象取 `code`，字符串角色照常读取 |
+| `TC-READ-01` | 按 15 个白名单字段汇总待办，排除未知字段和非法数值，保留有效零值，缺少统计才补查。已建和已指派需求使用目录缓存映射中文名，`closed` 占位转为空 |
+| `TC-WRITE-01`、`TC-WRITE-03`、`TC-WRITE-05` | 草稿预检和请求均省略 `needNotReview`，显式跳过评审才发送。Mock 回读分别确认 `draft` 和 `active` |
+| `TC-ADP-06`、`TC-ADP-07` | CLI 单遍解析决定 JSON 输出，覆盖用法错误后的 `--json`、分隔符 `--` 后的位置参数及非法参数零写入 |
+
+| 现网只读门禁 | 结果 | 耗时 |
+| --- | --- | --- |
+| `TC-LIVE-01` | 当前用户的部门、角色和三态产品解析成功 | 427 ms |
+| `TC-LIVE-02` | 待办分项合计 1，`/v2/my/todo` 补查 0 次，凭据扫描通过 | 109 ms |
+| `TC-LIVE-03` | 默认部门、叶子任务唯一计数和姓名校验通过 | 1,327 ms |
+| `TC-LIVE-04` | 三态需求、反馈者及 #42 用户需求读取通过 | 968 ms |
+| `TC-LIVE-05` | #42/#43/#44/#29 单产品和双态预检通过，草稿请求省略跳过评审字段 | 372 ms |
+
+本轮现网冒烟记录 162 个 GET、2 次 Token 认证、0 个业务写请求、0 次拦截。对上文既有 #29 验收记录做了额外只读核对，三条需求均回读为 `draft` 且 `deleted=true`。
+
+22.6 的创建控制器用 `needNotReview` 校验评审人，状态转换分支只会在非草稿且强制评审时写入 `reviewing`。保存层使用传入的状态。草稿省略该字段的依据是旧客户端 #29 历史 v2 回读、本轮本地回归及现网只读预检。 [禅道 22.6 创建控制器](https://github.com/easysoft/zentaopms/blob/d5bfff8c91cea48018275381e0a127ed6fa5c79f/module/story/zen.php#L1251-L1273) [保存逻辑](https://github.com/easysoft/zentaopms/blob/d5bfff8c91cea48018275381e0a127ed6fa5c79f/module/story/tao.php#L678-L688)
