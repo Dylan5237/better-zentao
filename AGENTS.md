@@ -7,9 +7,9 @@
 
 **动手写代码前，必须按顺序完整阅读以下文档：**
 1. `docs/design/architecture-and-domain-plan.md` — 总体 4 层架构与 7 项定稿决策
-2. `docs/research/2026-11-19-zentao-22.6-api-probe.md` — 内网禅道 22.6 实测接口与踩坑依据
-3. `docs/spec/phase1-mvp-spec.md` — Phase 1 MVP 精确模块、DTO、工具与 CLI 契约
-4. `docs/spec/phase1-mvp-test-suite.md` — Phase 1 MVP 完整测试集（`TC-*`）与验收门禁
+2. `docs/research/2026-11-19-zentao-22.6-api-probe.md` — 内网禅道 22.6 实测接口与踩坑依据（含 Phase 2 任务/子任务补充）
+3. 当前阶段规格文档：`docs/spec/phase1-mvp-spec.md`（已验收合入） / `docs/spec/phase2-spec.md`（当前阶段）
+4. 当前阶段测试集与验收门禁：`docs/spec/phase1-mvp-test-suite.md` / `docs/spec/phase2-test-suite.md`
 
 参考实现（仅用于借鉴成熟模式，禁止直接照搬单体结构）：`D:\_projects\tools\zentao-mcp`（可参考其 single-flight token 刷新、`ZentaoCreateUnconfirmedError` 安全诊断、CLI 单遍 `--dry-run` 解析与 AI 标注幂等逻辑）。
 
@@ -42,12 +42,12 @@
 
 ## 4. Git 工作流与交付验收要求
 
-- 一项阶段任务一个主题分支（如 `feat/phase1-mvp`），禁止直接在 `main` 提交实现代码。
+- 一项阶段任务一个主题分支（如 `feat/phase1-mvp`、`feat/phase2-management`），禁止直接在 `main` 提交实现代码。
 - 提交信息使用 `type(scope): 中文简述`，保持原子提交（骨架/core、api、services、adapters、tests、skill/docs 分步提交）。
 - 提交评审前必须全部通过并附验证输出：
   1. `npm run typecheck`
   2. `npm run build`
-  3. `npm test`（必须覆盖 `docs/spec/phase1-mvp-test-suite.md` 中全部 Tier 1~3 `TC-*` 用例，且测试描述中包含对应 `TC-*` 编号便于追溯）
+  3. `npm test`（必须保持已合入阶段的全部测试 100% 回归通过，并覆盖当前阶段测试集 `docs/spec/phase1-mvp-test-suite.md` / `docs/spec/phase2-test-suite.md` 中全部 Tier 1~3 `TC-*` / `TC-P2-*` 用例，且测试描述中包含对应编号便于追溯）
   4. `npm run smoke:local`（本地 Mock 禅道 + 真实 stdio MCP + 真实 CLI 进程级联调）
   5. `npm run smoke:readonly`（连接内网禅道 22.6 的零写入只读冒烟，不可达时注明原因）
 - 严禁通过放宽断言、跳过测试或伪造 Mock 契约来“凑绿灯”。
