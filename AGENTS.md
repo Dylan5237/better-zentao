@@ -51,7 +51,7 @@ better-zentao（命令 `bzt`）把禅道开源版 22.6 接入本地 Agent：用�
 pnpm install
 pnpm lint           # ESLint + Prettier 检查
 pnpm typecheck      # tsc --noEmit
-pnpm test           # Vitest：unit + contract + service + adapters
+pnpm test           # 先构建，再运行 Vitest 离线测试与覆盖率门禁（09 §1.3）
 pnpm test:smoke     # 只读冒烟，需要 ZENTAO_* 环境变量
 pnpm eval --agent claude|codex|gemini   # 对话评测
 pnpm build          # 输出 dist/，提供 bzt 命令
