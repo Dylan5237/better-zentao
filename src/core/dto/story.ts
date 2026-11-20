@@ -10,6 +10,8 @@ const positiveId = z
   ])
   .pipe(z.int().positive());
 
+const storyDetailBrand: unique symbol = Symbol("StoryDetail");
+
 // P0 骨架仅使用需求的最小白名单。完整视图按 docs/06 §5 扩展。
 export const storyDetailDto = z
   .object({
@@ -22,6 +24,12 @@ export const storyDetailDto = z
       .array(z.object({ id: positiveId, name: z.string() }))
       .default([]),
   })
-  .brand<"StoryDetail">();
+  .transform((story) =>
+    Object.defineProperty(
+      { ...story, [storyDetailBrand]: true as const },
+      storyDetailBrand,
+      { enumerable: false },
+    ),
+  );
 
 export type StoryDetail = z.infer<typeof storyDetailDto>;

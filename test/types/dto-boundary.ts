@@ -1,3 +1,4 @@
+import { $brand } from "zod";
 import type { StoryDetail } from "../../src/core/dto/story.ts";
 import { storyDetailDto } from "../../src/core/dto/story.ts";
 
@@ -17,4 +18,11 @@ declare function cacheStory(story: StoryDetail): void;
 cacheStory(fromHttp);
 // @ts-expect-error 即使字段完全匹配，也必须经由白名单获得品牌。
 cacheStory(unprojected);
+const forged = {
+  ...unprojected,
+  password: "synthetic",
+  [$brand]: { StoryDetail: true },
+} as const;
+// @ts-expect-error Zod 的公开品牌不能给原始对象签发 DTO 品牌。
+cacheStory(forged);
 cacheStory(storyDetailDto.parse(unprojected));

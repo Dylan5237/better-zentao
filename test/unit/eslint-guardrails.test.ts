@@ -16,7 +16,7 @@ function fixtures(rows: [string, string, string, string?][]) {
   });
 }
 
-function createFixtureLinter(): ESLint {
+function createFixtureChecks() {
   // 测试片段参与类型分析，源文件与分层路径无需写入工作树。
   const config = ts.readConfigFile(
     absolutePath("tsconfig.json"),
@@ -32,7 +32,7 @@ function createFixtureLinter(): ESLint {
       : ts.createSourceFile(file, source, target, true);
   };
   const program = ts.createProgram([...sources.keys()], options, host);
-  return new ESLint({
+  const eslint = new ESLint({
     cwd,
     overrideConfig: {
       files: ["src/**/*.ts"],
@@ -41,6 +41,7 @@ function createFixtureLinter(): ESLint {
       },
     },
   });
+  return { eslint, program };
 }
 
 describe("WP-00 实际 ESLint 配置自检", () => {
@@ -408,7 +409,18 @@ describe("WP-00 实际 ESLint 配置自检", () => {
     ],
   ]);
 
-  const eslint = createFixtureLinter();
+  const incompatible = fixtures([
+    [
+      "服务用 Zod 公开品牌伪造 StoryDetail",
+      "src/services/check.ts",
+      `import { $brand } from "zod";
+import type { StoryDetail } from "../core/dto/story.ts";
+const raw = { id: 11, product: 29, type: "story" as const, title: "测试", status: "draft", executions: [], password: "synthetic" };
+const forged = { ...raw, [$brand]: { StoryDetail: true as const } };
+export function read(): StoryDetail { return forged; }`,
+    ],
+  ]);
+  const { eslint, program } = createFixtureChecks();
 
   it.each(blocked)("拦截 $name", async ({ filePath, source, ruleId }) => {
     const [result] = await eslint.lintText(source, { filePath });
@@ -423,5 +435,12 @@ describe("WP-00 实际 ESLint 配置自检", () => {
   it.each(permitted)("放行 $name", async ({ filePath, source }) => {
     const [result] = await eslint.lintText(source, { filePath });
     expect(result?.messages).toEqual([]);
+  });
+
+  it.each(incompatible)("类型检查拦截 $name", ({ filePath }) => {
+    const file = program.getSourceFile(absolutePath(filePath));
+    if (!file) throw new Error("未加载虚拟源码。");
+    const diagnostics = program.getSemanticDiagnostics(file);
+    expect(diagnostics.map(({ code }) => code)).toEqual([2741]);
   });
 });
