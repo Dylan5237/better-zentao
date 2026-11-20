@@ -83,12 +83,20 @@ export default [
   ...tseslint.configs.recommended,
   {
     files: ["src/**/*.ts"],
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: basePath },
+    },
     linterOptions: { noInlineConfig: true },
     plugins: { import: importRules },
     rules: {
       "import/no-restricted-paths": ["error", { basePath, zones }],
       "import/no-unresolved": "error",
       "no-console": "error",
+      "@typescript-eslint/no-unsafe-assignment": "error",
+      "@typescript-eslint/no-unsafe-return": "error",
+      "@typescript-eslint/no-unsafe-argument": "error",
+      "@typescript-eslint/no-unsafe-member-access": "error",
+      "@typescript-eslint/no-unsafe-call": "error",
       "@typescript-eslint/consistent-type-assertions": [
         "error",
         { assertionStyle: "never" },

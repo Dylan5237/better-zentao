@@ -1,13 +1,50 @@
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ESLint } from "eslint";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
-const eslint = new ESLint({
-  cwd: fileURLToPath(new URL("../../", import.meta.url)),
-});
+const cwd = fileURLToPath(new URL("../../", import.meta.url));
+const absolutePath = (file: string) => resolve(cwd, file).replaceAll("\\", "/");
+const sources = new Map<string, string>();
+
+function fixtures(rows: [string, string, string, string?][]) {
+  return rows.map(([name, file, source, ruleId]) => {
+    const filePath = file.replace(/\/check\.ts$/u, `/check-${sources.size}.ts`);
+    sources.set(absolutePath(filePath), source);
+    return { name, filePath, source, ruleId };
+  });
+}
+
+function createFixtureLinter(): ESLint {
+  // 测试片段参与类型分析，源文件与分层路径无需写入工作树。
+  const config = ts.readConfigFile(
+    absolutePath("tsconfig.json"),
+    ts.sys.readFile,
+  );
+  const { options } = ts.parseJsonConfigFileContent(config.config, ts.sys, cwd);
+  const host = ts.createCompilerHost(options);
+  const loadSource = host.getSourceFile;
+  host.getSourceFile = (file, target, onError, createNew) => {
+    const source = sources.get(absolutePath(file));
+    return source === undefined
+      ? loadSource(file, target, onError, createNew)
+      : ts.createSourceFile(file, source, target, true);
+  };
+  const program = ts.createProgram([...sources.keys()], options, host);
+  return new ESLint({
+    cwd,
+    overrideConfig: {
+      files: ["src/**/*.ts"],
+      languageOptions: {
+        parserOptions: { projectService: false, programs: [program] },
+      },
+    },
+  });
+}
 
 describe("WP-00 实际 ESLint 配置自检", () => {
-  it.each([
+  const blocked = fixtures([
     [
       "服务反向导入 CLI",
       "src/services/check.ts",
@@ -158,17 +195,39 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       'export const read = () => import("../api/internal/probe-transport.ts");',
       "no-restricted-syntax",
     ],
-  ])("拦截%s", async (_name, filePath, source, ruleId) => {
-    const [result] = await eslint.lintText(source, { filePath });
-    expect(result?.fatalErrorCount).toBe(0);
-    expect(result?.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ ruleId, severity: 2 }),
-      ]),
-    );
-  });
+    [
+      "服务把 JSON.parse 直接赋给品牌 DTO",
+      "src/services/check.ts",
+      'import type { StoryDetail } from "../core/dto/story.ts"; export function read(raw: string) { const s: StoryDetail = JSON.parse(raw); return s; }',
+      "@typescript-eslint/no-unsafe-assignment",
+    ],
+    [
+      "API 门面直接返回 Response.json",
+      "src/api/check.ts",
+      "export async function read(r: Response) { return r.json(); }",
+      "@typescript-eslint/no-unsafe-return",
+    ],
+    [
+      "把未校验的 JSON 当作品牌 DTO 参数",
+      "src/services/check.ts",
+      'import type { StoryDetail } from "../core/dto/story.ts"; function getId(s: StoryDetail) { return s.id; } export const read = (raw: string) => getId(JSON.parse(raw));',
+      "@typescript-eslint/no-unsafe-argument",
+    ],
+    [
+      "直接读取未校验 JSON 的成员",
+      "src/services/check.ts",
+      "export const read = (raw: string) => JSON.parse(raw).id;",
+      "@typescript-eslint/no-unsafe-member-access",
+    ],
+    [
+      "直接调用未校验的 JSON",
+      "src/services/check.ts",
+      "export const read = (raw: string) => JSON.parse(raw)();",
+      "@typescript-eslint/no-unsafe-call",
+    ],
+  ]);
 
-  it.each([
+  const permitted = fixtures([
     [
       "领域使用注入时钟",
       "src/domain/check.ts",
@@ -189,7 +248,21 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       "src/adapters/cli/bzt.ts",
       "process.stdout.write('ok');",
     ],
-  ])("放行%s", async (_name, filePath, source) => {
+  ]);
+
+  const eslint = createFixtureLinter();
+
+  it.each(blocked)("拦截 $name", async ({ filePath, source, ruleId }) => {
+    const [result] = await eslint.lintText(source, { filePath });
+    expect(result?.fatalErrorCount).toBe(0);
+    expect(result?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ruleId, severity: 2 }),
+      ]),
+    );
+  });
+
+  it.each(permitted)("放行 $name", async ({ filePath, source }) => {
     const [result] = await eslint.lintText(source, { filePath });
     expect(result?.messages).toEqual([]);
   });
