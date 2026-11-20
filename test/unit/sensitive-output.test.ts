@@ -32,6 +32,35 @@ describe("S01 安全断言", () => {
     );
   });
 
+  it.each([
+    "userPassword",
+    "newPassword",
+    "apiToken",
+    "zentaosid",
+    "sessionID",
+    "privateKey",
+    "qq",
+    "weixin",
+    "address",
+    "birthday",
+    "ip",
+    "lastIP",
+    "zipCode",
+  ])("S01 检出隐私字段 %s", (key) => {
+    expect(() =>
+      assertNoSensitiveData({ nested: { [key]: "synthetic" } }),
+    ).toThrow("S01");
+  });
+
+  it.each([
+    ["userPairs 字典", { userPairs: { acct_a: "人员A" } }],
+    ["Bearer 凭据", "before Bearer opaque-test-value after"],
+    ["禅道 Cookie 凭据", "Cookie zentaosid=opaque-test-value"],
+    ["文本内嵌密码哈希", "before[a8d4fa71ec2d4913e40cd3216789abcd]after"],
+  ] as const)("S01 检出%s", (_name, payload) => {
+    expect(() => assertNoSensitiveData(payload)).toThrow("S01");
+  });
+
   it("仅报告规则，不在报错里重放凭据", () => {
     try {
       assertNoSensitiveData({ value: syntheticToken }, [syntheticToken]);
@@ -42,12 +71,14 @@ describe("S01 安全断言", () => {
     }
   });
 
-  it("接受安全用户列表、正常诊断和明确白名单字段", () => {
+  it("S01 放行 account、realname、opId、missingEnv 和未含隐私的文本字段", () => {
     expect(() =>
       assertNoSensitiveData({
         users: [{ account: "acct_a", realname: "人员A" }],
         missingEnv: ["ZENTAO_PASSWORD"],
         opId: "e86bc265-68db-46e9-8fe8-73282bfd181c",
+        description: "说明",
+        skipped: false,
       }),
     ).not.toThrow();
   });
