@@ -312,6 +312,66 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       "bzt/no-implicit-clock",
     ],
     [
+      "服务 Intl.DateTimeFormat.format 缺少时间参数",
+      "src/services/check.ts",
+      "export const now = Intl.DateTimeFormat().format();",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "Intl 时间格式化展开不确定的时间参数",
+      "src/domain/check.ts",
+      "const args: number[] = []; export const now = Intl.DateTimeFormat().format(...args);",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "Intl 时间格式化 .call 未给时间",
+      "src/domain/check.ts",
+      "export const now = Intl.DateTimeFormat().format.call(null);",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "Intl 时间格式化 .call 显式传 undefined",
+      "src/domain/check.ts",
+      "export const now = Intl.DateTimeFormat().format.call(null, undefined);",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "Intl 时间格式化 .apply 未给时间",
+      "src/rules/check.ts",
+      "const formatter = Intl.DateTimeFormat(); export const now = formatter.formatToParts.apply(formatter, []);",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "Intl 时间格式化 .apply 展开不确定的首项",
+      "src/rules/check.ts",
+      "const args: [number?] = []; export const now = Intl.DateTimeFormat().format.apply(null, [...args]);",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "Intl 时间格式化 .bind 后无参调用",
+      "src/services/check.ts",
+      "const bound = Intl.DateTimeFormat().format.bind(null); export const now = bound();",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "Intl 时间格式化 .bind 用 undefined 预绑时间",
+      "src/domain/check.ts",
+      "export const now = Intl.DateTimeFormat().format.bind(null, undefined)();",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "Intl 时间格式化 Reflect.apply 未给时间",
+      "src/domain/check.ts",
+      "export const now = Reflect.apply(Intl.DateTimeFormat().format, null, []);",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "Intl 时间格式化 Reflect.apply 的数组长度不确定",
+      "src/domain/check.ts",
+      "export const render = (args: number[]) => Reflect.apply(Intl.DateTimeFormat().format, null, args);",
+      "bzt/no-implicit-clock",
+    ],
+    [
       "纯模块访问 crypto 全局",
       "src/core/dto/check.ts",
       "export const id = globalThis.crypto.randomUUID();",
@@ -472,6 +532,24 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       "领域 Intl 使用显式时间",
       "src/domain/check.ts",
       'import type { Clock } from "../core/clock.ts"; export const render = (clock: Clock) => Intl.DateTimeFormat().format(clock());',
+    ],
+    [
+      "服务 Intl 间接调用仍允许显式时间",
+      "src/services/check.ts",
+      `import type { Clock } from "../core/clock.ts";
+export function render(clock: Clock) {
+  const formatter = Intl.DateTimeFormat();
+  const args: [number] = [clock()];
+  const bound = formatter.format.bind(null);
+  return [
+    formatter.format(0),
+    formatter.formatToParts.call(formatter, clock()),
+    formatter.format.apply(null, args),
+    formatter.format.bind(null, clock())(),
+    bound(clock()),
+    Reflect.apply(formatter.formatToParts, formatter, [clock()]),
+  ];
+}`,
     ],
     [
       "规则中的非时间格式化函数无需时钟",

@@ -188,38 +188,125 @@ const noRawApiExports = {
   },
 };
 
+function isDateTimeFormatterSignature(program, declaration) {
+  const owner = declaration?.parent;
+  return (
+    owner &&
+    ts.isInterfaceDeclaration(owner) &&
+    owner.name.text === "DateTimeFormat" &&
+    program.isSourceFileDefaultLibrary(owner.getSourceFile()) &&
+    ts.isMethodSignature(declaration) &&
+    ts.isIdentifier(declaration.name) &&
+    ["format", "formatToParts"].includes(declaration.name.text)
+  );
+}
+
+function unwrapParentheses(expression) {
+  while (ts.isParenthesizedExpression(expression)) {
+    expression = expression.expression;
+  }
+  return expression;
+}
+
+function timeArgumentType(checker, argument) {
+  if (
+    !argument ||
+    ts.isSpreadElement(argument) ||
+    ts.isOmittedExpression(argument)
+  )
+    return;
+  return checker.getTypeAtLocation(argument);
+}
+
+function appliedTimeType(checker, argument) {
+  if (!argument || ts.isSpreadElement(argument)) return;
+  const list = unwrapParentheses(argument);
+  if (ts.isArrayLiteralExpression(list)) {
+    return timeArgumentType(checker, list.elements[0]);
+  }
+
+  // 普通数组无法保证非空。元组的第一项必须存在且为确定的时间。
+  const type = checker.getTypeAtLocation(list);
+  const lists = type.isUnion() ? type.types : [type];
+  if (!lists.every((item) => checker.isTupleType(item))) return;
+  const first = type.getProperty("0");
+  if (first && !(first.flags & ts.SymbolFlags.Optional)) {
+    return checker.getTypeOfSymbol(first);
+  }
+}
+
 const noImplicitClock = {
   meta: { messages: { implicitClock: "时间格式化须传入明确的时间。" } },
   create(context) {
     const { program, esTreeNodeToTSNodeMap } =
       context.sourceCode.parserServices;
     const checker = program.getTypeChecker();
+    const isFormatter = (expression) =>
+      expression &&
+      checker
+        .getTypeAtLocation(expression)
+        .getCallSignatures()
+        .some(({ declaration }) =>
+          isDateTimeFormatterSignature(program, declaration),
+        );
     return {
       CallExpression(node) {
         const call = esTreeNodeToTSNodeMap.get(node);
         const declaration = checker.getResolvedSignature(call)?.declaration;
-        const owner = declaration?.parent;
         if (
-          !owner ||
-          !ts.isInterfaceDeclaration(owner) ||
-          owner.name.text !== "DateTimeFormat" ||
-          !program.isSourceFileDefaultLibrary(owner.getSourceFile()) ||
-          !(
-            ts.isMethodSignature(declaration) &&
-            ts.isIdentifier(declaration.name) &&
-            ["format", "formatToParts"].includes(declaration.name.text)
-          )
+          !declaration ||
+          !program.isSourceFileDefaultLibrary(declaration.getSourceFile())
         )
           return;
 
-        const time = call.arguments[0];
-        const type = time && checker.getTypeAtLocation(time);
-        const possibleTimes = type?.isUnion() ? type.types : [type];
+        const args = call.arguments;
+        const spreads = args.some(ts.isSpreadElement);
+        const method = declaration.name?.text;
+        const owner = declaration.parent;
+        let time;
+        if (isDateTimeFormatterSignature(program, declaration)) {
+          time = timeArgumentType(checker, args[0]);
+        } else if (
+          method === "apply" &&
+          ts.isFunctionDeclaration(declaration) &&
+          ts.isModuleBlock(owner) &&
+          owner.parent.name.text === "Reflect"
+        ) {
+          if (!isFormatter(args[0])) return;
+          time = appliedTimeType(checker, args[2]);
+        } else {
+          const callee = unwrapParentheses(call.expression);
+          if (
+            !["call", "apply", "bind"].includes(method) ||
+            !ts.isInterfaceDeclaration(owner) ||
+            !["CallableFunction", "Function"].includes(owner.name.text) ||
+            !(
+              ts.isPropertyAccessExpression(callee) ||
+              ts.isElementAccessExpression(callee)
+            ) ||
+            !isFormatter(callee.expression)
+          )
+            return;
+
+          // 仅绑定 this 时，TS 保留 format 签名，实际调用再检查是否传入时间。
+          if (method === "bind" && args.length === 1 && !spreads) return;
+          time =
+            method === "apply"
+              ? appliedTimeType(checker, args[1])
+              : timeArgumentType(checker, args[1]);
+        }
+
+        const possibleTimes = time?.isUnion() ? time.types : [time];
         if (
+          spreads ||
           possibleTimes.some(
             (part) =>
               !part ||
-              part.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void),
+              part.flags &
+                (ts.TypeFlags.Undefined |
+                  ts.TypeFlags.Void |
+                  ts.TypeFlags.Any |
+                  ts.TypeFlags.Unknown),
           )
         ) {
           context.report({ node, messageId: "implicitClock" });
@@ -304,6 +391,7 @@ export default [
         { assertionStyle: "never" },
       ],
       "no-restricted-syntax": ["error", ...restrictedImportsSyntax],
+      "bzt/no-implicit-clock": "error",
       "no-restricted-globals": restrictedGlobals("process", ...networkGlobals),
       "no-restricted-imports": [
         "error",
@@ -350,7 +438,6 @@ export default [
   {
     files: ["src/{domain,rules}/**/*.ts", ...pureCoreFiles],
     rules: {
-      "bzt/no-implicit-clock": "error",
       "no-restricted-globals": restrictedGlobals(
         "process",
         ...networkGlobals,
