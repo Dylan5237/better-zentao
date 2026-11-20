@@ -341,6 +341,34 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       "export function read() { new XMLHttpRequest(); }",
       "no-restricted-globals",
     ],
+    ...(
+      [
+        ["WebSocket", 'new WebSocket("wss://offline.test");'],
+        ["XMLHttpRequest", "new XMLHttpRequest();"],
+        ["EventSource", 'new EventSource("https://offline.test");'],
+      ] as const
+    ).map<[string, string, string, string]>(([name, source]) => [
+      `API 内部使用 ${name}`,
+      "src/api/internal/check.ts",
+      source,
+      "no-restricted-globals",
+    ]),
+    ...[
+      "node:child_process",
+      "node:worker_threads",
+      "http",
+      "node:http2",
+      "node:https",
+      "node:net",
+      "node:tls",
+      "dgram",
+      "undici",
+    ].map<[string, string, string, string]>((name) => [
+      `API 内部导入 ${name}`,
+      "src/api/internal/check.ts",
+      `import "${name}";`,
+      "no-restricted-imports",
+    ]),
     [
       "CLI 通过 globalThis 创建 EventSource",
       "src/adapters/cli/check.ts",
@@ -459,6 +487,11 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       "API 门面公开安全的泛型约束和默认类型",
       "src/api/check.ts",
       'export type Label<T extends string = "draft"> = { value: T }; export function wrap<T extends number>(value: T) { return { value }; }',
+    ],
+    [
+      "API 内部允许内置 fetch",
+      "src/api/internal/check.ts",
+      "export function send(url: URL) { return fetch(url); }",
     ],
     [
       "领域使用注入时钟",

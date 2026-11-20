@@ -231,9 +231,10 @@ const noImplicitClock = {
 
 const networkModules = {
   regex: "^(?:node:)?(?:http2?|https|net|tls|dgram)(?:/|$)|^undici(?:/|$)",
-  message: "禅道 HTTP 请求从 api/internal 发出。",
+  message: "网络请求仅由 api/internal 使用内置 fetch 发送。",
 };
-const networkGlobals = ["fetch", "WebSocket", "XMLHttpRequest", "EventSource"];
+const nonFetchNetworkGlobals = ["WebSocket", "XMLHttpRequest", "EventSource"];
+const networkGlobals = ["fetch", ...nonFetchNetworkGlobals];
 const restrictedModules = [
   networkModules,
   {
@@ -313,11 +314,10 @@ export default [
   {
     files: [apiInternal],
     rules: {
-      "no-restricted-globals": restrictedGlobals("process"),
-      "no-restricted-imports": [
-        "error",
-        { paths: ["process", "node:process"] },
-      ],
+      "no-restricted-globals": restrictedGlobals(
+        "process",
+        ...nonFetchNetworkGlobals,
+      ),
     },
   },
   {
