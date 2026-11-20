@@ -91,13 +91,37 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       "API 门面再导出原始传输",
       "src/api/check.ts",
       'export { createProbeWriteSender } from "./internal/probe-transport.ts";',
-      "import/no-restricted-paths",
+      "bzt/no-raw-api-exports",
     ],
     [
       "API 门面绕到私有解码器",
       "src/api/stories/check.ts",
       'export { decodeStoryResponse } from "../internal/story-response.ts";',
-      "import/no-restricted-paths",
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面导出 Response 类型别名",
+      "src/api/check.ts",
+      "export type RawStory = Response;",
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面以本地别名导出原始传输",
+      "src/api/check.ts",
+      'import { createProbeWriteSender as sender } from "./internal/probe-transport.ts"; export const send = sender;',
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面在包装返回值中暴露原始响应",
+      "src/api/check.ts",
+      "export async function read() { return { payload: new Response() }; }",
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面导出未投影的未知载荷",
+      "src/api/check.ts",
+      "export type RawStory = { body: unknown };",
+      "bzt/no-raw-api-exports",
     ],
     [
       "领域从测试目录引入运行时代码",
@@ -228,6 +252,11 @@ describe("WP-00 实际 ESLint 配置自检", () => {
   ]);
 
   const permitted = fixtures([
+    [
+      "src/api/story.ts 调用内部解码器并返回品牌 DTO",
+      "src/api/story.ts",
+      'import { decodeStoryResponse } from "./internal/story-response.ts"; import type { StoryDetail } from "../core/dto/story.ts"; declare function read(id: number): Promise<Response>; export async function getStoryDetail(id: number): Promise<StoryDetail> { return decodeStoryResponse(await read(id)); }',
+    ],
     [
       "领域使用注入时钟",
       "src/domain/check.ts",

@@ -13,6 +13,13 @@ const publicDiagnostic =
   /^(?:(?:需求)?标题(?:已存在|不能为空|过长)|(?:该)?需求不存在|缺少必填(?:字段|项)|参数不合法|没有(?:创建|查看)需求的权限)$/u;
 const maxDiagnosticLength = 120;
 
+// WP-04 接入真实读取端点前，离线桩不会发出请求。
+export const readStoryResponse: (
+  storyId: number,
+) => Promise<Response> = async () => {
+  throw new BztError("ZENTAO_UNAVAILABLE", "当前阶段尚未接入禅道需求读取。");
+};
+
 function nonEmptyText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }

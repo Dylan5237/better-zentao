@@ -1,5 +1,7 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import * as internalStory from "../../src/api/internal/story-response.ts";
 import { decodeStoryResponse } from "../../src/api/internal/story-response.ts";
+import { getStoryDetail } from "../../src/api/story.ts";
 import type { StoryDetail } from "../../src/core/dto/story.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 
@@ -11,6 +13,28 @@ const expected = {
   status: "draft",
   executions: [{ id: 42, name: "合成执行" }],
 };
+
+it("ADR-18 需求门面调用内部读取与解码，只返回白名单 DTO", async () => {
+  const transport = vi.spyOn(internalStory, "readStoryResponse");
+  try {
+    transport.mockResolvedValueOnce(
+      Response.json({ ...expected, apiToken: "synthetic" }),
+    );
+    const detail = await getStoryDetail(11);
+    expect(transport).toHaveBeenCalledExactlyOnceWith(11);
+    expect(detail).toEqual(expected);
+    assertNoSensitiveData(detail);
+  } finally {
+    transport.mockRestore();
+  }
+});
+
+it("WP-04 需求门面的离线读取桩保持断开", async () => {
+  await expect(getStoryDetail(11)).rejects.toHaveProperty(
+    "code",
+    "ZENTAO_UNAVAILABLE",
+  );
+});
 
 it("Q1 / S01 在 HTTP 边界投影 DTO，清除根层与嵌套凭据", async () => {
   const response = Response.json(

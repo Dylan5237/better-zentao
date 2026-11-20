@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import importRules from "eslint-plugin-import-x";
+import ts from "typescript";
 import tseslint from "typescript-eslint";
 
 const basePath = fileURLToPath(new URL(".", import.meta.url));
@@ -36,13 +37,6 @@ const zones = [
     except: allowed.map((entry) => "./" + entry),
   })),
   {
-    target: Object.keys(layers)
-      .filter((layer) => layer !== "api")
-      .map((layer) => "./src/" + layer),
-    from: "./src/api/internal",
-    message: "只允许通过 API 公共接口接收已投影的 DTO。",
-  },
-  {
     target: "./src",
     from: ["./test", "./dist"],
     message: "源码依赖须由源码分层规则检查。",
@@ -54,6 +48,112 @@ const zones = [
     message: "纯模块只能使用 core 中的纯模块。",
   },
 ];
+
+const privateApiZone = {
+  target: "./src",
+  from: "./src/api/internal",
+  message: "只允许通过 API 公共接口接收已投影的 DTO。",
+};
+
+function declaredInApiInternal(symbol) {
+  return symbol?.declarations?.some((declaration) =>
+    declaration
+      .getSourceFile()
+      .fileName.replaceAll("\\", "/")
+      .includes("/src/api/internal/"),
+  );
+}
+
+function exposesRawApiType(program, type, seen = new Set()) {
+  if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return true;
+  const symbol = type.getSymbol();
+  if (declaredInApiInternal(symbol) || declaredInApiInternal(type.aliasSymbol))
+    return true;
+  if (["Response", "Request", "Headers"].includes(symbol?.name)) return true;
+  if (seen.has(type)) return false;
+  seen.add(type);
+
+  const checker = program.getTypeChecker();
+  const exposesRaw = (inner) => exposesRawApiType(program, inner, seen);
+  if (type.isUnionOrIntersection()) return type.types.some(exposesRaw);
+  if (!(type.flags & ts.TypeFlags.Object)) return false;
+  if (type.objectFlags & ts.ObjectFlags.Reference) {
+    if (checker.getTypeArguments(type).some(exposesRaw)) return true;
+  }
+  const signatures = [
+    ...type.getCallSignatures(),
+    ...type.getConstructSignatures(),
+  ];
+  for (const signature of signatures) {
+    if (
+      exposesRaw(signature.getReturnType()) ||
+      signature
+        .getParameters()
+        .some((parameter) => exposesRaw(checker.getTypeOfSymbol(parameter)))
+    )
+      return true;
+  }
+  // 对 Promise 等外部容器检查类型参数即可，避免深入容器自己的实现类型。
+  if (
+    symbol?.declarations?.some((declaration) => {
+      const source = declaration.getSourceFile();
+      return (
+        program.isSourceFileDefaultLibrary(source) ||
+        program.isSourceFileFromExternalLibrary(source)
+      );
+    })
+  )
+    return false;
+  return (
+    type
+      .getProperties()
+      .some((property) => exposesRaw(checker.getTypeOfSymbol(property))) ||
+    checker
+      .getIndexInfosOfType(type)
+      .some(({ type: entry }) => exposesRaw(entry))
+  );
+}
+
+const noRawApiExports = {
+  meta: {
+    messages: {
+      rawExport: "API 门面不能导出私有绑定或未投影的类型（{{name}}）。",
+    },
+  },
+  create(context) {
+    const { program, esTreeNodeToTSNodeMap } =
+      context.sourceCode.parserServices;
+    const checker = program.getTypeChecker();
+    return {
+      Program(node) {
+        const module = checker.getSymbolAtLocation(
+          esTreeNodeToTSNodeMap.get(node),
+        );
+        if (!module) return;
+        for (const binding of checker.getExportsOfModule(module)) {
+          const target =
+            binding.flags & ts.SymbolFlags.Alias
+              ? checker.getAliasedSymbol(binding)
+              : binding;
+          const type =
+            target.flags & ts.SymbolFlags.Value
+              ? checker.getTypeOfSymbol(target)
+              : checker.getDeclaredTypeOfSymbol(target);
+          if (
+            declaredInApiInternal(target) ||
+            exposesRawApiType(program, type)
+          ) {
+            context.report({
+              node,
+              messageId: "rawExport",
+              data: { name: binding.name },
+            });
+          }
+        }
+      },
+    };
+  },
+};
 
 const networkModules = {
   regex: "^(?:node:)?(?:http2?|https|net|tls|dgram)(?:/|$)|^undici(?:/|$)",
@@ -89,7 +189,10 @@ export default [
     linterOptions: { noInlineConfig: true },
     plugins: { import: importRules },
     rules: {
-      "import/no-restricted-paths": ["error", { basePath, zones }],
+      "import/no-restricted-paths": [
+        "error",
+        { basePath, zones: [...zones, privateApiZone] },
+      ],
       "import/no-unresolved": "error",
       "no-console": "error",
       "@typescript-eslint/no-unsafe-assignment": "error",
@@ -128,25 +231,14 @@ export default [
   },
   {
     files: ["src/api/**/*.ts"],
+    rules: { "import/no-restricted-paths": ["error", { basePath, zones }] },
+  },
+  {
+    files: ["src/api/**/*.ts"],
     ignores: [apiInternal],
+    plugins: { bzt: { rules: { "no-raw-api-exports": noRawApiExports } } },
     rules: {
-      "import/no-restricted-paths": [
-        "error",
-        {
-          basePath,
-          zones: [
-            ...zones,
-            {
-              target: "./src/api",
-              from: [
-                "./src/api/internal/probe-transport.ts",
-                "./src/api/internal/story-response.ts",
-              ],
-              message: "原始传输和响应解码仅供 API 私有模块使用。",
-            },
-          ],
-        },
-      ],
+      "bzt/no-raw-api-exports": "error",
     },
   },
   {
