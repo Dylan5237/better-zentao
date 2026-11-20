@@ -118,6 +118,45 @@ describe("WP-05 / ADR-19 #29 发送层熔断", () => {
   );
 
   it.each([
+    ["空白标题", { title: "   " }],
+    ["空白指派人", { assignedTo: " \t " }],
+    ["空正文", { spec: "" }],
+    ["空白正文", { spec: " \r\n " }],
+    ["空验收标准", { verify: "" }],
+    ["空白验收标准", { verify: "\n\t" }],
+    ["优先级低于 1", { pri: 0 }],
+    ["优先级高于 4", { pri: 5 }],
+    ["优先级异常大", { pri: 999999 }],
+    ["优先级不是整数", { pri: 1.5 }],
+  ] as const)("WP-05 拒绝批准%s且发送次数为 0", async (_name, fields) => {
+    const invalid = { ...candidate, body: { ...candidate.body, ...fields } };
+    const send = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(null, { status: 201 }));
+    const approveAndSend = async () => {
+      const { run } = setup({ send }, invalid);
+      return run(invalid);
+    };
+    await expect(approveAndSend()).rejects.toHaveProperty(
+      "code",
+      "PERMISSION_DENIED",
+    );
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 4])(
+    "WP-05 接受优先级边界 %i 和含首尾空白的非空正文",
+    async (pri) => {
+      const body = { ...candidate.body, pri, spec: "\n<p>合成正文</p>\n" };
+      const draft = { ...candidate, body };
+      const { run, send } = setup({}, draft);
+      await expect(run(draft)).resolves.toHaveProperty("status", 201);
+      expect(send).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(send.mock.calls[0]?.[1]?.body))).toEqual(body);
+    },
+  );
+
+  it.each([
     ["计划已关闭", false, true],
     ["指派人不在活动目录中", true, false],
   ] as const)(
@@ -224,6 +263,18 @@ describe("WP-05 / ADR-19 #29 发送层熔断", () => {
       } finally {
         vi.useRealTimers();
       }
+    },
+  );
+
+  it.each(["0", "-1", "abc", "2147483648"])(
+    "WP-02 / WP-05 非法 ZENTAO_TIMEOUT_MS=%s 报 INVALID_INPUT 且发送次数为 0",
+    async (value) => {
+      const { run, send } = setup({ env: { ZENTAO_TIMEOUT_MS: value } });
+      await expect(run(candidate)).rejects.toHaveProperty(
+        "code",
+        "INVALID_INPUT",
+      );
+      expect(send).not.toHaveBeenCalled();
     },
   );
 

@@ -19,6 +19,8 @@ const storyPath = "api.php/v2/stories?productID=" + PROBE_PRODUCT_ID;
 const storyRoute = "POST /" + storyPath;
 const productId = z.literal(PROBE_PRODUCT_ID);
 const id = z.int().positive();
+// 校验必填文本，同时保留批准所绑定的原始请求体。
+const requiredText = z.string().refine((value) => value.trim() !== "");
 // docs/06 §6.1 的表单枚举，兼容 strict-ai 使用的来源。
 const storySource = z.enum([
   "customer",
@@ -47,17 +49,17 @@ const draftRequest = z.strictObject({
     module: id,
     modules: z.tuple([id]),
     plan: id.optional(),
-    title: z.string().min(1),
+    title: requiredText,
     category: z.enum(["feature", "design"]).optional(),
     source: storySource.optional(),
     sourceNote: z.string().optional(),
     feedbackBy: z.string().optional(),
-    pri: z.int().positive().optional(),
+    pri: z.int().min(1).max(4).optional(),
     estimate: z.number().nonnegative().optional(),
-    spec: z.string(),
-    verify: z.string(),
+    spec: requiredText,
+    verify: requiredText,
     keywords: z.string().optional(),
-    assignedTo: z.string().min(1),
+    assignedTo: requiredText,
     reviewer: z.tuple([]),
     status: z.literal("draft"),
   }),
