@@ -50,6 +50,7 @@ function setup(
     baseUrl: origin,
     approval: createProbeWriteApproval(confirmation, approved),
     ownership: defaultOwnership,
+    preflight: { isPlanOpen: () => true, isAssigneeActive: () => true },
     clock: () => 1,
     send,
     ...overrides,
@@ -90,6 +91,59 @@ describe("WP-05 / ADR-19 #29 发送层熔断", () => {
     await expect(run(draft)).resolves.toHaveProperty("status", 201);
     expect(send).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["feature", "user"],
+    ["design", "customer"],
+    ["feature", "ai"],
+  ])(
+    "WP-05 发送 06 §6.1 完整配方：category=%s source=%s",
+    async (category, source) => {
+      const body = {
+        ...candidate.body,
+        category,
+        source,
+        sourceNote: "合成来源",
+        feedbackBy: "人员A",
+        pri: 3,
+        estimate: 0,
+        keywords: "版本:V7.1.0",
+      };
+      const draft = { ...candidate, body };
+      const { run, send } = setup({}, draft);
+      await expect(run(draft)).resolves.toHaveProperty("status", 201);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(send.mock.calls[0]?.[1]?.body))).toEqual(body);
+    },
+  );
+
+  it.each([
+    ["计划已关闭", false, true],
+    ["指派人不在活动目录中", true, false],
+  ] as const)(
+    "WP-05 预检拦截%s，发送次数为 0",
+    async (_name, planOpen, assigneeActive) => {
+      const preflight = {
+        isPlanOpen: vi.fn(() => planOpen),
+        isAssigneeActive: vi.fn(() => assigneeActive),
+      };
+      const { run, send } = setup({ preflight });
+      await expect(run(candidate)).rejects.toHaveProperty(
+        "code",
+        "PERMISSION_DENIED",
+      );
+      expect(preflight.isPlanOpen).toHaveBeenCalledExactlyOnceWith(
+        origin + "/",
+        4,
+      );
+      if (planOpen)
+        expect(preflight.isAssigneeActive).toHaveBeenCalledExactlyOnceWith(
+          origin + "/",
+          "acct_a",
+        );
+      expect(send).toHaveBeenCalledTimes(0);
+    },
+  );
 
   it("ADR-19 重放使用中的批准，五次调用只发送一次", async () => {
     const pending = Promise.withResolvers<Response>();
@@ -252,6 +306,22 @@ describe("WP-05 / ADR-19 #29 发送层熔断", () => {
     expect(send).toHaveBeenCalledTimes(0);
   });
 
+  it("ADR-19 批准在预检期间过期，发送次数为 0", async () => {
+    let now = 1;
+    const { run, send } = setup({
+      clock: () => now,
+      preflight: {
+        isPlanOpen: () => true,
+        isAssigneeActive: () => {
+          now = confirmation.expiresAt;
+          return true;
+        },
+      },
+    });
+    await expect(run(candidate)).rejects.toHaveProperty("code", "PLAN_EXPIRED");
+    expect(send).toHaveBeenCalledTimes(0);
+  });
+
   it("拦截路由未获确认的批准", () => {
     expect(() =>
       createProbeWriteApproval(
@@ -305,6 +375,14 @@ describe("WP-05 / ADR-19 #29 发送层熔断", () => {
       { ...candidate, body: { ...candidate.body, product: 42 } },
     ],
     ["字符串产品号", { ...candidate, productId: "29" }],
+    [
+      "未验证的 category",
+      { ...candidate, body: { ...candidate.body, category: "interface" } },
+    ],
+    [
+      "未验证的 source",
+      { ...candidate, body: { ...candidate.body, source: "unknown" } },
+    ],
     [
       "模块参数不一致",
       { ...candidate, body: { ...candidate.body, modules: [9] } },

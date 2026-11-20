@@ -19,6 +19,24 @@ const storyPath = "api.php/v2/stories?productID=" + PROBE_PRODUCT_ID;
 const storyRoute = "POST /" + storyPath;
 const productId = z.literal(PROBE_PRODUCT_ID);
 const id = z.int().positive();
+// docs/06 §6.1 的表单枚举，兼容 strict-ai 使用的来源。
+const storySource = z.enum([
+  "customer",
+  "user",
+  "po",
+  "market",
+  "service",
+  "operation",
+  "support",
+  "competitor",
+  "partner",
+  "dev",
+  "tester",
+  "bug",
+  "forum",
+  "other",
+  "ai",
+]);
 
 // 阶段 2 只开放这一条离线配方，ID 路由需单独提供归属保证。
 const draftRequest = z.strictObject({
@@ -30,13 +48,26 @@ const draftRequest = z.strictObject({
     modules: z.tuple([id]),
     plan: id.optional(),
     title: z.string().min(1),
+    category: z.enum(["feature", "design"]).optional(),
+    source: storySource.optional(),
+    sourceNote: z.string().optional(),
+    feedbackBy: z.string().optional(),
+    pri: z.int().positive().optional(),
+    estimate: z.number().nonnegative().optional(),
     spec: z.string(),
     verify: z.string(),
+    keywords: z.string().optional(),
     assignedTo: z.string().min(1),
     reviewer: z.tuple([]),
     status: z.literal("draft"),
   }),
 });
+
+// WP-05 接入 WP-04 的计划与目录回读投影，阶段 2 由离线测试注入。
+interface ProbeDraftPreflight {
+  isPlanOpen(instance: string, planId: number): boolean;
+  isAssigneeActive(instance: string, account: string): boolean;
+}
 
 export interface ProbeWriteOptions {
   readonly baseUrl: string;
@@ -44,6 +75,7 @@ export interface ProbeWriteOptions {
   readonly env?: Readonly<{ ZENTAO_TIMEOUT_MS?: string }>;
   readonly approval: ProbeWriteApproval;
   readonly ownership: VerifiedOwnership;
+  readonly preflight: ProbeDraftPreflight;
   readonly clock: Clock;
   readonly send: typeof fetch;
 }
@@ -119,8 +151,6 @@ export function createProbeWriteSender(options: ProbeWriteOptions) {
     ) {
       throw probeDenied();
     }
-    ensureApprovalLifetime(binding.expiresAt, options.clock());
-
     const request = draftRequest.safeParse(input);
     if (!request.success) {
       throw probeDenied();
@@ -135,10 +165,19 @@ export function createProbeWriteSender(options: ProbeWriteOptions) {
     ) {
       throw probeDenied();
     }
+    if (
+      (body.plan !== undefined &&
+        options.preflight?.isPlanOpen(baseUrl.href, body.plan) !== true) ||
+      options.preflight?.isAssigneeActive(baseUrl.href, body.assignedTo) !==
+        true
+    ) {
+      throw probeDenied();
+    }
 
     // 从严格配方构造实际 URL，调用方无法覆盖路径、查询参数或方法。
     const url = new URL(storyPath, baseUrl);
     const timeoutMs = resolveZentaoTimeout(options.env);
+    ensureApprovalLifetime(binding.expiresAt, options.clock());
     // 同步消耗批准，覆盖并发和发送后的不确定结果。
     if (!approvals.delete(approval)) throw probeDenied();
     const controller = new AbortController();
