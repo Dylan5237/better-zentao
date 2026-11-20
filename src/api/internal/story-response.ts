@@ -9,6 +9,27 @@ const failureEnvelope = z.object({
   message: z.unknown().optional(),
 });
 
+const publicDiagnostic =
+  /^(?:(?:需求)?标题(?:已存在|不能为空|过长)|(?:该)?需求不存在|缺少必填(?:字段|项)|参数不合法|没有(?:创建|查看)需求的权限)$/u;
+const maxDiagnosticLength = 120;
+
+function nonEmptyText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function summarizeBusinessMessage(text: string): string {
+  // 仅转述诊断短句，服务端附带的字段值可能包含任意私密数据。
+  const excerpt = text
+    .split(/[。！？；\r\n]+/u)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => publicDiagnostic.test(sentence))
+    .join("。");
+  if (excerpt.length > maxDiagnosticLength) {
+    return excerpt.slice(0, maxDiagnosticLength - 1) + "…";
+  }
+  return excerpt || "禅道返回业务错误。";
+}
+
 export async function decodeStoryResponse(
   response: Response,
 ): Promise<StoryDetail> {
@@ -27,13 +48,15 @@ export async function decodeStoryResponse(
   }
 
   const envelope = failureEnvelope.safeParse(payload);
-  if (
-    envelope.success &&
-    (envelope.data.result === "fail" ||
-      envelope.data.error !== undefined ||
-      envelope.data.message !== undefined)
-  ) {
-    throw new BztError("ZENTAO_BUSINESS_ERROR", "禅道返回业务错误。");
+  if (envelope.success) {
+    const message =
+      nonEmptyText(envelope.data.message) || nonEmptyText(envelope.data.error);
+    if (envelope.data.result === "fail" || message) {
+      throw new BztError(
+        "ZENTAO_BUSINESS_ERROR",
+        summarizeBusinessMessage(message),
+      );
+    }
   }
 
   const story = storyDetailDto.safeParse(payload);

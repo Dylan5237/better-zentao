@@ -69,3 +69,48 @@ it("Q1 缺省执行列表被规范化为空数组", async () => {
     executions: [],
   });
 });
+
+it.each([
+  ["error 为 null", { error: null }],
+  ["message 为空串", { message: "" }],
+  ["error 对象和 message 纯空白", { error: { code: 11 }, message: "  " }],
+])("Q1 %s 仍是合法需求响应", async (_name, metadata) => {
+  await expect(
+    decodeStoryResponse(Response.json({ ...expected, ...metadata })),
+  ).resolves.toEqual(expected);
+});
+
+it.each([
+  { result: "fail", error: null, message: "" },
+  { error: "标题不能为空。" },
+  { message: "标题不能为空。" },
+])("Q1 仅有明确失败标记或非空错误文本时报业务错误 %#", async (metadata) => {
+  await expect(
+    decodeStoryResponse(Response.json({ ...expected, ...metadata })),
+  ).rejects.toHaveProperty("code", "ZENTAO_BUSINESS_ERROR");
+});
+
+it("Q1 / S01 转述脱敏并截断的业务 message", async () => {
+  const secret = "opaque-test-value";
+  const message = `标题不能为空。Cookie zentaosid=${secret}。Bearer ${secret}。a8d4fa71ec2d4913e40cd3216789abcd。${"标题不能为空。".repeat(30)}`;
+  try {
+    await decodeStoryResponse(Response.json({ result: "fail", message }));
+    expect.unreachable();
+  } catch (error) {
+    expect(error).toMatchObject({
+      code: "ZENTAO_BUSINESS_ERROR",
+      message: expect.stringContaining("标题不能为空"),
+    });
+    expect(String(error)).not.toContain(message);
+    expect(String(error)).toMatch(/…$/u);
+    expect(String(error).length).toBeLessThanOrEqual(130);
+    assertNoSensitiveData(String(error), [secret]);
+    assertNoSensitiveData(error, [secret]);
+  }
+});
+
+it("Q1 等待夹具确认前拒绝推测的 v2 status/data 包装", async () => {
+  await expect(
+    decodeStoryResponse(Response.json({ status: "success", data: expected })),
+  ).rejects.toHaveProperty("code", "ZENTAO_SCHEMA_MISMATCH");
+});
