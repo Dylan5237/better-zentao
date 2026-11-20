@@ -1,9 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { createProbeWriteSender } from "../../src/api/internal/probe-transport.ts";
+import { decodeProbeOwnership } from "../../src/api/internal/probe-scope.ts";
+import {
+  createProbeWriteApproval,
+  createProbeWriteSender,
+} from "../../src/api/internal/probe-transport.ts";
 import type { ProbeWriteOptions } from "../../src/api/internal/probe-transport.ts";
+import { PROBE_APPROVAL_MAX_TTL_MS } from "../../src/core/config.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 
 const origin = "https://fixture.example.test/zentao";
+const confirmation = {
+  baseUrl: origin,
+  route: "POST /api.php/v2/stories?productID=29",
+  expiresAt: 10,
+  clock: () => 1,
+};
 const candidate = {
   action: "story.create",
   productId: 29,
@@ -21,25 +32,31 @@ const candidate = {
   },
 };
 
-function setup(overrides: Partial<ProbeWriteOptions> = {}) {
+const modules = [{ id: 3, product: 29 }];
+const plans = [{ id: 4, product: 29 }];
+const defaultOwnership = await decodeProbeOwnership(
+  origin,
+  Response.json({ modules, plans }),
+);
+
+function setup(
+  overrides: Partial<ProbeWriteOptions> = {},
+  approved: unknown = candidate,
+) {
   const send = vi
     .fn<typeof fetch>()
     .mockResolvedValue(new Response(null, { status: 201 }));
   const options: ProbeWriteOptions = {
     baseUrl: origin,
-    approval: {
-      baseUrl: origin,
-      routes: ["POST /api.php/v2/stories"],
-      expiresAt: 10,
-    },
-    modules: new Map([[3, 29]]),
-    plans: new Map([[4, 29]]),
+    approval: createProbeWriteApproval(confirmation, approved),
+    ownership: defaultOwnership,
     clock: () => 1,
     send,
     ...overrides,
   };
   return {
     send,
+    approval: options.approval,
     run: (input: unknown) => createProbeWriteSender(options)(input),
   };
 }
@@ -61,14 +78,16 @@ describe("WP-05 / ADR-19 #29 发送层熔断", () => {
 
   it("接受明确配置的数字 29，以及未关联计划的草稿", async () => {
     const { plan: _plan, ...body } = candidate.body;
-    const { run, send } = setup({
-      settings: { productId: 29 },
-      plans: new Map(),
-    });
-    await expect(run({ ...candidate, body })).resolves.toHaveProperty(
-      "status",
-      201,
+    const draft = { ...candidate, body };
+    const ownership = await decodeProbeOwnership(
+      origin,
+      Response.json({ modules, plans: [] }),
     );
+    const { run, send } = setup(
+      { settings: { productId: 29 }, ownership },
+      draft,
+    );
+    await expect(run(draft)).resolves.toHaveProperty("status", 201);
     expect(send).toHaveBeenCalledOnce();
   });
 
@@ -165,6 +184,120 @@ describe("WP-05 / ADR-19 #29 发送层熔断", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it("ADR-19 调用方手写模块归属不能放行模块 999", async () => {
+    const forged = {
+      ...candidate,
+      body: { ...candidate.body, module: 999, modules: [999] },
+    };
+    const overrides: Partial<ProbeWriteOptions> = {};
+    // 模拟绕过 TypeScript 的旧调用方。
+    Object.assign(overrides, {
+      ownership: new Map([[999, 29]]),
+      modules: new Map([[999, 29]]),
+    });
+    const { run, send } = setup(overrides, forged);
+    await expect(run(forged)).rejects.toHaveProperty(
+      "code",
+      "PERMISSION_DENIED",
+    );
+    expect(send).toHaveBeenCalledTimes(0);
+  });
+
+  it("ADR-19 批准后更换请求体不会发送", async () => {
+    const { run, send } = setup();
+    const modified = {
+      ...candidate,
+      body: { ...candidate.body, title: "未经批准的标题" },
+    };
+    await expect(run(modified)).rejects.toHaveProperty(
+      "code",
+      "PERMISSION_DENIED",
+    );
+    expect(send).toHaveBeenCalledTimes(0);
+    await expect(run(candidate)).resolves.toHaveProperty("status", 201);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("ADR-19 超过批准有效期上限不会发送", async () => {
+    const { send } = setup();
+    expect(() =>
+      createProbeWriteApproval(
+        { ...confirmation, expiresAt: Number.MAX_SAFE_INTEGER },
+        candidate,
+      ),
+    ).toThrow(expect.objectContaining({ code: "PLAN_EXPIRED" }));
+    expect(send).toHaveBeenCalledTimes(0);
+  });
+
+  it("ADR-19 允许有效期上限及等价的请求体键序", async () => {
+    const approval = createProbeWriteApproval(
+      { ...confirmation, expiresAt: 1 + PROBE_APPROVAL_MAX_TTL_MS },
+      candidate,
+    );
+    const { title, ...rest } = candidate.body;
+    const { run, send } = setup({ approval });
+    await expect(
+      run({ ...candidate, body: { title, ...rest } }),
+    ).resolves.toHaveProperty("status", 201);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("ADR-19 复制批准 nonce 无法发送", async () => {
+    const { approval } = setup();
+    const { run, send } = setup({ approval: { ...approval } });
+    await expect(run(candidate)).rejects.toHaveProperty(
+      "code",
+      "PERMISSION_DENIED",
+    );
+    expect(send).toHaveBeenCalledTimes(0);
+  });
+
+  it("拦截路由未获确认的批准", () => {
+    expect(() =>
+      createProbeWriteApproval(
+        { ...confirmation, route: "DELETE /api.php/v2/stories/11" },
+        candidate,
+      ),
+    ).toThrow(expect.objectContaining({ code: "PERMISSION_DENIED" }));
+  });
+
+  it.each([
+    ["无模块归属", [], plans, origin],
+    ["跨产品模块", [{ id: 3, product: 42 }], plans, origin],
+    ["无计划归属", modules, [], origin],
+    ["跨产品计划", modules, [{ id: 4, product: 42 }], origin],
+    ["来自其他实例的归属", modules, plans, origin + "-other"],
+  ] as const)(
+    "拦截%s，发送次数为 0",
+    async (_name, modules, plans, instance) => {
+      const ownership = await decodeProbeOwnership(
+        instance,
+        Response.json({ modules, plans }),
+      );
+      const { run, send } = setup({ ownership });
+      await expect(run(candidate)).rejects.toHaveProperty(
+        "code",
+        "PERMISSION_DENIED",
+      );
+      expect(send).toHaveBeenCalledTimes(0);
+    },
+  );
+
+  it.each([
+    [
+      "重复归属",
+      Response.json({ modules: [{ id: 3, product: 42 }, ...modules], plans }),
+      "ZENTAO_SCHEMA_MISMATCH",
+    ],
+    ["非法 JSON", new Response("invalid"), "ZENTAO_SCHEMA_MISMATCH"],
+    ["回读失败", new Response(null, { status: 503 }), "ZENTAO_UNAVAILABLE"],
+  ])("拒绝生成无效回读证据：%s", async (_name, response, code) => {
+    await expect(decodeProbeOwnership(origin, response)).rejects.toHaveProperty(
+      "code",
+      code,
+    );
+  });
+
   it.each([
     ["产品编号不符", { ...candidate, productId: 42 }],
     [
@@ -205,10 +338,6 @@ describe("WP-05 / ADR-19 #29 发送层熔断", () => {
     ["非 #29 配置", { settings: { productId: 42 } }],
     ["字符串产品号配置", { settings: { productId: "29" } }],
     ["非法配置对象", { settings: null }],
-    ["无模块归属", { modules: new Map() }],
-    ["跨产品模块", { modules: new Map([[3, 42]]) }],
-    ["无计划归属", { plans: new Map() }],
-    ["跨产品计划", { plans: new Map([[4, 42]]) }],
     ["同主机但不同实例前缀", { baseUrl: origin + "-other" }],
     ["不同主机", { baseUrl: "https://outside.example.test/zentao" }],
     [
@@ -219,10 +348,7 @@ describe("WP-05 / ADR-19 #29 发送层熔断", () => {
     ["地址自带片段", { baseUrl: origin + "#other" }],
     ["地址协议不支持", { baseUrl: "file:///zentao" }],
     ["地址无法解析", { baseUrl: "not a URL" }],
-    [
-      "路由未获确认",
-      { approval: { baseUrl: origin, routes: [], expiresAt: 10 } },
-    ],
+    ["路由未获确认", { approval: { nonce: "unsigned" } }],
     ["计划过期", { clock: () => 10 }],
     ["时间无效", { clock: () => NaN }],
   ];

@@ -1,13 +1,21 @@
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Clock } from "../../core/clock.ts";
 import {
+  PROBE_APPROVAL_MAX_TTL_MS,
   PROBE_PRODUCT_ID,
   probeSettings,
   resolveZentaoTimeout,
 } from "../../core/config.ts";
 import { BztError } from "../../core/errors.ts";
+import {
+  hasProbeOwnership,
+  parseProbeBaseUrl,
+  probeDenied,
+} from "./probe-scope.ts";
+import type { VerifiedOwnership } from "./probe-scope.ts";
 
-const storyPath = "api.php/v2/stories";
+const storyPath = "api.php/v2/stories?productID=" + PROBE_PRODUCT_ID;
 const storyRoute = "POST /" + storyPath;
 const productId = z.literal(PROBE_PRODUCT_ID);
 const id = z.int().positive();
@@ -34,86 +42,105 @@ export interface ProbeWriteOptions {
   readonly baseUrl: string;
   readonly settings?: unknown;
   readonly env?: Readonly<{ ZENTAO_TIMEOUT_MS?: string }>;
-  readonly approval: {
-    readonly baseUrl: string;
-    readonly routes: readonly string[];
-    readonly expiresAt: number;
-  };
-  // 归属信息由已确认实例的回读提供。阶段 2 只注入离线数据。
-  readonly modules: ReadonlyMap<number, number>;
-  readonly plans: ReadonlyMap<number, number>;
+  readonly approval: ProbeWriteApproval;
+  readonly ownership: VerifiedOwnership;
   readonly clock: Clock;
   readonly send: typeof fetch;
 }
 
-const usedApprovals = new WeakSet<ProbeWriteOptions["approval"]>();
+interface ProbeWriteApproval {
+  readonly nonce: string;
+}
+
+const approvals = new WeakMap<
+  ProbeWriteApproval,
+  { baseUrl: string; route: string; bodyHash: string; expiresAt: number }
+>();
 const unknownWrite = Object.freeze({
   status: "unknown",
   retryable: false,
   message: "探查写入结果不明，需要回读确认，禁止重新创建。",
 } as const);
 
-function denied(): BztError {
-  return new BztError("PERMISSION_DENIED", "探查请求超出已确认的 #29 范围。");
+function ensureApprovalLifetime(expiresAt: number, now: number): void {
+  if (
+    !Number.isSafeInteger(now) ||
+    !Number.isSafeInteger(expiresAt) ||
+    expiresAt <= now ||
+    expiresAt - now > PROBE_APPROVAL_MAX_TTL_MS
+  ) {
+    throw new BztError("PLAN_EXPIRED", "探查批准已过期或有效期超出允许范围。");
+  }
 }
 
-function parseBaseUrl(input: string): URL {
-  const url = URL.parse(input);
-  if (
-    !url ||
-    (url.protocol !== "http:" && url.protocol !== "https:") ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash
-  ) {
-    throw denied();
-  }
-  url.pathname = url.pathname.replace(/\/+$/u, "") + "/";
-  return url;
+function encodeBody(body: z.infer<typeof draftRequest>["body"]): string {
+  // 配方只有一层对象及定长数组。数组保留顺序，对象键按字典序写入。
+  return JSON.stringify(body, Object.keys(body).sort());
+}
+
+function hashBody(body: string): string {
+  return createHash("sha256").update(body).digest("hex");
+}
+
+export function createProbeWriteApproval(
+  confirmed: {
+    baseUrl: string;
+    route: string;
+    expiresAt: number;
+    clock: Clock;
+  },
+  input: unknown,
+): ProbeWriteApproval {
+  const baseUrl = parseProbeBaseUrl(confirmed.baseUrl);
+  const request = draftRequest.safeParse(input);
+  if (!request.success || confirmed.route !== storyRoute) throw probeDenied();
+  ensureApprovalLifetime(confirmed.expiresAt, confirmed.clock());
+
+  const approval = Object.freeze({ nonce: randomUUID() });
+  approvals.set(approval, {
+    baseUrl: baseUrl.href,
+    route: confirmed.route,
+    bodyHash: hashBody(encodeBody(request.data.body)),
+    expiresAt: confirmed.expiresAt,
+  });
+  return approval;
 }
 
 export function createProbeWriteSender(options: ProbeWriteOptions) {
   return async (input: unknown): Promise<Response | typeof unknownWrite> => {
-    if (usedApprovals.has(options.approval)) throw denied();
-    const baseUrl = parseBaseUrl(options.baseUrl);
-    const approvedBaseUrl = parseBaseUrl(options.approval.baseUrl);
+    const approval = options.approval;
+    const binding = approvals.get(approval);
+    const baseUrl = parseProbeBaseUrl(options.baseUrl);
     if (
-      baseUrl.href !== approvedBaseUrl.href ||
-      !options.approval.routes.includes(storyRoute) ||
+      !binding ||
+      baseUrl.href !== binding.baseUrl ||
+      binding.route !== storyRoute ||
       !probeSettings.safeParse(options.settings).success
     ) {
-      throw denied();
+      throw probeDenied();
     }
-
-    const now = options.clock();
-    if (
-      !Number.isFinite(now) ||
-      !Number.isFinite(options.approval.expiresAt) ||
-      now >= options.approval.expiresAt
-    ) {
-      throw new BztError("PLAN_EXPIRED", "探查预览已过期或无法校验时间。");
-    }
+    ensureApprovalLifetime(binding.expiresAt, options.clock());
 
     const request = draftRequest.safeParse(input);
     if (!request.success) {
-      throw denied();
+      throw probeDenied();
     }
 
     const body = request.data.body;
+    const encodedBody = encodeBody(body);
     if (
       body.module !== body.modules[0] ||
-      options.modules.get(body.module) !== PROBE_PRODUCT_ID ||
-      (body.plan !== undefined &&
-        options.plans.get(body.plan) !== PROBE_PRODUCT_ID)
+      hashBody(encodedBody) !== binding.bodyHash ||
+      !hasProbeOwnership(options.ownership, baseUrl, body.module, body.plan)
     ) {
-      throw denied();
+      throw probeDenied();
     }
 
     // 从严格配方构造实际 URL，调用方无法覆盖路径、查询参数或方法。
     const url = new URL(storyPath, baseUrl);
-    url.searchParams.set("productID", String(PROBE_PRODUCT_ID));
     const timeoutMs = resolveZentaoTimeout(options.env);
+    // 同步消耗批准，覆盖并发和发送后的不确定结果。
+    if (!approvals.delete(approval)) throw probeDenied();
     const controller = new AbortController();
     const expired = Promise.withResolvers<typeof unknownWrite>();
     const timer = setTimeout(() => {
@@ -121,15 +148,13 @@ export function createProbeWriteSender(options: ProbeWriteOptions) {
       controller.abort();
     }, timeoutMs);
 
-    // 同步消耗批准，覆盖并发和发送后的不确定结果。
-    usedApprovals.add(options.approval);
     try {
       return await Promise.race([
         options.send(url, {
           method: "POST",
           redirect: "error",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: encodedBody,
           signal: controller.signal,
         }),
         expired.promise,
