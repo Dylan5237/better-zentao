@@ -225,9 +225,12 @@ function restrictedGlobals(...extra) {
       globals: [
         { name: "Date", message: "通过参数注入时钟，使用 core 日历口径。" },
         { name: "console", message: "用 stderr 结构化日志。" },
+        "globalThis",
+        "global",
+        "self",
+        "window",
         ...extra,
       ],
-      checkGlobalObject: true,
     },
   ];
 }
@@ -324,20 +327,6 @@ export default [
         "setImmediate",
         "performance",
       ),
-      "no-restricted-syntax": [
-        "error",
-        ...restrictedImportsSyntax,
-        {
-          selector:
-            'MemberExpression[object.name="globalThis"][computed=true]:not([property.type="Literal"])',
-          message: "纯模块不可通过动态属性读取全局对象。",
-        },
-        {
-          selector:
-            'CallExpression[callee.object.name="Reflect"]:matches([callee.property.name="get"],[callee.property.value="get"])[arguments.0.name="globalThis"]',
-          message: "纯模块不可通过 Reflect 读取全局对象。",
-        },
-      ],
       "no-restricted-imports": [
         "error",
         {

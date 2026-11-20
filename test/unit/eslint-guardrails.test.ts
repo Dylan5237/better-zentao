@@ -44,7 +44,42 @@ function createFixtureLinter(): ESLint {
 }
 
 describe("WP-00 实际 ESLint 配置自检", () => {
+  const globalAccess = [
+    ["通过 Node global 读时钟", "void global.Date.now();"],
+    ["通过 Node global 访问 crypto", "void global.crypto.randomUUID();"],
+    ["通过 Node global 访问 performance", "void global.performance.now();"],
+    [
+      "通过 Node global 访问 fetch",
+      'void global.fetch("https://offline.test");',
+    ],
+    ["通过 Node global 访问 console", 'global.console.log("noise");'],
+    ["通过 Node global 访问 stdout", 'global.process.stdout.write("noise");'],
+    [
+      "通过 Node global 访问内置模块",
+      'void global.process.getBuiltinModule("node:fs");',
+    ],
+    ["通过 globalThis 别名读时钟", "const g = globalThis; void g.Date.now();"],
+    [
+      "解构 globalThis",
+      "const { Date: D, fetch: f } = globalThis; void D; void f;",
+    ],
+    [
+      "通过 Reflect.get 访问 globalThis",
+      'const key = "fetch"; void Reflect.get(globalThis, key);',
+    ],
+    ["计算 globalThis 属性名", 'const key = "fetch"; void globalThis[key];'],
+    ["访问 self", "void self;"],
+    ["访问 window", "void window;"],
+  ] as const;
   const blocked = fixtures([
+    ...["domain", "services"].flatMap((layer) =>
+      globalAccess.map<[string, string, string, string]>(([name, source]) => [
+        `${layer} ${name}`,
+        `src/${layer}/check.ts`,
+        source,
+        "no-restricted-globals",
+      ]),
+    ),
     [
       "服务反向导入 CLI",
       "src/services/check.ts",
@@ -217,13 +252,13 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       "领域用 Reflect.get 访问 globalThis",
       "src/domain/check.ts",
       "export function access(key: string) { Reflect.get(globalThis, key); }",
-      "no-restricted-syntax",
+      "no-restricted-globals",
     ],
     [
       "规则计算 globalThis 属性名",
       "src/rules/check.ts",
       'const key = "Date"; export const now = globalThis[key].now();',
-      "no-restricted-syntax",
+      "no-restricted-globals",
     ],
     [
       "服务直接创建 WebSocket",
