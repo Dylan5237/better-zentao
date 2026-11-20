@@ -39,3 +39,36 @@ it("CFG-01 doctor 退出状态由本地配置检查决定", async () => {
   expect(JSON.parse(line ?? "")).toMatchObject({ node: "24.11.0", ok: false });
   expect(runtime.stderr).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["18.19.0", false],
+  ["24.10.99", false],
+  ["24.11.0", true],
+  ["24.22.3", true],
+  ["24.11.0-rc.1", false],
+  ["26.0.0", false],
+  ["invalid", false],
+])(
+  "CFG-13 doctor 校验 Node %s 并映射退出码",
+  async (nodeVersion, supported) => {
+    const runtime = {
+      ...localRuntime(),
+      nodeVersion,
+      env: {
+        ZENTAO_BASE_URL: "https://fixture.test",
+        ZENTAO_ACCOUNT: "acct_a",
+        ZENTAO_PASSWORD: "synthetic",
+      },
+    };
+    await expect(runCli(["doctor"], runtime)).resolves.toBe(supported ? 0 : 1);
+    const [line] = runtime.stdout.mock.calls[0] ?? [];
+    const result: unknown = JSON.parse(line ?? "");
+    expect(result).toMatchObject({
+      node: nodeVersion,
+      ok: supported,
+      missingEnv: [],
+      requiredNode: ">=24.11.0 <25",
+    });
+    if (!supported) expect(result).toMatchObject({ sqlite: null });
+  },
+);

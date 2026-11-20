@@ -164,6 +164,11 @@ const processImports = [
   { name: "node:process", allowImportNames: ["stderr"] },
 ];
 
+const restrictedImportsSyntax = [
+  { selector: "ImportExpression", message: "使用可静态核验的文件导入。" },
+  { selector: "TSImportType", message: "使用可校验的 import type 声明。" },
+];
+
 function restrictedGlobals(...extra) {
   return [
     "error",
@@ -204,14 +209,7 @@ export default [
         "error",
         { assertionStyle: "never" },
       ],
-      "no-restricted-syntax": [
-        "error",
-        { selector: "ImportExpression", message: "使用可静态核验的文件导入。" },
-        {
-          selector: "TSImportType",
-          message: "使用可校验的 import type 声明。",
-        },
-      ],
+      "no-restricted-syntax": ["error", ...restrictedImportsSyntax],
       "no-restricted-globals": restrictedGlobals("process", "fetch"),
       "no-restricted-imports": [
         "error",
@@ -280,6 +278,22 @@ export default [
             },
           ],
         },
+      ],
+    },
+  },
+  {
+    files: ["src/core/store/sqlite.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...restrictedImportsSyntax.map((restriction) =>
+          restriction.selector === "ImportExpression"
+            ? {
+                ...restriction,
+                selector: 'ImportExpression:not([source.value="node:sqlite"])',
+              }
+            : restriction,
+        ),
       ],
     },
   },

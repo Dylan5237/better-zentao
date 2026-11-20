@@ -42,7 +42,7 @@ export async function runCli(
   }
 
   if (command === "doctor") {
-    const status = getDoctorStatus(runtime.env);
+    const status = await getDoctorStatus(runtime.env, runtime.nodeVersion);
     runtime.stdout(
       JSON.stringify({ node: runtime.nodeVersion, ...status }) + "\n",
     );
