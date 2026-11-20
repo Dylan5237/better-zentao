@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { Clock } from "../../core/clock.ts";
-import { PROBE_PRODUCT_ID, probeSettings } from "../../core/config.ts";
+import {
+  PROBE_PRODUCT_ID,
+  probeSettings,
+  resolveZentaoTimeout,
+} from "../../core/config.ts";
 import { BztError } from "../../core/errors.ts";
 
 const storyPath = "api.php/v2/stories";
@@ -29,6 +33,7 @@ const draftRequest = z.strictObject({
 export interface ProbeWriteOptions {
   readonly baseUrl: string;
   readonly settings?: unknown;
+  readonly env?: Readonly<{ ZENTAO_TIMEOUT_MS?: string }>;
   readonly approval: {
     readonly baseUrl: string;
     readonly routes: readonly string[];
@@ -40,6 +45,13 @@ export interface ProbeWriteOptions {
   readonly clock: Clock;
   readonly send: typeof fetch;
 }
+
+const usedApprovals = new WeakSet<ProbeWriteOptions["approval"]>();
+const unknownWrite = Object.freeze({
+  status: "unknown",
+  retryable: false,
+  message: "探查写入结果不明，需要回读确认，禁止重新创建。",
+} as const);
 
 function denied(): BztError {
   return new BztError("PERMISSION_DENIED", "探查请求超出已确认的 #29 范围。");
@@ -62,7 +74,8 @@ function parseBaseUrl(input: string): URL {
 }
 
 export function createProbeWriteSender(options: ProbeWriteOptions) {
-  return async (input: unknown): Promise<Response> => {
+  return async (input: unknown): Promise<Response | typeof unknownWrite> => {
+    if (usedApprovals.has(options.approval)) throw denied();
     const baseUrl = parseBaseUrl(options.baseUrl);
     const approvedBaseUrl = parseBaseUrl(options.approval.baseUrl);
     if (
@@ -100,18 +113,31 @@ export function createProbeWriteSender(options: ProbeWriteOptions) {
     // 从严格配方构造实际 URL，调用方无法覆盖路径、查询参数或方法。
     const url = new URL(storyPath, baseUrl);
     url.searchParams.set("productID", String(PROBE_PRODUCT_ID));
+    const timeoutMs = resolveZentaoTimeout(options.env);
+    const controller = new AbortController();
+    const expired = Promise.withResolvers<typeof unknownWrite>();
+    const timer = setTimeout(() => {
+      expired.resolve(unknownWrite);
+      controller.abort();
+    }, timeoutMs);
+
+    // 同步消耗批准，覆盖并发和发送后的不确定结果。
+    usedApprovals.add(options.approval);
     try {
-      return await options.send(url, {
-        method: "POST",
-        redirect: "error",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      return await Promise.race([
+        options.send(url, {
+          method: "POST",
+          redirect: "error",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        }),
+        expired.promise,
+      ]);
     } catch {
-      throw new BztError(
-        "ZENTAO_UNAVAILABLE",
-        "探查传输失败，写入结果需要回读核实。",
-      );
+      return unknownWrite;
+    } finally {
+      clearTimeout(timer);
     }
   };
 }

@@ -72,17 +72,97 @@ describe("WP-05 / ADR-19 #29 发送层熔断", () => {
     expect(send).toHaveBeenCalledOnce();
   });
 
-  it("模拟传输失败时只发送一次，错误不包含请求数据或下游异常", async () => {
+  it("ADR-19 重放使用中的批准，五次调用只发送一次", async () => {
+    const pending = Promise.withResolvers<Response>();
+    const send = vi.fn<typeof fetch>().mockReturnValue(pending.promise);
+    const { run } = setup({ send });
+    const first = run(candidate);
+    expect(send).toHaveBeenCalledTimes(1);
+    const retries = [
+      run(candidate),
+      run(candidate),
+      run(candidate),
+      run(candidate),
+    ];
+    const attempts = Promise.allSettled(retries);
+    pending.resolve(new Response(null, { status: 201 }));
+    await expect(first).resolves.toHaveProperty("status", 201);
+    expect(send).toHaveBeenCalledTimes(1);
+    for (const retry of await attempts) {
+      expect(retry).toMatchObject({
+        status: "rejected",
+        reason: { code: "PERMISSION_DENIED" },
+      });
+    }
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("ADR-19 失败后重试三次均不发送，回执为 unknown 且不含下游异常", async () => {
     const send = vi
       .fn<typeof fetch>()
       .mockRejectedValue(new Error("Token: synthetic-token"));
     const { run } = setup({ send });
-    const result = run(candidate);
-    await expect(result).rejects.toHaveProperty("code", "ZENTAO_UNAVAILABLE");
-    await result.catch((error: unknown) =>
-      assertNoSensitiveData(String(error)),
+    const result = await run(candidate);
+    expect(result).toMatchObject({ status: "unknown", retryable: false });
+    expect(result).toHaveProperty(
+      "message",
+      expect.stringContaining("禁止重新创建"),
     );
-    expect(send).toHaveBeenCalledOnce();
+    assertNoSensitiveData(result, ["synthetic-token"]);
+    expect(send).toHaveBeenCalledTimes(1);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await expect(run(candidate)).rejects.toHaveProperty(
+        "code",
+        "PERMISSION_DENIED",
+      );
+      expect(send).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it.each([
+    ["默认 15000ms", undefined, 15000],
+    ["ZENTAO_TIMEOUT_MS=20", { ZENTAO_TIMEOUT_MS: "20" }, 20],
+  ] as const)(
+    "ADR-19 %s 中止发送，超时后重试不发送",
+    async (_name, env, timeout) => {
+      vi.useFakeTimers();
+      try {
+        const send = vi
+          .fn<typeof fetch>()
+          .mockImplementation(() => new Promise(() => {}));
+        const { run } = setup({ send, env });
+        const result = run(candidate);
+        expect(send).toHaveBeenCalledTimes(1);
+        const signal = send.mock.calls[0]?.[1]?.signal;
+        expect(signal).toBeInstanceOf(AbortSignal);
+        await vi.advanceTimersByTimeAsync(timeout - 1);
+        expect(signal?.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(signal?.aborted).toBe(true);
+        await expect(result).resolves.toMatchObject({
+          status: "unknown",
+          retryable: false,
+        });
+        await expect(run(candidate)).rejects.toHaveProperty(
+          "code",
+          "PERMISSION_DENIED",
+        );
+        expect(send).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("ADR-19 成功后重试不发送", async () => {
+    const { run, send } = setup();
+    await expect(run(candidate)).resolves.toHaveProperty("status", 201);
+    expect(send).toHaveBeenCalledTimes(1);
+    await expect(run(candidate)).rejects.toHaveProperty(
+      "code",
+      "PERMISSION_DENIED",
+    );
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it.each([
