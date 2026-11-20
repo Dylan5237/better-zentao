@@ -160,6 +160,74 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       "bzt/no-raw-api-exports",
     ],
     [
+      "API 门面以同名值掩盖 Response 类型导出",
+      "src/api/check.ts",
+      "export const leak = 1; export type leak = Response;",
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面返回原始响应体流",
+      "src/api/check.ts",
+      'import { readStoryResponse } from "./internal/story-response.ts"; export async function stream(id: number) { return (await readStoryResponse(id)).body; }',
+      "bzt/no-raw-api-exports",
+    ],
+    ...["RequestInit", "ResponseInit", "HeadersInit", "Blob", "FormData"].map<
+      [string, string, string, string]
+    >((type) => [
+      `API 门面导出 Fetch 载体 ${type}`,
+      "src/api/check.ts",
+      `export type Transport = ${type};`,
+      "bzt/no-raw-api-exports",
+    ]),
+    [
+      "API 门面用 Pick 包装带响应体的原始响应",
+      "src/api/check.ts",
+      'export async function raw(): Promise<Pick<Response, "text" | "body" | "status">> { return new Response(); }',
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面用 Pick 包装不带响应体的原始响应",
+      "src/api/check.ts",
+      'export async function raw(): Promise<Pick<Response, "text" | "status">> { return new Response(); }',
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面用 Omit、Partial、Readonly 多层包装原始响应",
+      "src/api/check.ts",
+      'export type Transport = Readonly<Partial<Omit<Pick<Response, "text" | "status">, "status">>>;',
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面在函数的泛型约束中暴露 Response",
+      "src/api/check.ts",
+      "export function wrap<T extends Response>(r: T) { return r; }",
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面在函数的默认类型参数中暴露 Response",
+      "src/api/check.ts",
+      "export function wrap<T = Response>(r?: T) { return !!r; }",
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面在类型别名的默认类型参数中暴露 Response",
+      "src/api/check.ts",
+      "export type Box<T = Response> = { value: T };",
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面在类型别名的泛型约束中暴露 Response",
+      "src/api/check.ts",
+      "export type Box<T extends Response> = { value: T };",
+      "bzt/no-raw-api-exports",
+    ],
+    [
+      "API 门面在化简为字符串的类型别名中暴露 Response",
+      "src/api/check.ts",
+      "export type Name<T = Response> = string;",
+      "bzt/no-raw-api-exports",
+    ],
+    [
       "领域从测试目录引入运行时代码",
       "src/domain/check.ts",
       'import "../../test/unit/probe-transport.test.ts";',
@@ -386,6 +454,11 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       "src/api/story.ts 调用内部解码器并返回品牌 DTO",
       "src/api/story.ts",
       'import { decodeStoryResponse } from "./internal/story-response.ts"; import type { StoryDetail } from "../core/dto/story.ts"; declare function read(id: number): Promise<Response>; export async function getStoryDetail(id: number): Promise<StoryDetail> { return decodeStoryResponse(await read(id)); }',
+    ],
+    [
+      "API 门面公开安全的泛型约束和默认类型",
+      "src/api/check.ts",
+      'export type Label<T extends string = "draft"> = { value: T }; export function wrap<T extends number>(value: T) { return { value }; }',
     ],
     [
       "领域使用注入时钟",

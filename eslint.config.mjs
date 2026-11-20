@@ -64,18 +64,41 @@ function declaredInApiInternal(symbol) {
   );
 }
 
+const rawFetchTypes = new Set([
+  "Response",
+  "Request",
+  "Headers",
+  "ReadableStream",
+  "Blob",
+  "FormData",
+  "RequestInit",
+  "ResponseInit",
+  "HeadersInit",
+]);
+
 function exposesRawApiType(program, type, seen = new Set()) {
-  if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return true;
-  const symbol = type.getSymbol();
-  if (declaredInApiInternal(symbol) || declaredInApiInternal(type.aliasSymbol))
-    return true;
-  if (["Response", "Request", "Headers"].includes(symbol?.name)) return true;
   if (seen.has(type)) return false;
   seen.add(type);
+  if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return true;
+  const symbol = type.getSymbol();
+  if (
+    [symbol, type.aliasSymbol].some(
+      (origin) =>
+        declaredInApiInternal(origin) || rawFetchTypes.has(origin?.name),
+    )
+  )
+    return true;
 
   const checker = program.getTypeChecker();
   const exposesRaw = (inner) => exposesRawApiType(program, inner, seen);
+  if (type.aliasTypeArguments?.some(exposesRaw)) return true;
   if (type.isUnionOrIntersection()) return type.types.some(exposesRaw);
+  if (type.isTypeParameter()) {
+    return [
+      checker.getBaseConstraintOfType(type),
+      checker.getDefaultFromTypeParameter(type),
+    ].some((bound) => bound && exposesRaw(bound));
+  }
   if (!(type.flags & ts.TypeFlags.Object)) return false;
   if (type.objectFlags & ts.ObjectFlags.Reference) {
     if (checker.getTypeArguments(type).some(exposesRaw)) return true;
@@ -86,6 +109,7 @@ function exposesRawApiType(program, type, seen = new Set()) {
   ];
   for (const signature of signatures) {
     if (
+      signature.getTypeParameters()?.some(exposesRaw) ||
       exposesRaw(signature.getReturnType()) ||
       signature
         .getParameters()
@@ -135,13 +159,22 @@ const noRawApiExports = {
             binding.flags & ts.SymbolFlags.Alias
               ? checker.getAliasedSymbol(binding)
               : binding;
-          const type =
-            target.flags & ts.SymbolFlags.Value
-              ? checker.getTypeOfSymbol(target)
-              : checker.getDeclaredTypeOfSymbol(target);
+          const types = [];
+          if (target.flags & ts.SymbolFlags.Value) {
+            types.push(checker.getTypeOfSymbol(target));
+          }
+          if (target.flags & ts.SymbolFlags.Type || types.length === 0) {
+            types.push(checker.getDeclaredTypeOfSymbol(target));
+          }
+          const exposesRaw = (type) => exposesRawApiType(program, type);
           if (
             declaredInApiInternal(target) ||
-            exposesRawApiType(program, type)
+            types.some(exposesRaw) ||
+            target.declarations?.some((declaration) =>
+              declaration.typeParameters?.some((parameter) =>
+                exposesRaw(checker.getTypeAtLocation(parameter)),
+              ),
+            )
           ) {
             context.report({
               node,
