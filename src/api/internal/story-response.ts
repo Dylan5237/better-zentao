@@ -20,19 +20,40 @@ export const readStoryResponse: (
   throw new BztError("ZENTAO_UNAVAILABLE", "当前阶段尚未接入禅道需求读取。");
 };
 
-function nonEmptyText(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+function isNonEmptyText(value: unknown): boolean {
+  return typeof value === "string" && value.trim() !== "";
 }
 
-function summarizeBusinessMessage(text: string): string {
+function hasBusinessError(value: unknown): boolean {
+  return (
+    isNonEmptyText(value) ||
+    (typeof value === "object" &&
+      value !== null &&
+      Object.keys(value).length > 0)
+  );
+}
+
+function summarizeBusinessMessage(message: unknown, error: unknown): string {
   // 仅转述诊断短句，服务端附带的字段值可能包含任意私密数据。
-  const excerpt = text
-    .split(/[。！？；\r\n]+/u)
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => publicDiagnostic.test(sentence))
-    .join("。");
-  if (excerpt.length > maxDiagnosticLength) {
-    return excerpt.slice(0, maxDiagnosticLength - 1) + "…";
+  const pending = [error, message];
+  let excerpt = "";
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value === "string") {
+      for (const fragment of value.split(/[。！？；\r\n]+/u)) {
+        const sentence = fragment.trim();
+        if (!publicDiagnostic.test(sentence)) continue;
+        excerpt = excerpt ? `${excerpt}。${sentence}` : sentence;
+        if (excerpt.length > maxDiagnosticLength) {
+          return excerpt.slice(0, maxDiagnosticLength - 1) + "…";
+        }
+      }
+    } else if (typeof value === "object" && value !== null) {
+      const children: unknown[] = Object.values(value);
+      for (let index = children.length - 1; index >= 0; index--) {
+        pending.push(children[index]);
+      }
+    }
   }
   return excerpt || "禅道返回业务错误。";
 }
@@ -54,19 +75,23 @@ export async function decodeStoryResponse(
     throw new BztError("ZENTAO_SCHEMA_MISMATCH", "禅道响应无法解码为 JSON。");
   }
 
+  const story = storyDetailDto.safeParse(payload);
   const envelope = failureEnvelope.safeParse(payload);
   if (envelope.success) {
-    const message =
-      nonEmptyText(envelope.data.message) || nonEmptyText(envelope.data.error);
-    if (envelope.data.result === "fail" || message) {
+    const { result, message, error } = envelope.data;
+    if (
+      result === "fail" ||
+      isNonEmptyText(error) ||
+      (result !== "success" && isNonEmptyText(message)) ||
+      (!story.success && (hasBusinessError(message) || hasBusinessError(error)))
+    ) {
       throw new BztError(
         "ZENTAO_BUSINESS_ERROR",
-        summarizeBusinessMessage(message),
+        summarizeBusinessMessage(message, error),
       );
     }
   }
 
-  const story = storyDetailDto.safeParse(payload);
   if (!story.success) {
     throw new BztError("ZENTAO_SCHEMA_MISMATCH", "禅道需求数据结构不匹配。", {
       fields: story.error.issues.map(({ path }) => path.join(".")),

@@ -98,6 +98,10 @@ it.each([
   ["error 为 null", { error: null }],
   ["message 为空串", { message: "" }],
   ["error 对象和 message 纯空白", { error: { code: 11 }, message: "  " }],
+  [
+    "result 为 success 且有成功提示",
+    { result: "success", message: "保存成功" },
+  ],
 ])("Q1 %s 仍是合法需求响应", async (_name, metadata) => {
   await expect(
     decodeStoryResponse(Response.json({ ...expected, ...metadata })),
@@ -112,6 +116,59 @@ it.each([
   await expect(
     decodeStoryResponse(Response.json({ ...expected, ...metadata })),
   ).rejects.toHaveProperty("code", "ZENTAO_BUSINESS_ERROR");
+});
+
+it.each([
+  ["error 字段校验对象", { error: { title: ["标题不能为空"] } }],
+  ["message 字段校验数组", { message: ["标题不能为空"] }],
+  ["error 字段校验数组", { error: ["标题不能为空"] }],
+  ["message 字段校验对象", { message: { title: ["标题不能为空"] } }],
+] as const)("Q1 无合法需求主体时将%s识别为业务错误", async (_name, payload) => {
+  await expect(
+    decodeStoryResponse(Response.json(payload)),
+  ).rejects.toMatchObject({
+    code: "ZENTAO_BUSINESS_ERROR",
+    message: "标题不能为空",
+  });
+});
+
+it("Q1 空错误容器且无合法主体时报结构不匹配", async () => {
+  await expect(
+    decodeStoryResponse(Response.json({ error: {}, message: [] })),
+  ).rejects.toHaveProperty("code", "ZENTAO_SCHEMA_MISMATCH");
+});
+
+it("Q1 / S01 message 无白名单短句时继续从 error 提取", async () => {
+  const secret = "synthetic-private-context";
+  const result = decodeStoryResponse(
+    Response.json({
+      result: "fail",
+      message: `内部字段 ${secret}`,
+      error: { title: [`标题不能为空。内部字段 ${secret}`] },
+    }),
+  );
+  await expect(result).rejects.toMatchObject({
+    code: "ZENTAO_BUSINESS_ERROR",
+    message: "标题不能为空",
+  });
+  await result.catch((error: unknown) =>
+    assertNoSensitiveData(error, [secret]),
+  );
+});
+
+it("Q1 / S01 同时转述 message 和 error 中的白名单短句", async () => {
+  await expect(
+    decodeStoryResponse(
+      Response.json({
+        result: "fail",
+        message: ["缺少必填字段"],
+        error: { title: ["标题不能为空"] },
+      }),
+    ),
+  ).rejects.toMatchObject({
+    code: "ZENTAO_BUSINESS_ERROR",
+    message: "缺少必填字段。标题不能为空",
+  });
 });
 
 it("Q1 / S01 转述脱敏并截断的业务 message", async () => {
