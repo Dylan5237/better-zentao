@@ -155,10 +155,59 @@ const noRawApiExports = {
   },
 };
 
+const noImplicitClock = {
+  meta: { messages: { implicitClock: "时间格式化须传入明确的时间。" } },
+  create(context) {
+    const { program, esTreeNodeToTSNodeMap } =
+      context.sourceCode.parserServices;
+    const checker = program.getTypeChecker();
+    return {
+      CallExpression(node) {
+        const call = esTreeNodeToTSNodeMap.get(node);
+        const declaration = checker.getResolvedSignature(call)?.declaration;
+        const owner = declaration?.parent;
+        if (
+          !owner ||
+          !ts.isInterfaceDeclaration(owner) ||
+          owner.name.text !== "DateTimeFormat" ||
+          !program.isSourceFileDefaultLibrary(owner.getSourceFile()) ||
+          !(
+            ts.isMethodSignature(declaration) &&
+            ts.isIdentifier(declaration.name) &&
+            ["format", "formatToParts"].includes(declaration.name.text)
+          )
+        )
+          return;
+
+        const time = call.arguments[0];
+        const type = time && checker.getTypeAtLocation(time);
+        const possibleTimes = type?.isUnion() ? type.types : [type];
+        if (
+          possibleTimes.some(
+            (part) =>
+              !part ||
+              part.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void),
+          )
+        ) {
+          context.report({ node, messageId: "implicitClock" });
+        }
+      },
+    };
+  },
+};
+
 const networkModules = {
   regex: "^(?:node:)?(?:http2?|https|net|tls|dgram)(?:/|$)|^undici(?:/|$)",
   message: "禅道 HTTP 请求从 api/internal 发出。",
 };
+const networkGlobals = ["fetch", "WebSocket", "XMLHttpRequest", "EventSource"];
+const restrictedModules = [
+  networkModules,
+  {
+    regex: "^(?:node:)?(?:child_process|worker_threads)(?:/|$)",
+    message: "源码不能通过子进程或工作线程绕过传输边界。",
+  },
+];
 const processImports = [
   "process",
   { name: "node:process", allowImportNames: ["stderr"] },
@@ -192,7 +241,15 @@ export default [
       parserOptions: { projectService: true, tsconfigRootDir: basePath },
     },
     linterOptions: { noInlineConfig: true },
-    plugins: { import: importRules },
+    plugins: {
+      import: importRules,
+      bzt: {
+        rules: {
+          "no-raw-api-exports": noRawApiExports,
+          "no-implicit-clock": noImplicitClock,
+        },
+      },
+    },
     rules: {
       "import/no-restricted-paths": [
         "error",
@@ -210,10 +267,10 @@ export default [
         { assertionStyle: "never" },
       ],
       "no-restricted-syntax": ["error", ...restrictedImportsSyntax],
-      "no-restricted-globals": restrictedGlobals("process", "fetch"),
+      "no-restricted-globals": restrictedGlobals("process", ...networkGlobals),
       "no-restricted-imports": [
         "error",
-        { paths: ["process", "node:process"], patterns: [networkModules] },
+        { paths: ["process", "node:process"], patterns: restrictedModules },
       ],
     },
   },
@@ -234,7 +291,6 @@ export default [
   {
     files: ["src/api/**/*.ts"],
     ignores: [apiInternal],
-    plugins: { bzt: { rules: { "no-raw-api-exports": noRawApiExports } } },
     rules: {
       "bzt/no-raw-api-exports": "error",
     },
@@ -242,8 +298,8 @@ export default [
   {
     files: [cli],
     rules: {
-      "no-restricted-globals": restrictedGlobals("fetch"),
-      "no-restricted-imports": ["error", { patterns: [networkModules] }],
+      "no-restricted-globals": restrictedGlobals(...networkGlobals),
+      "no-restricted-imports": ["error", { patterns: restrictedModules }],
     },
   },
   {
@@ -251,23 +307,37 @@ export default [
     rules: {
       "no-restricted-imports": [
         "error",
-        { paths: processImports, patterns: [networkModules] },
+        { paths: processImports, patterns: restrictedModules },
       ],
     },
   },
   {
     files: ["src/{domain,rules}/**/*.ts", ...pureCoreFiles],
     rules: {
+      "bzt/no-implicit-clock": "error",
       "no-restricted-globals": restrictedGlobals(
         "process",
-        "fetch",
-        "XMLHttpRequest",
-        "WebSocket",
+        ...networkGlobals,
+        "crypto",
         "setTimeout",
         "setInterval",
         "setImmediate",
         "performance",
       ),
+      "no-restricted-syntax": [
+        "error",
+        ...restrictedImportsSyntax,
+        {
+          selector:
+            'MemberExpression[object.name="globalThis"][computed=true]:not([property.type="Literal"])',
+          message: "纯模块不可通过动态属性读取全局对象。",
+        },
+        {
+          selector:
+            'CallExpression[callee.object.name="Reflect"]:matches([callee.property.name="get"],[callee.property.value="get"])[arguments.0.name="globalThis"]',
+          message: "纯模块不可通过 Reflect 读取全局对象。",
+        },
+      ],
       "no-restricted-imports": [
         "error",
         {

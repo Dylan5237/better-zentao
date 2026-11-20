@@ -184,6 +184,90 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       "no-restricted-globals",
     ],
     [
+      "领域 Intl.DateTimeFormat.format 缺少时间参数",
+      "src/domain/check.ts",
+      "export const now = Intl.DateTimeFormat().format();",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "规则 Intl.DateTimeFormat.formatToParts 缺少时间参数",
+      "src/rules/check.ts",
+      "export const now = Intl.DateTimeFormat().formatToParts();",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "纯模块 Intl 显式传 undefined 隐式读时钟",
+      "src/core/dto/check.ts",
+      "export const now = Intl.DateTimeFormat().format(undefined);",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "纯模块调用脱离实例的 Intl 时间格式化方法",
+      "src/core/calendar.ts",
+      "const format = Intl.DateTimeFormat().format; export const now = format();",
+      "bzt/no-implicit-clock",
+    ],
+    [
+      "纯模块访问 crypto 全局",
+      "src/core/dto/check.ts",
+      "export const id = globalThis.crypto.randomUUID();",
+      "no-restricted-globals",
+    ],
+    [
+      "领域用 Reflect.get 访问 globalThis",
+      "src/domain/check.ts",
+      "export function access(key: string) { Reflect.get(globalThis, key); }",
+      "no-restricted-syntax",
+    ],
+    [
+      "规则计算 globalThis 属性名",
+      "src/rules/check.ts",
+      'const key = "Date"; export const now = globalThis[key].now();',
+      "no-restricted-syntax",
+    ],
+    [
+      "服务直接创建 WebSocket",
+      "src/services/check.ts",
+      'export const conn = new WebSocket("ws://offline.test");',
+      "no-restricted-globals",
+    ],
+    [
+      "非 internal 的 API 创建 XMLHttpRequest",
+      "src/api/check.ts",
+      "export function read() { new XMLHttpRequest(); }",
+      "no-restricted-globals",
+    ],
+    [
+      "CLI 通过 globalThis 创建 EventSource",
+      "src/adapters/cli/check.ts",
+      'new globalThis.EventSource("https://offline.test");',
+      "no-restricted-globals",
+    ],
+    [
+      "服务导入 child_process",
+      "src/services/check.ts",
+      'import "child_process";',
+      "no-restricted-imports",
+    ],
+    [
+      "API 导入 node:child_process",
+      "src/api/check.ts",
+      'import "node:child_process";',
+      "no-restricted-imports",
+    ],
+    [
+      "CLI 导入 worker_threads",
+      "src/adapters/cli/check.ts",
+      'import "worker_threads";',
+      "no-restricted-imports",
+    ],
+    [
+      "核心导入 node:worker_threads",
+      "src/core/check.ts",
+      'import "node:worker_threads";',
+      "no-restricted-imports",
+    ],
+    [
       "业务直接 fetch",
       "src/services/check.ts",
       "export const get = () => fetch('offline');",
@@ -252,6 +336,16 @@ describe("WP-00 实际 ESLint 配置自检", () => {
   ]);
 
   const permitted = fixtures([
+    [
+      "领域 Intl 使用显式时间",
+      "src/domain/check.ts",
+      'import type { Clock } from "../core/clock.ts"; export const render = (clock: Clock) => Intl.DateTimeFormat().format(clock());',
+    ],
+    [
+      "规则中的非时间格式化函数无需时钟",
+      "src/rules/check.ts",
+      'const formatter = { format: () => "safe" }; export const text = formatter.format();',
+    ],
     [
       "src/api/story.ts 调用内部解码器并返回品牌 DTO",
       "src/api/story.ts",
