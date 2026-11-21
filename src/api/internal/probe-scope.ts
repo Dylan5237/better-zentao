@@ -1,24 +1,15 @@
 import { z } from "zod";
 import { PROBE_PRODUCT_ID } from "../../core/config.ts";
 import { BztError } from "../../core/errors.ts";
+import { normalizeZentaoBaseUrl } from "./base-url.ts";
 
 export function probeDenied(): BztError {
   return new BztError("PERMISSION_DENIED", "探查请求超出已确认的 #29 范围。");
 }
 
 export function parseProbeBaseUrl(input: string): URL {
-  const url = URL.parse(input);
-  if (
-    !url ||
-    (url.protocol !== "http:" && url.protocol !== "https:") ||
-    url.username ||
-    url.password ||
-    url.href.includes("?") ||
-    url.href.includes("#")
-  ) {
-    throw probeDenied();
-  }
-  url.pathname = url.pathname.replace(/\/+$/u, "") + "/";
+  const url = normalizeZentaoBaseUrl(input);
+  if (!url) throw probeDenied();
   return url;
 }
 
