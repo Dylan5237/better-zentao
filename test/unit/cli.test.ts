@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../../src/adapters/cli/run-cli.ts";
+import * as configLoader from "../../src/core/config.ts";
+import { BztError } from "../../src/core/errors.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 
 function localRuntime() {
@@ -118,15 +120,22 @@ describe("WP-03 离线测试采集命令", () => {
   const tempPrefix = fileURLToPath(
     new URL("../../.bzt-capture-cli-", import.meta.url),
   );
+  const blockedFetch = vi.fn<typeof fetch>(async () => {
+    throw new Error("离线测试禁止网络请求。");
+  });
   let homeDir: string;
 
   beforeEach(async () => {
+    blockedFetch.mockClear();
+    vi.stubGlobal("fetch", blockedFetch);
     homeDir = await mkdtemp(tempPrefix);
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     await rm(homeDir, { recursive: true, force: true });
+    expect(blockedFetch).not.toHaveBeenCalled();
   });
 
   function probeRuntime(credential = password) {
@@ -198,6 +207,81 @@ describe("WP-03 离线测试采集命令", () => {
       "53",
     ];
   }
+
+  it.each([
+    ["--out", "bad\0path", "输出目录不合法。"],
+    ["--config", "  ", "配置文件路径不合法。"],
+  ])("先验证 %s 路径，再读取配置", async (option, value, message) => {
+    const runtime = probeRuntime();
+    const loadConfig = vi.spyOn(configLoader, "loadConfig");
+
+    await expect(
+      runCli(["probe", "capture", option, value], runtime),
+    ).resolves.toBe(2);
+    expect(loadConfig).not.toHaveBeenCalled();
+    expect(runtime.stdout).not.toHaveBeenCalled();
+    expect(runtime.stderr).toHaveBeenCalledExactlyOnceWith(message + "\n");
+  });
+
+  it("产品编号非法时返回参数错误", async () => {
+    const runtime = probeRuntime();
+    const config = await teamConfig();
+
+    await expect(
+      runCli(
+        ["probe", "capture", "--config", config, "--product", "1.5"],
+        runtime,
+      ),
+    ).resolves.toBe(2);
+    expect(runtime.stdout).not.toHaveBeenCalled();
+    expect(runtime.stderr).toHaveBeenCalledExactlyOnceWith(
+      "产品编号必须是正整数。\n",
+    );
+  });
+
+  it("缺少必填环境变量时只提示变量名称", async () => {
+    const runtime = probeRuntime();
+    const env = { ZENTAO_BASE_URL: runtime.env.ZENTAO_BASE_URL };
+
+    await expect(
+      runCli(["probe", "capture"], { ...runtime, env }),
+    ).resolves.toBe(1);
+    expect(runtime.stdout).not.toHaveBeenCalled();
+    expect(runtime.stderr).toHaveBeenCalledExactlyOnceWith(
+      "CONFIG_MISSING 缺少必填禅道环境变量（ZENTAO_ACCOUNT、ZENTAO_PASSWORD）。\n",
+    );
+  });
+
+  it.each([
+    ["损坏 JSON", "{" + password],
+    ["多个非法字段", JSON.stringify({ mode: password, timezone: password })],
+  ])("团队配置出现%s时安全退出", async (_kind, contents) => {
+    const runtime = probeRuntime();
+    const config = join(homeDir, account + ".json");
+    await writeFile(config, contents, "utf8");
+
+    await expect(
+      runCli(["probe", "capture", "--config", config], runtime),
+    ).resolves.toBe(1);
+    expect(runtime.stdout).not.toHaveBeenCalled();
+    expect(runtime.stderr).toHaveBeenCalledExactlyOnceWith(
+      "INVALID_INPUT 无法加载夹具采集配置。\n",
+    );
+  });
+
+  it.each([
+    ["缺少字段详情", new BztError("INVALID_INPUT", password), "INVALID_INPUT "],
+    ["意外错误", new Error(password), ""],
+  ])("加载配置遇到%s时安全退出", async (_kind, error, code) => {
+    const runtime = probeRuntime();
+    vi.spyOn(configLoader, "loadConfig").mockRejectedValueOnce(error);
+
+    await expect(runCli(["probe", "capture"], runtime)).resolves.toBe(1);
+    expect(runtime.stdout).not.toHaveBeenCalled();
+    expect(runtime.stderr).toHaveBeenCalledExactlyOnceWith(
+      code + "无法加载夹具采集配置。\n",
+    );
+  });
 
   it("选取 --product 样本并写入脱敏夹具，缺口保留在采集结果中", async () => {
     const fetcher = stubProbeResponses();
@@ -305,6 +389,31 @@ describe("WP-03 离线测试采集命令", () => {
       expect.stringContaining("无法写入"),
     );
     await expect(readFile(out, "utf8")).resolves.toBe('"previous"');
+    assertNoSensitiveData(runtime.stderr.mock.calls, [
+      hostname,
+      account,
+      password,
+      token,
+      out,
+      config,
+    ]);
+  });
+
+  it("夹具重命名失败时清除暂存目录并保留目标内容", async () => {
+    stubProbeResponses();
+    const runtime = probeRuntime();
+    const out = join(homeDir, "fixtures");
+    const config = await teamConfig();
+    const target = join(out, "instance-config.json");
+    await mkdir(target, { recursive: true });
+    const existing = join(target, "existing.json");
+    await writeFile(existing, '"previous"', "utf8");
+
+    await expect(runCli(probeArgs(out, config), runtime)).resolves.toBe(1);
+    expect(runtime.stdout).not.toHaveBeenCalled();
+    expect(runtime.stderr).toHaveBeenLastCalledWith("无法写入夹具目录。\n");
+    await expect(readdir(out)).resolves.toEqual(["instance-config.json"]);
+    await expect(readFile(existing, "utf8")).resolves.toBe('"previous"');
     assertNoSensitiveData(runtime.stderr.mock.calls, [
       hostname,
       account,
