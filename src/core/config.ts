@@ -500,7 +500,9 @@ function unsafeKey(key: string, known: readonly string[]): boolean {
 }
 
 function safeSegment(key: string, known: readonly string[]): string {
-  return /^[\p{L}\d_$:-]{1,64}$/u.test(key) && !unsafeKey(key, known)
+  return /^[\p{L}\d_$:-]{1,64}$/u.test(key) &&
+    !unsafeKey(key, known) &&
+    !known.some((secret) => key.includes(secret))
     ? key
     : "[已脱敏]";
 }
@@ -551,6 +553,23 @@ function parseConfig<T>(
   throw invalidConfig("配置字段不合法。", fields);
 }
 
+// JSON.parse 已验证语法，但会覆盖重复键。按原文的对象边界核对解码后的键名。
+function rejectDuplicateKeys(contents: string, source: string): void {
+  const objects: Set<string>[] = [];
+  const tokens = /[{}]|("(?:\\.|[^"\\])*")\s*(:)?/gu;
+  for (const [token, quoted, colon] of contents.matchAll(tokens)) {
+    if (token === "{") objects.push(new Set());
+    else if (token === "}") objects.pop();
+    else if (quoted && colon) {
+      const keys = objects.at(-1);
+      const key: string = JSON.parse(quoted);
+      if (keys?.has(key))
+        throw invalidConfig("配置对象中有重复字段。", [source]);
+      keys?.add(key);
+    }
+  }
+}
+
 async function readConfigFile(
   path: string,
   source: string,
@@ -576,6 +595,7 @@ async function readConfigFile(
   } catch {
     throw invalidConfig("配置文件不是合法 JSON。", [source]);
   }
+  rejectDuplicateKeys(contents, source);
   // 必须先扫描原始 JSON，避免敏感字段在投影时消失。
   scanConfigCredentials(input, known);
   return input;
