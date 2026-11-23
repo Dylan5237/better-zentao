@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ESLint } from "eslint";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const cwd = fileURLToPath(new URL("../../", import.meta.url));
 const absolutePath = (file: string) => resolve(cwd, file).replaceAll("\\", "/");
@@ -278,6 +278,30 @@ describe("WP-00 实际 ESLint 配置自检", () => {
     [
       "规则调用 Date.now",
       "src/rules/check.ts",
+      "export const now = Date.now();",
+      "no-restricted-globals",
+    ],
+    [
+      "服务调用 performance.now",
+      "src/services/check.ts",
+      "export const now = performance.now();",
+      "no-restricted-globals",
+    ],
+    [
+      "服务读取 performance.timeOrigin",
+      "src/services/check.ts",
+      "export const origin = performance.timeOrigin;",
+      "no-restricted-globals",
+    ],
+    [
+      "CLI 处理器通过 performance 读时钟",
+      "src/adapters/cli/run-cli.ts",
+      "export const now = performance.timeOrigin + performance.now();",
+      "no-restricted-globals",
+    ],
+    [
+      "CLI 非组装入口调用 Date.now",
+      "src/adapters/cli/check.ts",
       "export const now = Date.now();",
       "no-restricted-globals",
     ],
@@ -587,9 +611,9 @@ export function render(clock: Clock) {
       'import { stderr } from "node:process"; stderr.write("ok");',
     ],
     [
-      "CLI 允许渲染 stdout",
+      "CLI 组装入口使用 Date.now 注入时钟并渲染 stdout",
       "src/adapters/cli/bzt.ts",
-      "process.stdout.write('ok');",
+      "const clock = () => Date.now(); process.stdout.write(String(clock()));",
     ],
   ]);
 
@@ -605,6 +629,13 @@ export function read(): StoryDetail { return forged; }`,
     ],
   ]);
   const { eslint, program } = createFixtureChecks();
+
+  beforeAll(async () => {
+    // 首次加载 ESLint 解析器与类型信息，单独留出初始化时间。
+    const fixture = blocked[0];
+    if (!fixture) throw new Error("未加载 ESLint 自检片段。");
+    await eslint.lintText(fixture.source, { filePath: fixture.filePath });
+  }, 20_000);
 
   it.each(blocked)("拦截 $name", async ({ filePath, source, ruleId }) => {
     const [result] = await eslint.lintText(source, { filePath });

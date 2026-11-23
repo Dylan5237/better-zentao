@@ -339,12 +339,20 @@ const restrictedImportsSyntax = [
   { selector: "TSImportType", message: "使用可校验的 import type 声明。" },
 ];
 
-function restrictedGlobals(...extra) {
+function restrictedGlobals(extra, { allowDate = false } = {}) {
   return [
     "error",
     {
       globals: [
-        { name: "Date", message: "通过参数注入时钟，使用 core 日历口径。" },
+        ...(allowDate
+          ? []
+          : [
+              {
+                name: "Date",
+                message: "通过参数注入时钟，使用 core 日历口径。",
+              },
+            ]),
+        "performance",
         { name: "console", message: "用 stderr 结构化日志。" },
         "globalThis",
         "global",
@@ -392,7 +400,10 @@ export default [
       ],
       "no-restricted-syntax": ["error", ...restrictedImportsSyntax],
       "bzt/no-implicit-clock": "error",
-      "no-restricted-globals": restrictedGlobals("process", ...networkGlobals),
+      "no-restricted-globals": restrictedGlobals([
+        "process",
+        ...networkGlobals,
+      ]),
       "no-restricted-imports": [
         "error",
         { paths: ["process", "node:process"], patterns: restrictedModules },
@@ -402,10 +413,10 @@ export default [
   {
     files: [apiInternal],
     rules: {
-      "no-restricted-globals": restrictedGlobals(
+      "no-restricted-globals": restrictedGlobals([
         "process",
         ...nonFetchNetworkGlobals,
-      ),
+      ]),
     },
   },
   {
@@ -422,7 +433,9 @@ export default [
   {
     files: [cli],
     rules: {
-      "no-restricted-globals": restrictedGlobals(...networkGlobals),
+      "no-restricted-globals": restrictedGlobals(networkGlobals, {
+        allowDate: true,
+      }),
       "no-restricted-imports": ["error", { patterns: restrictedModules }],
     },
   },
@@ -438,15 +451,14 @@ export default [
   {
     files: ["src/{domain,rules}/**/*.ts", ...pureCoreFiles],
     rules: {
-      "no-restricted-globals": restrictedGlobals(
+      "no-restricted-globals": restrictedGlobals([
         "process",
         ...networkGlobals,
         "crypto",
         "setTimeout",
         "setInterval",
         "setImmediate",
-        "performance",
-      ),
+      ]),
       "no-restricted-imports": [
         "error",
         {

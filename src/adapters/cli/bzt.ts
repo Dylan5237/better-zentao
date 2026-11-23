@@ -8,7 +8,7 @@ try {
     stderr: (text) => process.stderr.write(text),
     env: process.env,
     homeDir: homedir(),
-    clock: () => Math.trunc(performance.timeOrigin + performance.now()),
+    clock: () => Date.now(),
     nodeVersion: process.versions.node,
   });
 } catch {
