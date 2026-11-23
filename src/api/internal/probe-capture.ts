@@ -168,7 +168,7 @@ export async function collectProbeFixtures(
     throw new BztError("INVALID_INPUT", "禅道产品 ID 必须为正整数。");
   }
   const http = createZentaoHttp(options);
-  const secrets = new Set([options.account, options.password]);
+  const secrets = new Set([options.password]);
   const instance = URL.parse(options.baseUrl);
   if (instance && instance.hostname !== "fixture.example.test") {
     secrets.add(instance.hostname);
@@ -321,7 +321,10 @@ export async function collectProbeFixtures(
     }
   }
 
-  // 整批脱敏后才返回，刷新前后的凭据都参加最终复扫。
-  const fixtures = createCaptureFixtures(rawSamples, [...secrets]);
+  // 登录账号按身份复扫，刷新前后的高敏凭据仍参加整批复扫。
+  const fixtures = createCaptureFixtures(rawSamples, {
+    knownSecrets: [...secrets],
+    configuredAccount: options.account,
+  });
   return createCaptureReport(fixtures, gaps);
 }

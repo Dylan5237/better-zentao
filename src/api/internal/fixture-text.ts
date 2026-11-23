@@ -9,6 +9,8 @@ const stages = new Set(
   "design review handoff dev interface test acceptance delivery".split(" "),
 );
 const stageTitle = /^【(?:设计|评审|传递|研发|接口|测试|验收|交付)】/u;
+const fixtureMarkup =
+  /<!--[\s\S]*?(?:-->|$)|<\/?[a-z](?:"[^"]*"|'[^']*'|[^"'<>])*>|\[bzt:v1\b[^\]\r\n<]*\]|\[bzt:(?:meta|waiver) v1\](?:(?!\[bzt:)[^\r\n<])*/giu;
 
 interface TagAliases {
   account(value: string): string;
@@ -116,14 +118,72 @@ export function sanitizeFixtureText(
   title = false,
 ): string {
   const fragments: string[] = [];
-  const markup =
-    /<!--[\s\S]*?(?:-->|$)|<\/?[a-z](?:"[^"]*"|'[^']*'|[^"'<>])*>|\[bzt:v1\b[^\]\r\n<]*\]|\[bzt:(?:meta|waiver) v1\](?:(?!\[bzt:)[^\r\n<])*/giu;
   let start = 0;
-  for (const token of text.matchAll(markup)) {
+  for (const token of text.matchAll(fixtureMarkup)) {
     fragments.push(sanitizePlainText(text.slice(start, token.index), title));
     fragments.push(sanitizeMarkup(token[0], aliases));
     start = token.index + token[0].length;
   }
   fragments.push(sanitizePlainText(text.slice(start), title));
   return fragments.join("");
+}
+
+function metadataIdentityContent(markup: string): string {
+  const metadata = /^\[bzt:(meta|waiver) v1\](?: (.*))?$/u.exec(markup);
+  if (metadata === null) return markup;
+  const [, kind, fields = ""] = metadata;
+  return fields
+    .split(" | ")
+    .map((assignment) => {
+      const separator = assignment.indexOf("=");
+      if (separator === -1) return assignment;
+      const key = assignment.slice(0, separator);
+      const value = assignment.slice(separator + 1);
+      if (key === "reason") return value === FIXTURE_TEXT ? "" : value;
+      if (
+        kind === "meta" &&
+        key.startsWith("stage.") &&
+        stages.has(key.slice(6))
+      ) {
+        return value === FIXTURE_TEXT || value === "true" || value === "false"
+          ? ""
+          : value;
+      }
+      if (kind === "waiver") {
+        if (key === "approvedBy") return value;
+        if (key === "version" || key === "rule") {
+          return value === FIXTURE_TEXT ? "" : value;
+        }
+      }
+      return assignment;
+    })
+    .join("\n");
+}
+
+// The identity scan may ignore exact rendering literals. Tags that carry values stay
+// visible to it, and the credential scan still sees the complete original string.
+export function fixtureTextIdentityContent(text: string): string {
+  function plainText(fragment: string): string {
+    return fragment
+      .split(/\r?\n/u)
+      .filter((line) => line.replace(stageTitle, "") !== FIXTURE_TEXT)
+      .join("\n");
+  }
+
+  const content: string[] = [];
+  let start = 0;
+  for (const { 0: markup, index } of text.matchAll(fixtureMarkup)) {
+    content.push(plainText(text.slice(start, index)));
+    const stage = /^<!-- bzt:stage=([a-z]+) -->$/u.exec(markup)?.[1];
+    const html = /^<\/?([a-z][a-z\d]*)>$/u.exec(markup)?.[1];
+    if (
+      !(stage !== undefined && stages.has(stage)) &&
+      !(html !== undefined && htmlTags.has(html))
+    ) {
+      content.push(metadataIdentityContent(markup));
+    }
+    start = index + markup.length;
+  }
+  content.push(plainText(text.slice(start)));
+  return content.join("\n");
 }

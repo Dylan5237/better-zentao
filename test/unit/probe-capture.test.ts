@@ -677,6 +677,51 @@ describe("WP-03 夹具采集（06 §3、09 §1.1、AC-82）", () => {
     },
   );
 
+  it("P0-1 登录账号 admin 匿名化时保留合法 admin 键和角色", async () => {
+    const { options, logSink } = setup(samples(), (url) => {
+      if (url.pathname.endsWith("/v1/user")) {
+        return Response.json({
+          profile: {
+            account: "admin",
+            realname: "示例文本",
+            role: "admin",
+            admin: true,
+            dept: 13,
+          },
+        });
+      }
+    });
+
+    const report = await collectProbeFixtures({ ...options, account: "admin" });
+    expect(report.completeness).toBe("complete");
+    expect(
+      report.fixtures.find(({ endpoint }) => endpoint === "current-user"),
+    ).toMatchObject({
+      body: {
+        profile: {
+          account: expect.stringMatching(/^acct_\d+$/u),
+          realname: expect.stringMatching(/^人员\d+$/u),
+          role: "admin",
+          admin: true,
+        },
+      },
+    });
+    assertNoSensitiveData([report, logSink.mock.calls], secrets);
+  });
+
+  it("P0-1 响应未列出登录账号时仍拦截数字 ID 中的同名原文", async () => {
+    const { options, logSink } = setup(samples(), (url) => {
+      if (url.pathname.endsWith("/index.php"))
+        return Response.json({ id: "81203", version: "22.6" });
+    });
+
+    const capture = collectProbeFixtures({ ...options, account: "81203" });
+    await expect(capture).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await capture.catch((error: unknown) =>
+      assertNoSensitiveData([error, logSink.mock.calls], [...secrets, "81203"]),
+    );
+  });
+
   it("公共门面产出同样的安全报告并使用受控传输", async () => {
     const { options, fetch } = setup();
     vi.stubGlobal("fetch", fetch);

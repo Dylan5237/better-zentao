@@ -1,3 +1,5 @@
+import { isFixtureUsersDictionary } from "../../src/api/internal/fixture-sensitivity.ts";
+
 const sensitiveKey =
   /password|passwd|pwd|zentaoaccount|token|authorization|secret|apikey|credential|cookie|zentaosid|phpsessid|sessionid|webhook|privatekey|email|phone|mobile|salt|qq|weixin|wechat|dingding|skype|slack|whatsapp|address|zipcode|birthday|gender|avatar|userpairs/u;
 const sensitiveValues = [
@@ -46,12 +48,7 @@ export function assertNoSensitiveData(
       if (hasSensitiveKey(name, normalized)) {
         throw new Error("S01 检测到凭据或隐私字段。");
       }
-      if (
-        normalized === "users" &&
-        typeof child === "object" &&
-        child !== null &&
-        !Array.isArray(child)
-      ) {
+      if (normalized === "users" && isFixtureUsersDictionary(child)) {
         throw new Error("S01 检测到原始 users 字典。");
       }
     }

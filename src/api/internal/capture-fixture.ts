@@ -22,9 +22,12 @@ function freezeBody(body: SanitizedJson): void {
 
 export function createCaptureFixtures(
   inputs: readonly PendingFixture[],
-  knownSecrets: readonly string[],
+  options: {
+    readonly knownSecrets: readonly string[];
+    readonly configuredAccount: string;
+  },
 ): readonly SanitizedFixture[] {
-  const sanitizer = createFixtureSanitizer({ knownSecrets });
+  const sanitizer = createFixtureSanitizer(options);
   const bodies = sanitizer.sanitizeBatch(inputs.map(({ body }) => body));
   return Object.freeze(
     inputs.map(({ endpoint, status, sample }, index) => {

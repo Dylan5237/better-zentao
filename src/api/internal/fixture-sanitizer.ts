@@ -3,8 +3,13 @@ import type { SanitizedJson } from "../../core/dto/fixture.ts";
 import { BztError } from "../../core/errors.ts";
 import {
   accountFields,
+  fixtureKey,
   freeTextFields,
   isFixtureEnum,
+  isFixtureEnumMap,
+  isFixtureEnumMapKey,
+  isFixtureFormDefinition,
+  isFixtureModuleMenu,
   isIdString,
   isSchemaFixtureKey,
   isUrlFixtureString,
@@ -13,31 +18,22 @@ import {
 } from "./fixture-fields.ts";
 import {
   assertSanitizedJson,
+  FIXTURE_CLOSED_ACCOUNT,
   FIXTURE_URL,
-  fixtureKey,
+  fixtureIdentityParts,
   isCredentialFixtureField,
   isFixtureHeaderEnvelope,
+  isFixtureUsersDictionary,
   isSensitiveFixtureField,
   rememberFixtureCredential,
 } from "./fixture-sensitivity.ts";
-import { sanitizeFixtureText } from "./fixture-text.ts";
+import { FIXTURE_TEXT, sanitizeFixtureText } from "./fixture-text.ts";
 
 export { assertSanitizedJson } from "./fixture-sensitivity.ts";
 
 const jsonSchema = z.json();
 type Json = z.infer<typeof jsonSchema>;
 type JsonObject = { [key: string]: Json };
-const formEntities = new Set([
-  "story",
-  "requirement",
-  "epic",
-  "task",
-  "bug",
-  "product",
-  "project",
-  "execution",
-  "release",
-]);
 
 interface Aliases {
   accounts: AliasTable;
@@ -104,7 +100,7 @@ function mapIdentities(
   translate: (part: string) => string,
 ): string {
   return value
-    .split(/(\s*[,;、，；|]\s*)/u)
+    .split(fixtureIdentityParts)
     .map((part, index) => {
       if (index % 2 !== 0) return part;
       const identity = part.trim().normalize("NFC");
@@ -116,7 +112,9 @@ function mapIdentities(
 function metadataAliases(aliases: Aliases) {
   return {
     account: (value: string) =>
-      mapIdentities(value, (part) => alias(part, aliases.accounts)),
+      mapIdentities(value, (part) =>
+        part === FIXTURE_CLOSED_ACCOUNT ? part : alias(part, aliases.accounts),
+      ),
     intake: (value: string) =>
       value === "" ? "" : alias(value, aliases.intake),
   };
@@ -151,25 +149,34 @@ function collectAliases(
     for (const entry of value)
       collectAliases(entry, field, aliases, knownSecrets, ancestors);
   } else {
-    collectRecordAliases(value, aliases, knownSecrets, ancestors);
+    collectRecordAliases(value, field, aliases, knownSecrets, ancestors);
   }
   ancestors.delete(value);
 }
 
 function collectRecordAliases(
   value: JsonObject,
+  field: string,
   aliases: Aliases,
   knownSecrets: Set<string>,
   ancestors: WeakSet<object>,
 ): void {
   for (const [key, child] of Object.entries(value)) {
     const canonical = fixtureKey(key);
+    const dictionary = canonical.replace(/\d/gu, "");
     if (
-      (canonical === "users" || canonical === "userpairs") &&
-      isRecord(child)
+      isRecord(child) &&
+      (dictionary === "userpairs" ||
+        (dictionary === "users" && isFixtureUsersDictionary(child)))
     ) {
       // Q1 dictionaries never become output. They still tell us which aliases a later field refers to.
       for (const [account, user] of Object.entries(child)) {
+        if (
+          dictionary === "users" &&
+          account === FIXTURE_CLOSED_ACCOUNT &&
+          user === "Closed"
+        )
+          continue;
         if (!isIdString(account)) metadataAliases(aliases).account(account);
         collectAliases(user, "realname", aliases, knownSecrets, ancestors);
       }
@@ -180,7 +187,9 @@ function collectRecordAliases(
       !isSensitiveFixtureField(key, child)
     ) {
       // Removed headers are still inspected for duplicates in fields that must preserve their type.
-      collectAliases(child, canonical, aliases, knownSecrets, ancestors);
+      if (typeof child !== "string" || !isFixtureEnumMap(field)) {
+        collectAliases(child, canonical, aliases, knownSecrets, ancestors);
+      }
     }
   }
 }
@@ -265,13 +274,48 @@ function representativeList<T>(
   return values.filter((_value, index) => selected.has(index));
 }
 
+function moduleDepth(value: string): number {
+  return value.split("/").filter((part) => part.trim() !== "").length;
+}
+
+function representativeModuleEntries(
+  entries: [string, Json][],
+  limit: number,
+): [string, Json][] {
+  if (entries.length <= limit) return entries;
+
+  const selected = new Set<number>();
+  const root = entries.findIndex(([key]) => key === "0");
+  if (root !== -1) selected.add(root);
+
+  // Preserve hierarchy even when most entries are siblings.
+  const depths = new Set<number>();
+  for (const [index, [key, value]] of entries.entries()) {
+    if (selected.size === limit) break;
+    if (index === root || !isIdString(key) || typeof value !== "string") {
+      continue;
+    }
+    const depth = moduleDepth(value);
+    if (depth === 0 || depths.has(depth)) continue;
+    selected.add(index);
+    depths.add(depth);
+  }
+
+  for (let index = 0; selected.size < limit; index++) selected.add(index);
+  return entries.filter((_entry, index) => selected.has(index));
+}
+
 function sanitizeString(
   value: string,
-  field: string,
+  key: string,
   inRequiredFields: boolean,
   aliases: Aliases,
 ): string {
   if (value.trim() === "") return "";
+  if (!isSchemaFixtureKey(key) && /^[+-]?1[3-9]\d{9}$/u.test(value.trim())) {
+    return FIXTURE_TEXT;
+  }
+  const field = fixtureKey(key);
   if (accountFields.has(field)) return metadataAliases(aliases).account(value);
   if (nameFields.has(field) && isIdString(value)) return value; // docs/06 Q6
   if (nameFields.has(field) || isFeedback(field)) {
@@ -298,45 +342,68 @@ function sanitizeString(
 
 function sanitizeJson(
   value: Json,
-  field: string,
+  parentKey: string,
   inRequiredFields: boolean,
   aliases: Aliases,
   listLimit: number,
 ): SanitizedJson {
   if (typeof value === "string")
-    return sanitizeString(value, field, inRequiredFields, aliases);
+    return sanitizeString(value, parentKey, inRequiredFields, aliases);
   if (Array.isArray(value)) {
     return representativeList(value, listLimit, representativeTraits).map(
       (entry) =>
-        sanitizeJson(entry, field, inRequiredFields, aliases, listLimit),
+        sanitizeJson(entry, parentKey, inRequiredFields, aliases, listLimit),
     );
   }
   if (!isRecord(value)) return value;
 
+  const field = fixtureKey(parentKey);
+  const enumMap = isFixtureEnumMap(field);
+  const moduleMenu = isFixtureModuleMenu(field);
   const entries: [string, SanitizedJson][] = [];
-  const insideFieldDefinitions = inRequiredFields || field === "requiredfields";
   const rawEntries = Object.entries(value);
-  const selected =
+  let selected = rawEntries;
+  if (moduleMenu) {
+    selected = representativeModuleEntries(
+      rawEntries.filter(([key, child]) => !isSensitiveFixtureField(key, child)),
+      listLimit,
+    );
+  } else if (
     rawEntries.every(([key]) => isIdString(key)) &&
     rawEntries.some(([, child]) => isRecord(child))
-      ? representativeList(rawEntries, listLimit, ([, child]) =>
-          representativeTraits(child),
-        )
-      : rawEntries;
+  ) {
+    selected = representativeList(rawEntries, listLimit, ([, child]) =>
+      representativeTraits(child),
+    );
+  }
   for (const [key, child] of selected) {
     if (isSensitiveFixtureField(key, child)) continue;
-    const canonical = fixtureKey(key);
-    const isFieldDefinition =
-      insideFieldDefinitions ||
-      (formEntities.has(field) &&
-        (canonical === "create" || canonical === "edit"));
     const outputKey =
-      isSchemaFixtureKey(key) || isIdString(key) || isFixtureEnum(field, key)
+      isSchemaFixtureKey(key) ||
+      isIdString(key) ||
+      isFixtureEnum(field, key) ||
+      isFixtureEnumMapKey(field, key)
         ? key
         : alias(key, aliases.fields);
+    if (enumMap) {
+      entries.push([outputKey, FIXTURE_TEXT]);
+      continue;
+    }
+    if (moduleMenu && isIdString(key) && typeof child === "string") {
+      const segments = Array<string>(moduleDepth(child)).fill(FIXTURE_TEXT);
+      const path = child.trim() === "" ? "" : "/" + segments.join("/");
+      entries.push([outputKey, path]);
+      continue;
+    }
     entries.push([
       outputKey,
-      sanitizeJson(child, canonical, isFieldDefinition, aliases, listLimit),
+      sanitizeJson(
+        child,
+        key,
+        inRequiredFields || isFixtureFormDefinition(field, fixtureKey(key)),
+        aliases,
+        listLimit,
+      ),
     ]);
   }
   return Object.fromEntries(entries);
@@ -355,6 +422,7 @@ function invalidJson(): BztError {
 }
 
 interface FixtureSanitizerOptions {
+  configuredAccount?: string;
   knownSecrets?: readonly string[];
   listLimit?: number;
 }
@@ -367,6 +435,7 @@ export function createFixtureSanitizer(options: FixtureSanitizerOptions = {}) {
 
   let previous = createAliases();
   let previousSecrets = new Set(options.knownSecrets);
+  const configuredAccount = options.configuredAccount?.trim().normalize("NFC");
 
   function sanitizeBatch(inputs: readonly unknown[]): SanitizedJson[] {
     const decoded = inputs.map(readFixtureJson);
@@ -383,6 +452,7 @@ export function createFixtureSanitizer(options: FixtureSanitizerOptions = {}) {
         ...aliases.names.values.keys(),
         ...aliases.intake.values.keys(),
       ]);
+      if (configuredAccount) identities.add(configuredAccount);
       avoidIdentityAliases(aliases.accounts, previous.accounts, identities);
       avoidIdentityAliases(aliases.names, previous.names, identities);
       avoidIdentityAliases(aliases.intake, previous.intake, identities);
