@@ -9,6 +9,7 @@ import {
   isIanaTimezone,
 } from "./calendar.ts";
 import { BztError } from "./errors.ts";
+import { PROBE_PRODUCT_ID } from "./config-checks.ts";
 
 export {
   checkCalendarYear,
@@ -20,7 +21,7 @@ export {
   findMissingProducts,
 } from "./config-checks.ts";
 
-export const PROBE_PRODUCT_ID = 29;
+export { PROBE_PRODUCT_ID };
 export const PROBE_APPROVAL_MAX_TTL_MS = 60_000;
 const DEFAULT_ZENTAO_TIMEOUT_MS = 15_000;
 const timeoutSetting = z

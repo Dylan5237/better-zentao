@@ -3,6 +3,8 @@ import type { Clock } from "./clock.ts";
 import type { TeamConfig } from "./config.ts";
 import { BztError } from "./errors.ts";
 
+export const PROBE_PRODUCT_ID = 29;
+
 export interface ConfigWarning {
   readonly check: "CFG-02" | "CFG-07";
   readonly severity: "warning";
@@ -105,9 +107,20 @@ export function checkModuleDevLeads(
   firstLevelModules: ModulesByProduct,
 ): void {
   const missing: string[] = [];
+  const missingLists: number[] = [];
   for (const [productId, product] of Object.entries(config.products)) {
-    if (product.enabled === false || product.probeOnly) continue;
-    for (const moduleId of firstLevelModules.get(Number(productId)) ?? []) {
+    const id = Number(productId);
+    if (
+      product.enabled === false ||
+      (id === PROBE_PRODUCT_ID && product.probeOnly)
+    )
+      continue;
+    const modules = firstLevelModules.get(id);
+    if (modules === undefined) {
+      missingLists.push(id);
+      continue;
+    }
+    for (const moduleId of modules) {
       const key = productId + ":" + moduleId;
       const devLead =
         config.modules[key]?.devLead ??
@@ -115,8 +128,9 @@ export function checkModuleDevLeads(
       if (!devLead) missing.push(key);
     }
   }
-  if (missing.length) {
-    throw new BztError("CONFIG_MISSING", "一级模块缺少研发主管配置。", {
+  if (missing.length || missingLists.length) {
+    throw new BztError("CONFIG_MISSING", "请检查一级模块清单及研发主管配置。", {
+      ...(missingLists.length ? { products: missingLists } : {}),
       modules: missing,
     });
   }
