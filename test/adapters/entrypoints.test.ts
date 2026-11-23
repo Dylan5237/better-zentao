@@ -1,5 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +15,12 @@ import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 const command = fileURLToPath(
   new URL("../../dist/adapters/cli/bzt.js", import.meta.url),
 );
+const blockNetwork =
+  "data:text/javascript," +
+  encodeURIComponent(String.raw`globalThis.fetch = () => {
+    process.stderr.write("UNEXPECTED_FETCH\n");
+    throw new Error("离线测试禁止发送请求。");
+  };`);
 const syntheticCredential = "bzt-integration-test-secret";
 const credentialsEnv = {
   ZENTAO_BASE_URL: "https://fixture.test",
@@ -24,19 +36,24 @@ afterEach(() => {
 });
 
 function run(args: string[], input?: string, env: NodeJS.ProcessEnv = {}) {
-  const result = spawnSync(process.execPath, [command, ...args], {
-    input,
-    encoding: "utf8",
-    timeout: 6000,
-    windowsHide: true,
-    env: {
-      SystemRoot: process.env.SystemRoot,
-      USERPROFILE: homeDir,
-      HOME: homeDir,
-      ...env,
+  const result = spawnSync(
+    process.execPath,
+    ["--import", blockNetwork, command, ...args],
+    {
+      input,
+      encoding: "utf8",
+      timeout: 6000,
+      windowsHide: true,
+      env: {
+        SystemRoot: process.env.SystemRoot,
+        USERPROFILE: homeDir,
+        HOME: homeDir,
+        ...env,
+      },
     },
-  });
+  );
   expect(result.error).toBeUndefined();
+  expect(result.stderr).not.toContain("UNEXPECTED_FETCH");
   assertNoSensitiveData(result.stderr, [syntheticCredential]);
   assertNoSensitiveData(result.stdout, [syntheticCredential]);
   return result;
@@ -46,6 +63,7 @@ it("WP-00 编译后的 bzt --help 可用", () => {
   const result = run(["--help"]);
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("bzt doctor");
+  expect(result.stdout).toContain("bzt probe capture");
   expect(result.stdout).toContain("bzt mcp");
 });
 
@@ -207,6 +225,49 @@ it("CFG-01 缺少必填环境变量时返回非零状态和变量名", () => {
     ok: false,
     missingEnv: ["ZENTAO_BASE_URL", "ZENTAO_ACCOUNT", "ZENTAO_PASSWORD"],
   });
+});
+
+it("WP-03 编译后的采集命令缺少必填环境变量时只输出安全错误", () => {
+  const out = join(homeDir, "fixtures");
+  const result = run(["probe", "capture", "--out", out]);
+  expect(result.status).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toContain("CONFIG_MISSING");
+  expect(result.stderr).toContain("ZENTAO_BASE_URL");
+  expect(result.stderr).toContain("ZENTAO_ACCOUNT");
+  expect(result.stderr).toContain("ZENTAO_PASSWORD");
+  expect(existsSync(out)).toBe(false);
+  assertNoSensitiveData(result.stderr, [out]);
+});
+
+it.each([
+  ["缺少子命令", ["probe"]],
+  ["未知子命令", ["probe", syntheticCredential]],
+  ["未知选项", ["probe", "capture", "--" + syntheticCredential]],
+  ["空输出目录", ["probe", "capture", "--out", "  "]],
+  ["非法产品编号", ["probe", "capture", "--product", "0"]],
+  ["空配置路径", ["probe", "capture", "--config", "  "]],
+])("WP-03 编译后的采集命令拒绝%s", (_name, args) => {
+  const result = run(args, undefined, credentialsEnv);
+  expect(result.status).toBe(2);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).not.toBe("");
+});
+
+it("WP-03 编译后的采集命令不回显损坏的配置内容和路径", () => {
+  const out = join(homeDir, "fixtures");
+  const config = join(homeDir, "invalid-team.json");
+  writeFileSync(config, `{"version":"${syntheticCredential}`, "utf8");
+  const result = run(
+    ["probe", "capture", "--out", out, "--config", config],
+    undefined,
+    credentialsEnv,
+  );
+  expect(result.status).toBe(1);
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toContain("INVALID_INPUT");
+  expect(existsSync(out)).toBe(false);
+  assertNoSensitiveData(result.stderr, [out, config]);
 });
 
 it("WP-00 离线 MCP initialize 的 stdout 只有一条 JSON-RPC 响应", () => {
