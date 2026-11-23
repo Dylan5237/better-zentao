@@ -7,13 +7,24 @@ import {
   withInstanceWriteLock,
   withReadSlot,
 } from "../../core/http-policy.ts";
-import { httpPathTemplate, writeHttpLog } from "../../core/logger.ts";
+import {
+  httpLogIds,
+  httpPathTemplate,
+  writeHttpLog,
+} from "../../core/logger.ts";
+import type { HttpLogIds } from "../../core/logger.ts";
 import { authFailed, createZentaoAuth } from "./auth.ts";
 import { normalizeZentaoBaseUrl } from "./base-url.ts";
+import { assertNoBusinessError } from "./business-error.ts";
 
 const tokenPath = "/api.php/v1/tokens";
 const writeMethod = z.enum(["POST", "PUT", "PATCH", "DELETE"]);
 const objectId = z.int().positive();
+const nonBlankCredential = z.string().refine((value) => value.trim() !== "");
+const loginCredentials = z.object({
+  account: nonBlankCredential,
+  password: nonBlankCredential,
+});
 
 export interface ZentaoHttpOptions {
   readonly baseUrl: string;
@@ -29,7 +40,7 @@ export interface ZentaoHttpOptions {
   readonly logSink?: (line: string) => void;
 }
 
-export interface ReadRequest {
+export interface ReadRequest extends HttpLogIds {
   readonly pathTemplate: string;
   readonly params?: Readonly<Record<string, number>>;
   readonly query?: Readonly<Record<string, string | number>>;
@@ -40,7 +51,7 @@ interface WriteRequest extends ReadRequest {
   readonly body?: Readonly<Record<string, unknown>>;
 }
 
-interface PreparedRequest {
+interface PreparedRequest extends HttpLogIds {
   readonly method: "GET" | WriteRequest["method"];
   readonly url: string;
   readonly pathTemplate: string;
@@ -51,7 +62,8 @@ type FailedAttempt =
   | { kind: "timeout" }
   | { kind: "network" }
   | { kind: "http-error"; status: number };
-type Attempt = { kind: "success"; text: string } | FailedAttempt;
+type Attempt =
+  { kind: "success"; text: string; status: number } | FailedAttempt;
 
 const unknownWrite = Object.freeze({
   status: "unknown",
@@ -88,6 +100,22 @@ function requestUrl(baseUrl: string, request: ReadRequest): string {
   return url.href;
 }
 
+function prepareRequest(
+  baseUrl: string,
+  method: PreparedRequest["method"],
+  request: ReadRequest,
+): PreparedRequest {
+  const logIds = httpLogIds.safeParse(request);
+  if (!logIds.success)
+    throw new BztError("INVALID_INPUT", "禅道请求日志标识不合法。");
+  return {
+    method,
+    url: requestUrl(baseUrl, request),
+    pathTemplate: request.pathTemplate,
+    ...logIds.data,
+  };
+}
+
 function encodeBody(body: WriteRequest["body"]): string | undefined {
   if (body === undefined) return undefined;
   try {
@@ -103,6 +131,7 @@ function isTransient(result: FailedAttempt): boolean {
   return (
     result.kind !== "http-error" ||
     result.status === 408 ||
+    result.status === 429 ||
     result.status >= 500
   );
 }
@@ -114,6 +143,10 @@ function requestError(result: FailedAttempt): BztError {
     return new BztError("ZENTAO_UNAVAILABLE", "无法连接禅道。");
   const { status } = result;
   if (status === 408) return new BztError("ZENTAO_TIMEOUT", "禅道请求超时。");
+  if (status === 429)
+    return new BztError("ZENTAO_UNAVAILABLE", "禅道请求受到频率限制。", {
+      status,
+    });
   if (status === 401) return authFailed();
   if (status === 403)
     return new BztError("PERMISSION_DENIED", "禅道拒绝访问该资源。");
@@ -128,18 +161,24 @@ function requestError(result: FailedAttempt): BztError {
 }
 
 function decodeJson<T>(text: string, schema: z.ZodType<T>): T {
+  let payload: unknown;
+  let decoded: z.ZodSafeParseResult<T> | undefined;
   try {
-    const payload: unknown = text === "" ? undefined : JSON.parse(text);
-    return schema.parse(payload);
-  } catch {
-    throw new BztError(
-      "ZENTAO_SCHEMA_MISMATCH",
-      "禅道响应无法按预期结构解码。",
-    );
+    payload = text === "" ? undefined : JSON.parse(text);
+    decoded = schema.safeParse(payload);
+  } catch (error) {
+    if (error instanceof BztError) throw error;
   }
+  // 即使端点解码异常，响应中明确的业务失败仍可安全识别。
+  assertNoBusinessError(payload, decoded?.success === true);
+  if (decoded?.success) return decoded.data;
+  throw new BztError("ZENTAO_SCHEMA_MISMATCH", "禅道响应无法按预期结构解码。");
 }
 
 export function createZentaoHttp(options: ZentaoHttpOptions) {
+  const credentials = loginCredentials.safeParse(options);
+  if (!credentials.success)
+    throw new BztError("INVALID_INPUT", "禅道账号和密码不能为空白。");
   const normalized = normalizeZentaoBaseUrl(options.baseUrl);
   if (!normalized) throw new BztError("INVALID_INPUT", "禅道基础地址不合法。");
   const baseUrl = normalized.href;
@@ -154,12 +193,11 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     request: PreparedRequest,
     token?: string,
   ): Promise<Attempt> {
-    const { url, method, pathTemplate, body } = request;
+    const { url, method, pathTemplate, body, opId, objectId } = request;
     const headers: Record<string, string> = {};
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (token !== undefined) headers.Token = token;
     const started = clock();
-    let status = 0;
     const controller = new AbortController();
     const expired = Promise.withResolvers<Attempt>();
     const timer = setTimeout(() => {
@@ -176,47 +214,48 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
           redirect: "error",
           signal: controller.signal,
         });
-        status = response.status;
         if (!response.ok || controller.signal.aborted) {
           // 失败正文不会参与重试、错误摘要或日志。
           void response.body?.cancel().catch(() => {});
-          return { kind: "http-error", status };
+          return { kind: "http-error", status: response.status };
         }
-        return { kind: "success", text: await response.text() };
+        return {
+          kind: "success",
+          text: await response.text(),
+          status: response.status,
+        };
       } catch {
         return { kind: "network" };
       }
     }
 
+    const result = await Promise.race([exchange(), expired.promise]).finally(
+      () => clearTimeout(timer),
+    );
     try {
-      return await Promise.race([exchange(), expired.promise]);
-    } finally {
-      clearTimeout(timer);
-      try {
-        writeHttpLog(
-          {
-            method,
-            pathTemplate,
-            status,
-            durationMs: Math.max(0, clock() - started),
-          },
-          logSink,
-          env,
-        );
-      } catch {
-        // 日志输出失败时仍须保留已经取得的传输回执。
-      }
+      writeHttpLog(
+        {
+          method,
+          pathTemplate,
+          status: "status" in result ? result.status : 0,
+          durationMs: Math.max(0, clock() - started),
+          opId,
+          objectId,
+        },
+        logSink,
+        env,
+      );
+    } catch {
+      // 日志输出失败时仍须保留已经取得的传输回执。
     }
+    return result;
   }
 
   const loginRequest: PreparedRequest = {
     method: "POST",
     pathTemplate: tokenPath,
     url: new URL(tokenPath.slice(1), baseUrl).href,
-    body: JSON.stringify({
-      account: options.account,
-      password: options.password,
-    }),
+    body: JSON.stringify(credentials.data),
   };
   const auth = createZentaoAuth(async () => {
     const result = await withReadSlot(() => send(loginRequest));
@@ -234,11 +273,7 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     request: ReadRequest,
     schema: z.ZodType<T>,
   ): Promise<T> {
-    const prepared: PreparedRequest = {
-      method: "GET",
-      url: requestUrl(baseUrl, request),
-      pathTemplate: request.pathTemplate,
-    };
+    const prepared = prepareRequest(baseUrl, "GET", request);
     let replayed = false;
     let retries = 0;
     for (;;) {
@@ -267,9 +302,7 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       throw new BztError("INVALID_INPUT", "禅道写入方法不合法。");
     }
     const prepared: PreparedRequest = {
-      method: request.method,
-      url: requestUrl(baseUrl, request),
-      pathTemplate: request.pathTemplate,
+      ...prepareRequest(baseUrl, request.method, request),
       body: encodeBody(request.body),
     };
     return withInstanceWriteLock(baseUrl, async () => {
@@ -278,8 +311,13 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       if (result.kind === "success") {
         try {
           return { status: "accepted", data: decodeJson(result.text, schema) };
-        } catch {
-          return unknownWrite;
+        } catch (error) {
+          if (
+            error instanceof BztError &&
+            error.code === "ZENTAO_SCHEMA_MISMATCH"
+          )
+            return unknownWrite;
+          throw error;
         }
       }
       if (

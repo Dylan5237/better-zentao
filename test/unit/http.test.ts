@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createZentaoHttp } from "../../src/api/internal/http.ts";
 import type { ZentaoHttpOptions } from "../../src/api/internal/http.ts";
 import { paginate } from "../../src/api/internal/paginate.ts";
+import { BztError } from "../../src/core/errors.ts";
 import { configureReadConcurrency } from "../../src/core/http-policy.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 
@@ -272,6 +273,176 @@ describe("WP-01 HTTP 认证与 S01 脱敏（06 §2.1）", () => {
     expect(sleep).not.toHaveBeenCalled();
     assertNoSensitiveData(logSink.mock.calls, secrets);
   });
+
+  it.each([
+    ["account", ""],
+    ["account", " \t \r\n "],
+    ["password", ""],
+    ["password", " \t \r\n "],
+  ] as const)(
+    "P2-4 拒绝空串或纯空白凭据 %s（%j），发送次数为 0",
+    (field, value) => {
+      const send = vi.fn<typeof fetch>();
+      let error: unknown;
+      try {
+        setup({ fetch: send, [field]: value });
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toMatchObject({
+        name: "BztError",
+        code: "INVALID_INPUT",
+        retryable: false,
+      });
+      expect(send).not.toHaveBeenCalled();
+      assertNoSensitiveData(error, [...secrets, value]);
+    },
+  );
+
+  it("P2-4 非空凭据保留原值登录", async () => {
+    const account = " acct_fixture ";
+    const spacedPassword = ` ${password} `;
+    const { http, send, logSink } = setup({
+      account,
+      password: spacedPassword,
+    });
+    send.mockResolvedValueOnce(login()).mockResolvedValueOnce(row());
+    await expect(http.read(story, storyDto)).resolves.toEqual({ id: 29 });
+    expect(send.mock.calls[0]?.[1]?.body).toBe(
+      JSON.stringify({ account, password: spacedPassword }),
+    );
+    assertNoSensitiveData(logSink.mock.calls, [...secrets, account]);
+  });
+});
+
+describe.each(["read", "write"] as const)("P1-1 业务响应 %s", (method) => {
+  function request<T>(
+    http: ReturnType<typeof createZentaoHttp>,
+    schema: z.ZodType<T>,
+  ) {
+    return method === "read"
+      ? http.read(story, schema)
+      : http.write(writeStory, schema);
+  }
+
+  it.each([
+    [
+      "明确失败信封",
+      { id: 29, result: "fail", message: `标题已存在。Token: ${token}` },
+      "标题已存在",
+    ],
+    [
+      "非空错误文本",
+      { id: 29, result: "success", error: `标题不能为空。${password}` },
+      "标题不能为空",
+    ],
+    [
+      "普通失败消息",
+      { id: 29, message: `参数不合法。${password}` },
+      "参数不合法",
+    ],
+    [
+      "无实体的结构化校验",
+      {
+        result: "success",
+        message: [`缺少必填字段。${password}`],
+        error: { [token]: ["标题不能为空"] },
+      },
+      "缺少必填字段。标题不能为空",
+    ],
+  ] as const)("2xx %s抛脱敏业务错误", async (_name, payload, message) => {
+    const { http, send, sleep, logSink } = setup();
+    send
+      .mockResolvedValueOnce(login())
+      .mockResolvedValueOnce(Response.json(payload, { status: 200 }));
+    const result = request(http, storyDto);
+    await assertSafeFailure(result, "ZENTAO_BUSINESS_ERROR", false);
+    await expect(result).rejects.toHaveProperty("message", message);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(sleep).not.toHaveBeenCalled();
+    assertNoSensitiveData(logSink.mock.calls, secrets);
+  });
+
+  it("2xx 白名单摘要按 message、error 提取，最长 120 字", async () => {
+    const { http, send } = setup();
+    send.mockResolvedValueOnce(login()).mockResolvedValueOnce(
+      Response.json({
+        result: "fail",
+        message: `缺少必填字段。${password}`,
+        error: { title: [`${"标题已存在。".repeat(30)}Token: ${token}`] },
+      }),
+    );
+    const result = request(http, storyDto);
+    await assertSafeFailure(result, "ZENTAO_BUSINESS_ERROR", false);
+    await expect(result).rejects.toHaveProperty(
+      "message",
+      expect.stringMatching(/^缺少必填字段。标题已存在.*…$/u),
+    );
+    await result.catch((error: unknown) => {
+      if (error instanceof BztError) expect(error.message).toHaveLength(120);
+    });
+  });
+
+  it.each(["ZENTAO_BUSINESS_ERROR", "RULE_VIOLATION"] as const)(
+    "原样抛出 schema 给出的 %s",
+    async (code) => {
+      const { http, send, logSink } = setup();
+      const expected = new BztError(code, "标题已存在", { fields: ["title"] });
+      const schema = storyDto.transform(() => {
+        throw expected;
+      });
+      send.mockResolvedValueOnce(login()).mockResolvedValueOnce(row());
+      const result = request(http, schema);
+      await assertSafeFailure(result, code, false);
+      await expect(result).rejects.toBe(expected);
+      assertNoSensitiveData(logSink.mock.calls, secrets);
+    },
+  );
+
+  it("普通 schema 异常仍保留响应中的明确业务失败", async () => {
+    const { http, send, logSink } = setup();
+    const schema = storyDto.transform(() => {
+      throw new Error(`解码私有上下文 ${password} ${token}`);
+    });
+    send
+      .mockResolvedValueOnce(login())
+      .mockResolvedValueOnce(
+        Response.json({ id: 29, result: "fail", message: "标题已存在" }),
+      );
+    const result = request(http, schema);
+    await assertSafeFailure(result, "ZENTAO_BUSINESS_ERROR", false);
+    await expect(result).rejects.toHaveProperty("message", "标题已存在");
+    assertNoSensitiveData(logSink.mock.calls, secrets);
+  });
+
+  it("合法实体附加成功提示与 204 空正文正常投影", async () => {
+    const { http, send, logSink } = setup();
+    send
+      .mockResolvedValueOnce(login())
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            id: 29,
+            result: "success",
+            message: "保存成功",
+            error: { code: 0 },
+            token,
+            password,
+          },
+          { status: 201 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const entity = await request(http, storyDto);
+    const empty = await request(http, z.undefined());
+    expect(entity).toEqual(
+      method === "read" ? { id: 29 } : { status: "accepted", data: { id: 29 } },
+    );
+    expect(empty).toEqual(
+      method === "read" ? undefined : { status: "accepted", data: undefined },
+    );
+    assertNoSensitiveData([entity, empty, logSink.mock.calls], secrets);
+  });
 });
 
 describe("WP-01 HTTP 请求策略（06 §2.2）", () => {
@@ -320,6 +491,7 @@ describe("WP-01 HTTP 请求策略（06 §2.2）", () => {
     ["network", 0, "ZENTAO_UNAVAILABLE"],
     ["503", 503, "ZENTAO_UNAVAILABLE"],
     ["408", 408, "ZENTAO_TIMEOUT"],
+    ["429", 429, "ZENTAO_UNAVAILABLE"],
   ] as const)(
     "读 %s 故障按 300/900ms 重试并封顶",
     async (_failure, status, code) => {
@@ -492,6 +664,80 @@ describe("WP-01 HTTP 请求策略（06 §2.2）", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("P1-3 读写及 401 重放日志透传合法标识，登录日志不带业务标识", async () => {
+    const { http, send, logSink } = setup();
+    const opId = "e86bc265-68db-46e9-8fe8-73282bfd181c";
+    const read = { ...story, opId, objectId: 29 };
+    const write = { ...writeStory, opId, objectId: 30 };
+    send
+      .mockResolvedValueOnce(login())
+      .mockResolvedValueOnce(refused(401))
+      .mockResolvedValueOnce(login(replacement))
+      .mockResolvedValueOnce(row())
+      .mockResolvedValueOnce(row(30, 201));
+    await expect(http.read(read, storyDto)).resolves.toEqual({ id: 29 });
+    await expect(http.write(write, storyDto)).resolves.toMatchObject({
+      status: "accepted",
+    });
+    const authLog = {
+      method: "POST",
+      pathTemplate: "/api.php/v1/tokens",
+      status: 201,
+      durationMs: 0,
+    };
+    const readLog = {
+      method: "GET",
+      pathTemplate: story.pathTemplate,
+      durationMs: 0,
+      opId,
+      objectId: 29,
+    };
+    expect(logEvents(logSink)).toEqual([
+      authLog,
+      { ...readLog, status: 401 },
+      authLog,
+      { ...readLog, status: 200 },
+      {
+        method: "POST",
+        pathTemplate: writeStory.pathTemplate,
+        status: 201,
+        durationMs: 0,
+        opId,
+        objectId: 30,
+      },
+    ]);
+    assertNoSensitiveData(logSink.mock.calls, secrets);
+  });
+
+  it.each([
+    ["opId", password],
+    ["objectId", 0],
+    ["objectId", 1.5],
+    ["objectId", "29"],
+  ] as const)(
+    "P1-3 非法日志标识 %s 在登录和业务发送前拦截（%j）",
+    async (field, value) => {
+      const { http, send, logSink } = setup();
+      send.mockResolvedValueOnce(login()).mockImplementation(async () => row());
+      const read = { ...story, opId: undefined, objectId: 29 };
+      const write = { ...writeStory, opId: undefined, objectId: 29 };
+      Object.assign(read, { [field]: value });
+      Object.assign(write, { [field]: value });
+      await assertSafeFailure(
+        http.read(read, storyDto),
+        "INVALID_INPUT",
+        false,
+      );
+      await assertSafeFailure(
+        http.write(write, storyDto),
+        "INVALID_INPUT",
+        false,
+      );
+      expect(send).not.toHaveBeenCalled();
+      expect(logSink).not.toHaveBeenCalled();
+    },
+  );
+
   it("日志 sink 异常不覆盖已经收到的写入回执", async () => {
     const { http, send } = setup({
       logSink: () => {
@@ -554,13 +800,12 @@ describe("WP-01 并发限制与写入回执（05 §5.3、06 §2.2）", () => {
     expect(started).toBe(12);
   });
 
-  it.each(["network", "abort", "408", "503", "302", "unreadable"])(
+  it.each(["network", "abort", "408", "429", "503", "302", "unreadable"])(
     "写入 %s 只发一次并返回 unknown",
     async (failure) => {
       const { http, send, sleep, logSink } = setup();
       send.mockResolvedValueOnce(login()).mockImplementation(async () => {
-        if (failure === "408" || failure === "503" || failure === "302")
-          return refused(Number(failure));
+        if (/^\d+$/u.test(failure)) return refused(Number(failure));
         if (failure === "unreadable")
           return new Response(password, { status: 201 });
         if (failure === "abort") throw new DOMException(token, "AbortError");
@@ -665,11 +910,50 @@ describe("WP-01 并发限制与写入回执（05 §5.3、06 §2.2）", () => {
     expect(sleep).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
     expect(logEvents(logSink)[1]).toMatchObject({
-      status: 201,
+      status: 0,
       pathTemplate: writeStory.pathTemplate,
     });
     assertNoSensitiveData([result, logSink.mock.calls], secrets);
   });
+
+  it.each([
+    ["warn", "超时"],
+    ["warn", "断连"],
+    ["error", "超时"],
+    ["error", "断连"],
+  ] as const)(
+    "P1-2 %s 级别记录成功响应头后的正文%s为 status 0",
+    async (level, failure) => {
+      vi.useFakeTimers();
+      const { http, send, logSink } = setup({
+        env: { ZENTAO_TIMEOUT_MS: "20", BZT_LOG_LEVEL: level },
+      });
+      const response = row(29, 201);
+      const readBody = vi.spyOn(response, "text");
+      if (failure === "超时")
+        readBody.mockReturnValueOnce(new Promise(() => {}));
+      else
+        readBody.mockRejectedValueOnce(
+          new Error(`正文断连 ${password} ${token}`),
+        );
+      send.mockResolvedValueOnce(login()).mockResolvedValueOnce(response);
+      const pending = http.write(writeStory, storyDto);
+      await vi.advanceTimersByTimeAsync(20);
+      const receipt = await pending;
+      expect(receipt).toMatchObject({ status: "unknown", retryable: false });
+      expect(logEvents(logSink)).toEqual([
+        {
+          method: "POST",
+          pathTemplate: writeStory.pathTemplate,
+          status: 0,
+          durationMs: 0,
+        },
+      ]);
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+      assertNoSensitiveData([receipt, logSink.mock.calls], secrets);
+    },
+  );
 });
 
 describe("WP-01 禅道分页（06 §2.2）", () => {

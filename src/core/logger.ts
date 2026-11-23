@@ -23,13 +23,18 @@ export const httpPathTemplate = z.string().refine((value) => {
   );
 });
 
+export const httpLogIds = z.object({
+  opId: z.uuid().optional(),
+  objectId: z.int().positive().optional(),
+});
+export type HttpLogIds = Readonly<z.infer<typeof httpLogIds>>;
+
 const httpLogFields = z.object({
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
   pathTemplate: httpPathTemplate,
   status: z.union([z.literal(0), z.int().min(100).max(599)]),
   durationMs: z.number().min(0),
-  opId: z.uuid().optional(),
-  objectId: z.int().positive().optional(),
+  ...httpLogIds.shape,
 });
 
 const logLevels = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -44,7 +49,9 @@ export function writeHttpLog(
   if (!event.success) {
     throw new BztError("INVALID_INPUT", "日志字段不合法。");
   }
-  const configuredLevel = logLevel.safeParse(env?.BZT_LOG_LEVEL?.trim());
+  const configuredLevel = logLevel.safeParse(
+    env?.BZT_LOG_LEVEL?.trim().toLowerCase(),
+  );
   const minimum =
     logLevels[configuredLevel.success ? configuredLevel.data : "info"];
   const { status } = event.data;

@@ -89,28 +89,31 @@ it.each([
   expect(sink).not.toHaveBeenCalled();
 });
 
-it("S01 debug 也只输出白名单，忽略正文、头、错误原文和其他字段", () => {
-  const password = "offline-password-example";
-  const token = "offline-opaque-credential";
-  const sink = vi.fn();
-  writeHttpLog(
-    {
-      ...baseEvent,
-      pathTemplate: "/api.php/v2/stories",
-      status: 0,
-      body: { password },
-      response: { token },
-      headers: { Token: token },
-      error: new Error(password),
-    },
-    sink,
-    { BZT_LOG_LEVEL: "debug" },
-  );
-  expect(sink).toHaveBeenCalledExactlyOnceWith(
-    '{"method":"GET","pathTemplate":"/api.php/v2/stories","status":0,"durationMs":1}\n',
-  );
-  assertNoSensitiveData(sink.mock.calls, [password, token]);
-});
+it.each(["debug", "  DEBUG  "])(
+  "S01 %s 也只输出白名单，忽略正文、头、错误原文和其他字段",
+  (level) => {
+    const password = "offline-password-example";
+    const token = "offline-opaque-credential";
+    const sink = vi.fn();
+    writeHttpLog(
+      {
+        ...baseEvent,
+        pathTemplate: "/api.php/v2/stories",
+        status: 0,
+        body: { password },
+        response: { token },
+        headers: { Token: token },
+        error: new Error(password),
+      },
+      sink,
+      { BZT_LOG_LEVEL: level },
+    );
+    expect(sink).toHaveBeenCalledExactlyOnceWith(
+      '{"method":"GET","pathTemplate":"/api.php/v2/stories","status":0,"durationMs":1}\n',
+    );
+    assertNoSensitiveData(sink.mock.calls, [password, token]);
+  },
+);
 
 it.each([
   ["info", 200, true],
@@ -119,6 +122,9 @@ it.each([
   ["error", 401, false],
   ["error", 503, true],
   ["error", 0, true],
+  ["  WARN  ", 200, false],
+  ["WaRn", 401, true],
+  ["  ERROR  ", 401, false],
   ["typo", 200, true],
 ] as const)("%s 级别处理 HTTP 状态 %i（输出 %s）", (level, status, visible) => {
   const sink = vi.fn();
