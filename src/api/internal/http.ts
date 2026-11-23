@@ -46,6 +46,15 @@ export interface ReadRequest extends HttpLogIds {
   readonly query?: Readonly<Record<string, string | number>>;
 }
 
+interface ReadCapture {
+  readonly observeSession: (token: string) => void;
+}
+
+interface ReadResponse<T> {
+  readonly status: number;
+  readonly body: T;
+}
+
 interface WriteRequest extends ReadRequest {
   readonly method: z.infer<typeof writeMethod>;
   readonly body?: Readonly<Record<string, unknown>>;
@@ -269,17 +278,28 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     throw requestError(result);
   });
 
+  function read<T>(request: ReadRequest, schema: z.ZodType<T>): Promise<T>;
+  function read<T>(
+    request: ReadRequest,
+    schema: z.ZodType<T>,
+    capture: ReadCapture,
+  ): Promise<ReadResponse<T>>;
   async function read<T>(
     request: ReadRequest,
     schema: z.ZodType<T>,
-  ): Promise<T> {
+    capture?: ReadCapture,
+  ): Promise<T | ReadResponse<T>> {
     const prepared = prepareRequest(baseUrl, "GET", request);
     let replayed = false;
     let retries = 0;
     for (;;) {
       const session = await auth.getSession();
+      capture?.observeSession(session.token);
       const result = await withReadSlot(() => send(prepared, session.token));
-      if (result.kind === "success") return decodeJson(result.text, schema);
+      if (result.kind === "success") {
+        const body = decodeJson(result.text, schema);
+        return capture ? { status: result.status, body } : body;
+      }
       if (result.kind === "http-error" && result.status === 401) {
         auth.invalidate(session);
         if (replayed) throw authFailed();
