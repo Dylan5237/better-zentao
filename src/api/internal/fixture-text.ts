@@ -71,7 +71,8 @@ function rolesTag(text: string, aliases: TagAliases): string {
 
 function sanitizeMarkup(fragment: string, aliases: TagAliases): string {
   if (fragment.startsWith("<!--")) {
-    const comment = fragment.slice("<!--".length, -"-->".length).trim();
+    const end = fragment.endsWith("-->") ? -"-->".length : undefined;
+    const comment = fragment.slice("<!--".length, end).trim();
     const stage = /^bzt:stage\s*=\s*([a-z]+)$/u.exec(comment)?.[1];
     if (stage !== undefined && stages.has(stage))
       return "<!-- bzt:stage=" + stage + " -->";
