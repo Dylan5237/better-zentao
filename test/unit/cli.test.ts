@@ -20,6 +20,28 @@ it("WP-00 空命令显示本地使用帮助", async () => {
 });
 
 it.each([
+  ["配置选项", ["--config", "team.json"]],
+  ["产品选项", ["--product", "43"]],
+  ["参数分隔符", ["--"]],
+])("P2-3 无子命令但带%s时报参数错误", async (_name, args) => {
+  const runtime = localRuntime();
+  await expect(runCli(args, runtime)).resolves.toBe(2);
+  expect(runtime.stdout).not.toHaveBeenCalled();
+  expect(runtime.stderr).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("参数不合法"),
+  );
+});
+
+it.each(["-h", "--help"])("P2-3 显式%s仍显示帮助", async (flag) => {
+  const runtime = localRuntime();
+  await expect(runCli([flag], runtime)).resolves.toBe(0);
+  expect(runtime.stdout).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("bzt mcp"),
+  );
+  expect(runtime.stderr).not.toHaveBeenCalled();
+});
+
+it.each([
   ["多余参数", ["mcp", "extra"]],
   ["未实现命令", ["probe"]],
   ["未知选项", ["--unknown"]],

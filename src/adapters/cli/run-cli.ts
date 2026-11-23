@@ -42,7 +42,7 @@ export async function runCli(
   const { values, positionals } = parsed;
   const [command] = positionals;
   if (positionals.length > 1) return invalidArgs(runtime);
-  if (values.help || command === undefined) {
+  if (values.help || args.length === 0) {
     runtime.stdout(help);
     return 0;
   }
