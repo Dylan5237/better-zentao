@@ -489,6 +489,53 @@ describe("WP-03 夹具采集（06 §3、09 §1.1、AC-82）", () => {
     ).toHaveLength(2);
   });
 
+  it.each([400, 500])(
+    "P1-4 正常产品页已采集时，空页试探返回 %i 不产生缺口",
+    async (status) => {
+      const { options, fetch, sleep, logSink } = setup(samples(), (url) => {
+        if (
+          url.pathname.endsWith("/products") &&
+          url.searchParams.get("page") === "2"
+        )
+          return Response.json({ message: token }, { status });
+      });
+
+      const report = await collectProbeFixtures(options);
+      expect(report.completeness).toBe("complete");
+      expect(report.gaps).toEqual([]);
+      expect(
+        report.fixtures.filter(({ endpoint }) => endpoint === "products"),
+      ).toEqual([expect.objectContaining({ sample: "normal" })]);
+      const emptyRequests = requests(fetch).filter(
+        ([url]) =>
+          url.pathname.endsWith("/products") &&
+          url.searchParams.get("page") === "2",
+      );
+      expect(emptyRequests).toHaveLength(status === 400 ? 1 : 3);
+      expect(sleep.mock.calls).toEqual(status === 400 ? [] : [[300], [900]]);
+      assertNoSensitiveData([report, logSink.mock.calls], secrets);
+    },
+  );
+
+  it("P1-4 空页试探仍因认证失败中止整批采集", async () => {
+    const { options, fetch, logSink } = setup(samples(), (url) => {
+      if (
+        url.pathname.endsWith("/products") &&
+        url.searchParams.get("page") === "2"
+      )
+        return Response.json({ message: token }, { status: 401 });
+    });
+
+    const capture = collectProbeFixtures(options);
+    await expect(capture).rejects.toMatchObject({ code: "AUTH_FAILED" });
+    expect(
+      requests(fetch).filter(([url]) => url.pathname.endsWith("/tokens")),
+    ).toHaveLength(2);
+    await capture.catch((error: unknown) =>
+      assertNoSensitiveData([error, logSink.mock.calls], secrets),
+    );
+  });
+
   it("真实空产品、项目、部门和执行可入库，跳过无合法 ID 的详情", async () => {
     const { options, fetch } = setup([], (url) => {
       const emptyKey = new Map([

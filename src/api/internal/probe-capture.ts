@@ -181,7 +181,7 @@ export async function collectProbeFixtures(
   const emptyPages: Array<{ route: CaptureRoute; request: ReadRequest }> = [];
   const gaps: Array<CaptureReport["gaps"][number]> = [];
 
-  async function read(route: CaptureRoute, request: ReadRequest) {
+  async function read(request: ReadRequest, failedEndpoint?: string) {
     try {
       return await http.read(request, captureBody, {
         observeSession: (value) => {
@@ -193,7 +193,8 @@ export async function collectProbeFixtures(
         error instanceof BztError ? error.code : "ZENTAO_UNAVAILABLE";
       if (code === "AUTH_FAILED") throw authFailed();
       // 接口错误的诊断和原始详情都留在传输层。
-      gaps.push({ endpoint: route.endpoint, code });
+      if (failedEndpoint !== undefined)
+        gaps.push({ endpoint: failedEndpoint, code });
     }
   }
 
@@ -212,7 +213,7 @@ export async function collectProbeFixtures(
           : query,
       objectId: sampleId,
     } satisfies ReadRequest;
-    const response = await read(route, request);
+    const response = await read(request, endpoint);
     if (!response) return;
     const rows = collection(response.body, route.collection);
     rawSamples.push({
@@ -309,7 +310,8 @@ export async function collectProbeFixtures(
   await capture(routes.storyCreateMetadata, productId);
 
   for (const { route, request } of emptyPages) {
-    const response = await read(route, request);
+    // 正常样本已留存，补充空页失败不会造成端点缺口。
+    const response = await read(request);
     if (response && collection(response.body, route.collection)?.length === 0) {
       rawSamples.push({
         ...response,
