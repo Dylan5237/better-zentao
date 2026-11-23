@@ -554,6 +554,8 @@ function parseConfig<T>(
   throw invalidConfig("配置字段不合法。", fields);
 }
 
+const jsonKey = z.string();
+
 // JSON.parse 已验证语法，但会覆盖重复键。按原文的对象边界核对解码后的键名。
 function rejectDuplicateKeys(contents: string, source: string): void {
   const objects: Set<string>[] = [];
@@ -563,7 +565,7 @@ function rejectDuplicateKeys(contents: string, source: string): void {
     else if (token === "}") objects.pop();
     else if (quoted && colon) {
       const keys = objects.at(-1);
-      const key: string = JSON.parse(quoted);
+      const key = jsonKey.parse(JSON.parse(quoted));
       if (keys?.has(key))
         throw invalidConfig("配置对象中有重复字段。", [source]);
       keys?.add(key);
