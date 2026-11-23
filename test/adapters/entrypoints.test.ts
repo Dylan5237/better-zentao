@@ -62,6 +62,35 @@ it("CFG-01 编译后的 doctor 离线检查配置", () => {
   expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, missingEnv: [] });
 });
 
+it.each(["team", "user"])(
+  "CFG-10 %s 错误路径隐藏短密码和机器人密钥",
+  (source) => {
+    const state = join(homeDir, ".better-zentao");
+    mkdirSync(state);
+    const path =
+      source === "team"
+        ? join(homeDir, "team.json")
+        : join(state, "config.json");
+    const password = "q7x9";
+    const key = "g4k2";
+    writeFileSync(
+      path,
+      JSON.stringify({ ["setting_" + password]: 1, ["setting_" + key]: 2 }),
+    );
+    const result = run(["doctor"], undefined, {
+      ...credentialsEnv,
+      ZENTAO_PASSWORD: password,
+      BZT_WECOM_WEBHOOK: "https://fixture.test/cgi-bin/webhook/send?key=" + key,
+      ...(source === "team" ? { BZT_CONFIG: path } : {}),
+    });
+    expect(result.status).toBe(1);
+    assertNoSensitiveData([result.stdout, result.stderr], [password, key]);
+    expect(JSON.parse(result.stdout).configError.details.fields).toEqual([
+      "[已脱敏]",
+    ]);
+  },
+);
+
 it("WP-02 doctor 可加载有效的 BZT_CONFIG，日历未覆盖时告警但退出码为 0", () => {
   const path = join(homeDir, "team.json");
   writeFileSync(

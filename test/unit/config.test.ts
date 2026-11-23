@@ -357,6 +357,64 @@ describe("WP-02 配置来源、示例与 schema", () => {
 });
 
 describe("CFG-01 / CFG-08 / CFG-10 / CFG-12 本地环境与配置安全", () => {
+  it.each([
+    '{"aliases":{"password":"synthetic"},"aliases":{}}',
+    '{"aliases":{"name":"a","\\u006eame":"b"}}',
+    '{"pairs":[{"design":42,"runtime":43,"design":44}]}',
+  ])("CFG-10 拒绝同一对象中的重复键 %s", async (raw) => {
+    const path = join(homeDir, "team.json");
+    await writeFile(path, raw);
+    await expectInputError(() => load(undefined, { BZT_CONFIG: path }), {
+      fields: ["BZT_CONFIG"],
+    });
+  });
+
+  it("CFG-10 独立对象可以使用相同的键，字符串内的标点属于值", async () => {
+    const pairs = [
+      { design: 42, runtime: 43 },
+      { design: 44, runtime: 45 },
+    ];
+    const aliases = { 标点: '示例 {} "key": []' };
+    await expect(load({ pairs, aliases })).resolves.toMatchObject({
+      pairs,
+      aliases,
+    });
+  });
+
+  it.each(["/zentao/api.php/v1/products", "/%61pi.PHP/v2"])(
+    "CFG-01 拒绝误填的 API 端点 %s",
+    async (path) => {
+      await expectInputError(
+        () =>
+          load(undefined, { ZENTAO_BASE_URL: "https://fixture.test" + path }),
+        { fields: ["ZENTAO_BASE_URL"] },
+      );
+    },
+  );
+  it("CFG-01 允许子目录名含 api.php 字样", async () => {
+    await expect(
+      load(undefined, {
+        ZENTAO_BASE_URL: "https://fixture.test/api.php-files",
+      }),
+    ).resolves.toMatchObject({
+      zentao: { baseUrl: "https://fixture.test/api.php-files/" },
+    });
+  });
+
+  it.each([
+    "/help?key=demo",
+    "/cgi-bin/webhook/send",
+    "/cgi-bin/webhook/send?key=%20",
+    "/cgi-bin/webhook/send?key=a&key=b",
+  ])("CFG-08 拒绝错误的机器人发送地址 %s", async (path) => {
+    await expectInputError(
+      () =>
+        load(undefined, {
+          BZT_WECOM_WEBHOOK: "https://proxy.fixture.test" + path,
+        }),
+      { fields: ["BZT_WECOM_WEBHOOK"] },
+    );
+  });
   it("CFG-01 缺少或纯空白凭据时报缺项", async () => {
     await expect(
       load(undefined, {
@@ -515,6 +573,32 @@ describe("CFG-01 / CFG-08 / CFG-10 / CFG-12 本地环境与配置安全", () => 
 });
 
 describe("CFG-02–CFG-07 / CFG-11 纯校验函数", () => {
+  it("CFG-06 区分缺少清单和已确认空清单", async () => {
+    const settings = await load({ products });
+    const lists = new Map([[42, new Set<number>()]]);
+    expect(() => config.checkModuleDevLeads(settings, lists)).toThrow(
+      expect.objectContaining({
+        code: "CONFIG_MISSING",
+        details: expect.objectContaining({ products: [43] }),
+      }),
+    );
+    lists.set(43, new Set());
+    expect(() => config.checkModuleDevLeads(settings, lists)).not.toThrow();
+  });
+
+  it("CFG-06 普通启用产品标记 probeOnly 仍须有主管", async () => {
+    const settings = await load({
+      products: { 42: { ...products[42], probeOnly: true } },
+    });
+    expect(() =>
+      config.checkModuleDevLeads(settings, new Map([[42, new Set([3])]])),
+    ).toThrow(
+      expect.objectContaining({
+        code: "CONFIG_MISSING",
+        details: { modules: ["42:3"] },
+      }),
+    );
+  });
   it("CFG-02 仅 22.6 且 URAndSR=true 通过，其他情况提示写能力降级", () => {
     expect(
       config.checkZentaoVersion({ version: "22.6", URAndSR: true }),
