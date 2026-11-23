@@ -525,6 +525,23 @@ describe("WP-03 独立二次敏感复扫", () => {
     ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
   });
 
+  it.each([
+    { credentials: { value: "12901" } },
+    { token: [null, { value: [12901] }] },
+    { headers: { authorization: ["Bearer 12901"] } },
+  ])("P1-3 递归采集对象及数组中的凭据并阻止重复的原始 ID %#", (envelope) => {
+    const sanitize = () =>
+      createFixtureSanitizer().sanitizeBatch([envelope, { id: "12901" }]);
+    expect(sanitize).toThrow(
+      expect.objectContaining({ code: "INVALID_INPUT" }),
+    );
+    try {
+      sanitize();
+    } catch (error) {
+      assertNoSensitiveData(error, ["12901"]);
+    }
+  });
+
   it("放行脱敏姓名、人员列表、合法字段与目标占位地址", () => {
     expect(() =>
       assertSanitizedJson(

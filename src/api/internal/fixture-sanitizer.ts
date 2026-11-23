@@ -174,9 +174,7 @@ function collectRecordAliases(
         collectAliases(user, "realname", aliases, knownSecrets, ancestors);
       }
     } else if (isCredentialFixtureField(key)) {
-      if (typeof child === "string" || typeof child === "number") {
-        rememberFixtureCredential(child, knownSecrets);
-      }
+      collectCredentialScalars(child, knownSecrets, ancestors);
     } else if (
       isFixtureHeaderEnvelope(key) ||
       !isSensitiveFixtureField(key, child)
@@ -184,6 +182,23 @@ function collectRecordAliases(
       // Removed headers are still inspected for duplicates in fields that must preserve their type.
       collectAliases(child, canonical, aliases, knownSecrets, ancestors);
     }
+  }
+}
+
+function collectCredentialScalars(
+  value: Json,
+  knownSecrets: Set<string>,
+  ancestors: WeakSet<object>,
+): void {
+  if (typeof value === "string" || typeof value === "number") {
+    rememberFixtureCredential(value, knownSecrets);
+  } else if (value !== null && typeof value === "object") {
+    if (ancestors.has(value)) throw invalidJson();
+    ancestors.add(value);
+    for (const child of Object.values<Json>(value)) {
+      collectCredentialScalars(child, knownSecrets, ancestors);
+    }
+    ancestors.delete(value);
   }
 }
 
