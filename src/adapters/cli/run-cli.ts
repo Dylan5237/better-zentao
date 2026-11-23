@@ -6,11 +6,13 @@ interface CliRuntime {
   readonly stdout: (text: string) => void;
   readonly stderr: (text: string) => void;
   readonly env: Readonly<Record<string, string | undefined>>;
+  readonly homeDir?: string;
+  readonly clock?: () => number;
   readonly nodeVersion: string;
 }
 
 const help =
-  "用法\n  bzt --help\n  bzt doctor    本地环境自检\n  bzt mcp       启动 stdio 服务\n";
+  "用法\n  bzt --help\n  bzt doctor [--config 路径] [--product ID]    本地环境自检\n  bzt mcp       启动 stdio 服务\n";
 
 function invalidArgs(runtime: CliRuntime): number {
   runtime.stderr("参数不合法。请运行 bzt --help。\n");
@@ -25,7 +27,11 @@ export async function runCli(
   try {
     parsed = parseArgs({
       args,
-      options: { help: { type: "boolean", short: "h" } },
+      options: {
+        help: { type: "boolean", short: "h" },
+        config: { type: "string" },
+        product: { type: "string" },
+      },
       allowPositionals: true,
       strict: true,
     });
@@ -42,13 +48,21 @@ export async function runCli(
   }
 
   if (command === "doctor") {
-    const status = await getDoctorStatus(runtime.env, runtime.nodeVersion);
+    const status = await getDoctorStatus(runtime.env, runtime.nodeVersion, {
+      homeDir: runtime.homeDir,
+      clock: runtime.clock,
+      cli: { config: values.config, product: values.product },
+    });
     runtime.stdout(
       JSON.stringify({ node: runtime.nodeVersion, ...status }) + "\n",
     );
     return status.ok ? 0 : 1;
   }
-  if (command === "mcp") {
+  if (
+    command === "mcp" &&
+    values.config === undefined &&
+    values.product === undefined
+  ) {
     await startMcpServer();
     return 0;
   }

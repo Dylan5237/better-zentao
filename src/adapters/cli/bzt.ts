@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { homedir } from "node:os";
 import { runCli } from "./run-cli.ts";
 
 try {
@@ -6,6 +7,8 @@ try {
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
     env: process.env,
+    homeDir: homedir(),
+    clock: () => Math.trunc(performance.timeOrigin + performance.now()),
     nodeVersion: process.versions.node,
   });
 } catch {
