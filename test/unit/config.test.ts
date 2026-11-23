@@ -65,6 +65,7 @@ async function expectInputError(
       code: "INVALID_INPUT",
       details,
     });
+    expect(error).toHaveProperty("details", details);
     assertNoSensitiveData(error, secrets);
     return true;
   });
@@ -216,6 +217,52 @@ describe("WP-02 配置来源、示例与 schema", () => {
     expect(settings.notify.quietHours).toEqual(["23:30", "06:00"]);
   });
 
+  it.each([undefined, "", " \t "])(
+    "空白或缺失主目录 %j 不产生相对状态目录",
+    async (homeDir) => {
+      const settings = await config.loadFileConfig({
+        env: { BZT_HOME: " \t " },
+        homeDir,
+      });
+      expect(settings.stateDir).toBeUndefined();
+    },
+  );
+
+  it.each([undefined, "", " \t "])(
+    "完整加载器在没有可用状态目录 %j 时只报告 BZT_HOME",
+    async (homeDir) => {
+      await expectInputError(
+        () =>
+          config.loadConfig({
+            env: { ...fixtureEnv, BZT_HOME: " \t " },
+            homeDir,
+          }),
+        { fields: ["BZT_HOME"] },
+      );
+    },
+  );
+
+  it("主目录去除首尾空白，显式 BZT_HOME 仍优先", async () => {
+    await writeUser({ mode: "strict-ai" });
+    await expect(
+      config.loadConfig({ env: fixtureEnv, homeDir: " \t" + homeDir + " " }),
+    ).resolves.toMatchObject({
+      stateDir: join(homeDir, ".better-zentao"),
+      mode: "strict-ai",
+    });
+    const stateDir = join(homeDir, "state");
+    await writeUser({ notify: { quietHours: ["23:00", "07:00"] } }, stateDir);
+    await expect(
+      config.loadConfig({
+        env: { ...fixtureEnv, BZT_HOME: " " + stateDir + " " },
+        homeDir: " \t ",
+      }),
+    ).resolves.toMatchObject({
+      stateDir,
+      notify: { quietHours: ["23:00", "07:00"] },
+    });
+  });
+
   it("拒绝不存在、不可读或损坏的团队文件，而缺失用户文件可省略", async () => {
     const missing = join(homeDir, "missing.json");
     const corrupted = join(homeDir, "bad.json");
@@ -337,6 +384,84 @@ describe("WP-02 配置来源、示例与 schema", () => {
       assertNoSensitiveData(error, [fixtureEnv.ZENTAO_PASSWORD]);
       return true;
     });
+  });
+
+  it("拒绝发布日历中的未声明产品，保留条目与字段路径", async () => {
+    const release = {
+      version: "V2.0.1",
+      date: "2028-02-29",
+      owner: "acct_pj",
+    };
+    const team = {
+      products,
+      releaseCalendar: [
+        { ...release, product: 42 },
+        { ...release, product: 48 },
+        { ...release, product: 49 },
+      ],
+    };
+    const parsed = config.teamConfigSchema.safeParse(team);
+    expect(parsed.success).toBe(false);
+    if (!parsed.success)
+      expect(parsed.error.issues.map(({ path }) => path)).toEqual([
+        ["releaseCalendar", 1, "product"],
+        ["releaseCalendar", 2, "product"],
+      ]);
+    await expectInputError(() => load(team), {
+      fields: ["releaseCalendar.1.product", "releaseCalendar.2.product"],
+    });
+  });
+
+  it("团队表非空时拒绝未声明的模块团队，保留模块键与字段路径", async () => {
+    const team = {
+      products,
+      teams: { fe: { name: "前端", lead: "acct_rm", members: [] } },
+      modules: {
+        "42:1": { name: "有效团队", team: "fe" },
+        "42:2": { name: "缺少团队", team: "be" },
+        "43:3": { name: "可省略团队" },
+        "43:4": { name: "原型属性不是团队", team: "toString" },
+      },
+    };
+    const parsed = config.teamConfigSchema.safeParse(team);
+    expect(parsed.success).toBe(false);
+    if (!parsed.success)
+      expect(parsed.error.issues.map(({ path }) => path)).toEqual([
+        ["modules", "42:2", "team"],
+        ["modules", "43:4", "team"],
+      ]);
+    await expectInputError(() => load(team), {
+      fields: ["modules.42:2.team", "modules.43:4.team"],
+    });
+  });
+
+  it("允许已声明的产品与团队引用，模块也可省略团队", async () => {
+    const team = {
+      products,
+      teams: { fe: { name: "前端", lead: "acct_rm", members: [] } },
+      modules: {
+        "42:1": { name: "有效团队", team: "fe" },
+        "43:2": { name: "可省略团队" },
+      },
+      releaseCalendar: [
+        {
+          product: 43,
+          version: "V2.0.1",
+          date: "2028-02-29",
+          owner: "acct_pj",
+        },
+      ],
+    };
+    await expect(load(team)).resolves.toMatchObject(team);
+  });
+
+  it("团队表为空时仍允许先配置模块团队", async () => {
+    const team = {
+      products,
+      modules: { "42:1": { name: "模块", team: "fe" } },
+    };
+    await expect(load(team)).resolves.toMatchObject(team);
+    await expect(load({ ...team, teams: {} })).resolves.toMatchObject(team);
   });
 
   it("产品表为空时允许先配置配对。日期接受真实闰日", async () => {
@@ -482,6 +607,41 @@ describe("CFG-01 / CFG-08 / CFG-10 / CFG-12 本地环境与配置安全", () => 
       () => load(undefined, { BZT_WECOM_WEBHOOK: url }),
       { fields: ["BZT_WECOM_WEBHOOK"] },
       [url, "synthetic-key"],
+    );
+  });
+
+  it.each([
+    [
+      "用户名",
+      "https://webhook-user@wecom.fixture.test/cgi-bin/webhook/send?key=synthetic-webhook-key",
+    ],
+    [
+      "密码",
+      "https://:webhook-pass@wecom.fixture.test/cgi-bin/webhook/send?key=synthetic-webhook-key",
+    ],
+    [
+      "账号密码",
+      "https://webhook-user:webhook-pass@wecom.fixture.test/cgi-bin/webhook/send?key=synthetic-webhook-key",
+    ],
+    [
+      "片段",
+      "https://wecom.fixture.test/cgi-bin/webhook/send?key=synthetic-webhook-key#fragment-fixture-only",
+    ],
+    [
+      "空片段分隔符",
+      "https://wecom.fixture.test/cgi-bin/webhook/send?key=synthetic-webhook-key#",
+    ],
+  ])("CFG-08 / S01 拒绝企微地址中的%s且只显示变量名", async (_, url) => {
+    await expectInputError(
+      () => load(undefined, { BZT_WECOM_WEBHOOK: url }),
+      { fields: ["BZT_WECOM_WEBHOOK"] },
+      [
+        url,
+        "webhook-user",
+        "webhook-pass",
+        "synthetic-webhook-key",
+        "fragment-fixture-only",
+      ],
     );
   });
 

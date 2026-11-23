@@ -102,6 +102,18 @@ afterEach(() => {
 });
 
 describe("WP-01 HTTP 认证与 S01 脱敏（06 §2.1）", () => {
+  it.each([
+    "https:fixture.test",
+    "https://fixture.test\\evil",
+    "https://fixture.test/zentao/api.php",
+    "https://fixture.test/%61pi.PHP%2Fv2",
+    "https://fixture.test/zentao%ZZ",
+  ])("拒绝畸形禅道基础地址 %j", (input) => {
+    expect(() => setup({ baseUrl: input })).toThrow(
+      expect.objectContaining({ code: "INVALID_INPUT" }),
+    );
+  });
+
   it("登录和业务请求均接受 201，v1/v2 共用 Token 请求头", async () => {
     let tick = 0;
     const { http, send, logSink } = setup({

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { decodeProbeOwnership } from "../../src/api/internal/probe-scope.ts";
+import {
+  decodeProbeOwnership,
+  parseProbeBaseUrl,
+} from "../../src/api/internal/probe-scope.ts";
 import {
   createProbeWriteApproval,
   createProbeWriteSender,
@@ -63,6 +66,18 @@ function setup(
 }
 
 describe("WP-05 / ADR-19 #29 发送层熔断", () => {
+  it.each([
+    "https:fixture.test",
+    "https://fixture.test\\evil",
+    "https://fixture.test/zentao/api.php",
+    "https://fixture.test/%61pi.PHP%2Fv2",
+    "https://fixture.test/zentao%ZZ",
+  ])("拒绝畸形探查基础地址 %j", (input) => {
+    expect(() => parseProbeBaseUrl(input)).toThrow(
+      expect.objectContaining({ code: "PERMISSION_DENIED" }),
+    );
+  });
+
   it("仅在端点已批准且所有归属已确认时，将固定 #29 请求交给模拟发送器", async () => {
     const { run, send } = setup();
     await expect(run(candidate)).resolves.toHaveProperty("status", 201);

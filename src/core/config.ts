@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { normalizeZentaoBaseUrl } from "./base-url.ts";
+import { hasAbsoluteHttpSyntax, normalizeZentaoBaseUrl } from "./base-url.ts";
 import {
   calendarConfig,
   civilDate,
@@ -400,11 +400,26 @@ export const teamConfigSchema = z
             invalidReference(["pairs", index, side]);
         }
       }
+      for (const [index, release] of config.releaseCalendar.entries()) {
+        if (!Object.hasOwn(config.products, release.product))
+          invalidReference(["releaseCalendar", index, "product"]);
+      }
     }
-    for (const key of Object.keys(config.modules)) {
+    const hasTeams = Object.keys(config.teams).length > 0;
+    for (const [key, module] of Object.entries(config.modules)) {
       const productId = key.split(":", 1)[0] ?? "";
       if (!Object.hasOwn(config.products, productId))
         invalidReference(["modules", key]);
+      if (
+        hasTeams &&
+        module.team !== undefined &&
+        !Object.hasOwn(config.teams, module.team)
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: ["modules", key, "team"],
+          message: "团队未在 teams 中声明。",
+        });
     }
     for (const key of Object.keys(config.moduleDefaults)) {
       if (!Object.hasOwn(config.products, key))
@@ -624,9 +639,10 @@ export async function loadFileConfig({ env, homeDir, cli }: ConfigSources) {
   if (cli?.config !== undefined && !teamPath) {
     throw invalidConfig("团队配置路径不能为空。", ["--config"]);
   }
+  const normalizedHomeDir = homeDir?.trim();
   const stateDir =
     env.BZT_HOME?.trim() ||
-    (homeDir === undefined ? undefined : join(homeDir, ".better-zentao"));
+    (normalizedHomeDir ? join(normalizedHomeDir, ".better-zentao") : undefined);
   const source = cli?.config === undefined ? "BZT_CONFIG" : "--config";
   const teamRaw = teamPath
     ? await readConfigFile(teamPath, source, known)
@@ -672,23 +688,10 @@ export function findMissingEnv(env: ConfigEnv) {
   return requiredEnv.filter((key) => !env[key]?.trim());
 }
 
-function hasAbsoluteHttpSyntax(value: string): boolean {
-  return /^https?:\/\/[^/\\]/iu.test(value) && !/[\s\\]/u.test(value);
-}
-
 function checkBaseUrl(input: string): string {
-  const url = hasAbsoluteHttpSyntax(input)
-    ? normalizeZentaoBaseUrl(input)
-    : null;
-  if (url) {
-    try {
-      if (!/\/api\.php(?:\/|$)/iu.test(decodeURIComponent(url.pathname)))
-        return url.href;
-    } catch {
-      // 非法百分号编码使用同一条脱敏提示。
-    }
-  }
-  throw invalidConfig("禅道基础地址不合法。", ["ZENTAO_BASE_URL"]);
+  const url = normalizeZentaoBaseUrl(input);
+  if (!url) throw invalidConfig("禅道基础地址不合法。", ["ZENTAO_BASE_URL"]);
+  return url.href;
 }
 
 const logLevel = z.enum(["debug", "info", "warn", "error"]);
@@ -707,6 +710,9 @@ export function readConfigEnvironment(env: ConfigEnv) {
     const keys = url?.searchParams.getAll("key") ?? [];
     if (
       url?.pathname !== "/cgi-bin/webhook/send" ||
+      url.username ||
+      url.password ||
+      url.href.includes("#") ||
       keys.length !== 1 ||
       !keys[0]?.trim()
     )
@@ -723,10 +729,12 @@ export function readConfigEnvironment(env: ConfigEnv) {
 }
 
 /** docs/08 §1。密码与企微机器人地址由调用方按需从环境取用。 */
-export async function loadConfig(
-  options: ConfigSources & { readonly homeDir: string },
-) {
+export async function loadConfig(options: ConfigSources) {
   const { config, stateDir, productId } = await loadFileConfig(options);
+  if (!stateDir)
+    throw invalidConfig("无法确定本地状态目录，请设置 BZT_HOME。", [
+      "BZT_HOME",
+    ]);
   const {
     logLevel,
     zentao: { baseUrl, account, timeoutMs },

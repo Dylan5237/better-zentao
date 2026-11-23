@@ -115,6 +115,36 @@ it("WP-02 doctor 可加载有效的 BZT_CONFIG，日历未覆盖时告警但退�
   );
 });
 
+it("CFG-08 / S01 doctor 拒绝含内嵌凭据或片段的企微地址且输出脱敏", () => {
+  const user = "fixture-webhook-user";
+  const password = "fixture-webhook-password";
+  const key = "fixture-webhook-key";
+  const fragment = "fixture-webhook-fragment";
+  const path = "/cgi-bin/webhook/send?key=" + key;
+  const addresses = [
+    `https://${user}:${password}@fixture.test${path}`,
+    `https://fixture.test${path}#${fragment}`,
+  ];
+  for (const webhook of addresses) {
+    const result = run(["doctor"], undefined, {
+      ...credentialsEnv,
+      BZT_WECOM_WEBHOOK: webhook,
+    });
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      configError: {
+        code: "INVALID_INPUT",
+        details: { fields: ["BZT_WECOM_WEBHOOK"] },
+      },
+    });
+    assertNoSensitiveData(
+      [result.stdout, result.stderr],
+      [webhook, user, password, key, fragment],
+    );
+  }
+});
+
 it("CFG-10 / S01 doctor 拒绝包含凭据的团队文件，标准输出与错误输出均脱敏", () => {
   const path = join(homeDir, "team.json");
   const key = "bzt-file-key-fixture-only";
