@@ -6,6 +6,8 @@ const msPerDay = 86_400_000;
 const datePattern = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const dateTimePattern =
   /^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}):(\d{2}):(\d{2}))?$/u;
+const maxCachedTimeZones = 32;
+const formatters = new Map<string, Intl.DateTimeFormat>();
 
 function daysInMonth(year: number, month: number): number {
   if (month === 2) {
@@ -39,7 +41,7 @@ const epochDay = daysBeforeYear(1970);
 
 function parseDay(date: string): number | undefined {
   const match = datePattern.exec(date);
-  if (!match || match[0] !== date) return undefined;
+  if (!match) return undefined;
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
@@ -173,8 +175,12 @@ export function countWorkdaysBetween(
 }
 
 function localFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = formatters.get(timeZone);
+  if (cached) return cached;
+
+  let formatter: Intl.DateTimeFormat;
   try {
-    return new Intl.DateTimeFormat("en-GB", {
+    formatter = new Intl.DateTimeFormat("en-GB", {
       timeZone,
       calendar: "iso8601",
       numberingSystem: "latn",
@@ -190,6 +196,13 @@ function localFormatter(timeZone: string): Intl.DateTimeFormat {
   } catch {
     throw new BztError("INVALID_INPUT", "业务时区不合法。");
   }
+
+  const oldest = formatters.keys().next();
+  if (!oldest.done && formatters.size >= maxCachedTimeZones) {
+    formatters.delete(oldest.value);
+  }
+  formatters.set(timeZone, formatter);
+  return formatter;
 }
 
 function localParts(formatter: Intl.DateTimeFormat, timestampMs: number) {
@@ -266,11 +279,12 @@ export function parseZentaoDateTime(
     value == null ||
     value === "" ||
     value === "0000-00-00" ||
-    value === "0000-00-00 00:00:00"
+    value === "0000-00-00 00:00:00" ||
+    value === "0000-00-00T00:00:00"
   )
     return null;
   const match = dateTimePattern.exec(value);
-  if (!match || match[0] !== value || !match[1]) {
+  if (!match?.[1]) {
     throw new BztError("INVALID_INPUT", "禅道日期时间格式不合法。");
   }
   const hour = Number(match[2] ?? 0);

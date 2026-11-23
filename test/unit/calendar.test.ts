@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   addWorkdays,
   countWorkdaysBetween,
@@ -65,6 +65,7 @@ describe("WP-01 工作日历（04 §4.1、09 §2）", () => {
     { workdays: [0, 8] },
     { workdays: [1, 1] },
     { holidays: ["2026-02-30"] },
+    { holidays: ["2026-12-09\r\n"] },
     { extraWorkdays: ["2026-13-01"] },
     { holidays: ["2026-12-12"], extraWorkdays: ["2026-12-12"] },
   ])("拒绝不可用或冲突的日历配置 %j", (config) => {
@@ -103,9 +104,15 @@ describe("WP-01 禅道本地时间（06 §2.2）", () => {
     );
   });
 
-  it.each([null, undefined, "", "0000-00-00", "0000-00-00 00:00:00"])(
-    "空时间 %s 统一解析为 null",
-    (value) => expect(parseZentaoDateTime(value)).toBeNull(),
+  it.each([
+    null,
+    undefined,
+    "",
+    "0000-00-00",
+    "0000-00-00 00:00:00",
+    "0000-00-00T00:00:00",
+  ])("空时间 %s 统一解析为 null", (value) =>
+    expect(parseZentaoDateTime(value)).toBeNull(),
   );
 
   it.each([
@@ -113,12 +120,14 @@ describe("WP-01 禅道本地时间（06 §2.2）", () => {
     "2026-13-01",
     "2026-01-00",
     "0000-01-01",
+    "0000-00-00T00:00:01",
     "1900-02-29",
     "2026-12-09 24:00:00",
     "2026-12-09 00:60:00",
     "2026-12-09 00:00:60",
     "2026-12-09T00:00:00Z",
     "2026-12-09\n",
+    "2026-12-09T12:00:00\u2028",
   ])("拒绝非法或带偏移的时间 %j，不静默进位", (value) => {
     expect(() => parseZentaoDateTime(value)).toThrow(invalidInput);
   });
@@ -160,5 +169,45 @@ describe("WP-01 禅道本地时间（06 §2.2）", () => {
     expect(() => formatLocalDate(0, "Not/A_Zone")).toThrow(invalidInput);
     expect(() => formatLocalDate(Infinity)).toThrow(invalidInput);
     expect(() => deadlineEndOfDayMs("2026-02-30")).toThrow(invalidInput);
+  });
+
+  it("P2-3 同一时区复用格式化器，非法时区不入缓存", () => {
+    const formatter = vi.spyOn(Intl, "DateTimeFormat");
+    const zone = "+04:15";
+    const invalidZone = "Invalid/CacheFixture";
+    try {
+      expect(parseZentaoDateTime("1970-01-01 04:15:00", zone)).toBe(0);
+      expect(formatLocalDate(0, zone)).toBe("1970-01-01");
+      expect(deadlineEndOfDayMs("1970-01-01", zone)).toBe(
+        Date.UTC(1970, 0, 1, 19, 44, 59),
+      );
+      expect(() => formatLocalDate(0, invalidZone)).toThrow(invalidInput);
+      expect(() => formatLocalDate(0, invalidZone)).toThrow(invalidInput);
+      expect(
+        formatter.mock.calls.map(([, options]) => options?.timeZone),
+      ).toEqual([zone, invalidZone, invalidZone]);
+    } finally {
+      formatter.mockRestore();
+    }
+  });
+
+  it("P2-3 时区缓存有界，最早放入的格式化器被淘汰后可重建", () => {
+    const formatter = vi.spyOn(Intl, "DateTimeFormat");
+    const first = "+01:00";
+    try {
+      expect(formatLocalDate(0, first)).toBe("1970-01-01");
+      expect(formatLocalDate(0, first)).toBe("1970-01-01");
+      for (let i = 1; i <= 32; i++) {
+        formatLocalDate(0, `+01:${String(i).padStart(2, "0")}`);
+      }
+      expect(formatLocalDate(0, first)).toBe("1970-01-01");
+      expect(
+        formatter.mock.calls.filter(
+          ([, options]) => options?.timeZone === first,
+        ),
+      ).toHaveLength(2);
+    } finally {
+      formatter.mockRestore();
+    }
   });
 });
