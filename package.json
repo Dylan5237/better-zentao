@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "lint": "eslint src test && prettier --check --end-of-line auto src test eslint.config.mjs vitest.config.ts package.json tsconfig*.json",
+    "lint": "eslint src test && prettier --check --end-of-line auto src test eslint.config.mjs vitest.config.ts package.json tsconfig*.json config/*.json",
     "typecheck": "tsc --noEmit",
     "test": "pnpm run build && vitest run --coverage"
   },

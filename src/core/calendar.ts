@@ -83,15 +83,18 @@ function dateOfDay(index: number): string {
   return formatDay(year, month, remaining + 1);
 }
 
-const dateString = z.string().refine((value) => parseDay(value) !== undefined);
-const calendarConfig = z.strictObject({
+export const civilDate = z.iso
+  .date()
+  .refine((value) => parseDay(value) !== undefined);
+
+export const calendarConfig = z.strictObject({
   workdays: z
     .array(z.int().min(1).max(7))
     .min(1)
     .refine((days) => new Set(days).size === days.length)
     .default([1, 2, 3, 4, 5]),
-  holidays: z.array(dateString).default([]),
-  extraWorkdays: z.array(dateString).default([]),
+  holidays: z.array(civilDate).default([]),
+  extraWorkdays: z.array(civilDate).default([]),
 });
 
 export type CalendarConfig = z.input<typeof calendarConfig>;
@@ -203,6 +206,17 @@ function localFormatter(timeZone: string): Intl.DateTimeFormat {
   }
   formatters.set(timeZone, formatter);
   return formatter;
+}
+
+export function isIanaTimezone(timeZone: string): boolean {
+  // Intl 也接受数字偏移，配置要求 IANA 时区名称。
+  if (/^[+-]/u.test(timeZone)) return false;
+  try {
+    localFormatter(timeZone);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function localParts(formatter: Intl.DateTimeFormat, timestampMs: number) {

@@ -1,0 +1,193 @@
+{
+  "$schema": "./better-zentao.schema.json",
+  "version": 1,
+  "mode": "personal",
+  "timezone": "Asia/Shanghai",
+  "products": {
+    "42": { "name": "示例设计平台", "state": "design", "projects": [179] },
+    "43": { "name": "示例运行平台", "state": "runtime", "projects": [180] },
+    "44": {
+      "name": "示例交付平台",
+      "state": "delivery",
+      "projects": [181],
+      "enabled": false
+    },
+    "29": { "name": "禅道研发验证项目", "state": "other", "probeOnly": true }
+  },
+  "pairs": [{ "design": 42, "runtime": 43 }],
+  "modules": {
+    "42:1201": {
+      "name": "权限管理",
+      "designLead": "acct_dm_fe",
+      "devLead": "acct_rm_fe",
+      "testLead": "acct_qa_lead",
+      "team": "fe"
+    },
+    "43:2310": {
+      "name": "网关",
+      "designLead": "acct_dm_fe",
+      "devLead": "acct_rm_be",
+      "testLead": "acct_qa_lead",
+      "team": "be"
+    }
+  },
+  "moduleDefaults": {
+    "42": { "designLead": "acct_dm_fe", "devLead": "acct_rm_fe" },
+    "43": { "devLead": "acct_rm_be" }
+  },
+  "teams": {
+    "fe": {
+      "name": "前端",
+      "lead": "acct_rm_fe",
+      "members": ["acct_rd_a", "acct_rd_b"],
+      "executionKinds": ["dev", "ui"]
+    },
+    "be": {
+      "name": "后端",
+      "lead": "acct_rm_be",
+      "members": ["acct_rd_c"],
+      "executionKinds": ["dev"]
+    },
+    "qa": { "name": "测试", "lead": "acct_qa_lead", "members": ["acct_qa_a"] },
+    "design": {
+      "name": "设计",
+      "lead": "acct_dm_fe",
+      "members": ["acct_ds_a", "acct_ds_b"]
+    }
+  },
+  "roles": {
+    "PM": ["acct_pm"],
+    "PJ": ["acct_pj"],
+    "DM": ["acct_dm_fe"],
+    "RM": ["acct_rm_fe", "acct_rm_be"],
+    "QA_LEAD": ["acct_qa_lead"]
+  },
+  "aliases": {
+    "研发主管（前端）": "acct_rm_fe",
+    "研发主管（后端）": "acct_rm_be",
+    "设计主管（前端）": "acct_dm_fe"
+  },
+  "naming": {
+    "l3Plan": {
+      "pattern": "【{owner}】{module}-{yyyy}年{mm}月",
+      "matchBy": "dateOverlap"
+    },
+    "execution": {
+      "pattern": "【{product}】【{kind}】{yyyy}年{mm}月迭代",
+      "kinds": { "design": "设计", "dev": "研发", "ui": "UI" },
+      "legacyPatterns": [
+        "{mm}月UI设计迭代计划",
+        "【{product}】【{kind}】{mm}月迭代"
+      ]
+    },
+    "taskPrefix": {
+      "design": "【设计】",
+      "review": "【评审】",
+      "handoff": "【传递】",
+      "dev": "【研发】",
+      "interface": "【接口】",
+      "test": "【测试】",
+      "acceptance": "【验收】",
+      "delivery": "【交付】"
+    },
+    "legacyTaskPrefixes": {
+      "dev": ["【前端研发】", "【后端开发】"],
+      "test": ["【前端测试】"]
+    }
+  },
+  "versionTag": {
+    "keywordPrefix": "版本:",
+    "pattern": "^V\\d+\\.\\d+\\.\\d+$"
+  },
+  "releaseCalendar": [
+    {
+      "product": 43,
+      "version": "V7.0.3",
+      "date": "2026-12-18",
+      "owner": "acct_pm"
+    }
+  ],
+  "legacyReleasePlans": {
+    "until": "2026-12-31",
+    "titlePattern": "^V\\d+\\.\\d+"
+  },
+  "stageDefaults": {
+    "feature": {
+      "dev": { "startOffset": 0, "durationDays": 5 },
+      "interface": {
+        "after": "dev",
+        "startOffset": -2,
+        "durationDays": 2,
+        "required": false
+      },
+      "test": { "after": "dev", "startOffset": 0, "durationDays": 2 },
+      "acceptance": { "after": "test", "startOffset": 0, "durationDays": 1 },
+      "delivery": {
+        "after": "acceptance",
+        "startOffset": 0,
+        "durationDays": 1,
+        "required": false
+      }
+    },
+    "design": {
+      "design": { "startOffset": 0, "durationDays": 5 },
+      "review": { "after": "design", "startOffset": 0, "durationDays": 1 },
+      "handoff": { "after": "review", "startOffset": 0, "durationDays": 1 }
+    },
+    "assignees": {
+      "test": "team:qa.lead",
+      "acceptance": "story.maintainer",
+      "delivery": "story.maintainer",
+      "review": "module.designLead",
+      "handoff": "story.maintainer"
+    }
+  },
+  "rules": {
+    "R01": { "enabled": true },
+    "R02": { "enabled": true, "missingAfter": 1, "waitAfter": 2 },
+    "R03": { "enabled": true, "after": 3 },
+    "R04": { "enabled": true },
+    "R05": { "enabled": true },
+    "R06": { "enabled": false, "systemStartDate": "2027-01-01" },
+    "R07": { "enabled": false, "after": 2 },
+    "R08": { "enabled": false, "after": 5 },
+    "R09": { "enabled": false, "after": 5 },
+    "R10": { "enabled": false, "fromWorkday": 5 },
+    "R11": { "enabled": false, "after": 1 },
+    "R12": { "enabled": false },
+    "R13": { "enabled": false, "beforeRelease": 3 },
+    "R14": { "enabled": false, "olderThanDays": 30 },
+    "R15": { "enabled": false, "after": 10 },
+    "R16": { "enabled": false }
+  },
+  "timeState": { "dueSoonWorkdays": 3 },
+  "schedule": { "dailyHours": 6, "weeks": 4, "suggestTop": 3 },
+  "calendar": {
+    "workdays": [1, 2, 3, 4, 5],
+    "holidays": ["2027-01-01", "2027-02-16", "2027-02-17"],
+    "extraWorkdays": ["2027-02-07"]
+  },
+  "notify": {
+    "channel": "wecom-robot",
+    "digest": { "time": "09:00", "workdaysOnly": true, "collector": "acct_pj" },
+    "events": ["handoff", "decompose", "assign_other", "release_gate"],
+    "dedupe": "per-item-per-day",
+    "quietHours": ["20:00", "08:30"]
+  },
+  "wecomMap": { "acct_rd_a": "wecom_acct_rd_a" },
+  "write": {
+    "planExpiresMinutes": 10,
+    "minConfirmDelaySeconds": 3,
+    "importMaxRows": 50,
+    "disableCapabilities": []
+  },
+  "probe": { "productId": 29 },
+  "snapshot": { "collector": "acct_pj", "day": 1, "exportDir": "./snapshots" },
+  "cache": {
+    "directoryMinutes": 30,
+    "metaMinutes": 30,
+    "executionMinutes": 5,
+    "taskMinutes": 2
+  },
+  "http": { "concurrency": 8 }
+}

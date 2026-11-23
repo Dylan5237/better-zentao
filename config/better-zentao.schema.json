@@ -1,0 +1,1312 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "version": {
+      "default": 1,
+      "type": "number",
+      "const": 1
+    },
+    "mode": {
+      "default": "personal",
+      "type": "string",
+      "enum": ["personal", "strict-ai"]
+    },
+    "timezone": {
+      "default": "Asia/Shanghai",
+      "type": "string"
+    },
+    "products": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[1-9]\\d*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "state": {
+            "type": "string",
+            "enum": ["design", "runtime", "delivery", "other"]
+          },
+          "projects": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "probeOnly": {
+            "type": "boolean"
+          }
+        },
+        "required": ["name", "state"],
+        "additionalProperties": false
+      }
+    },
+    "pairs": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "design": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "runtime": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": ["design", "runtime"],
+        "additionalProperties": false
+      }
+    },
+    "modules": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[1-9]\\d*:[1-9]\\d*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "designLead": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "devLead": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "testLead": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "team": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      }
+    },
+    "moduleDefaults": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^[1-9]\\d*$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "designLead": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "devLead": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "testLead": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "teams": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "lead": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "\\S"
+            }
+          },
+          "executionKinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["design", "dev", "ui"]
+            }
+          }
+        },
+        "required": ["name", "lead", "members"],
+        "additionalProperties": false
+      }
+    },
+    "roles": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "enum": ["PM", "PJ", "DM", "RM", "QA_LEAD"]
+      },
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "\\S"
+        }
+      }
+    },
+    "aliases": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "\\S"
+      }
+    },
+    "naming": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "l3Plan": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "default": "【{owner}】{module}-{yyyy}年{mm}月",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "matchBy": {
+              "default": "dateOverlap",
+              "type": "string",
+              "const": "dateOverlap"
+            }
+          },
+          "additionalProperties": false
+        },
+        "execution": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "default": "【{product}】【{kind}】{yyyy}年{mm}月迭代",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "kinds": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "design": {
+                  "default": "设计",
+                  "type": "string",
+                  "pattern": "\\S"
+                },
+                "dev": {
+                  "default": "研发",
+                  "type": "string",
+                  "pattern": "\\S"
+                },
+                "ui": {
+                  "default": "UI",
+                  "type": "string",
+                  "pattern": "\\S"
+                }
+              },
+              "additionalProperties": false
+            },
+            "legacyPatterns": {
+              "default": [
+                "{mm}月UI设计迭代计划",
+                "【{product}】【{kind}】{mm}月迭代"
+              ],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "taskPrefix": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "design": {
+              "default": "【设计】",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "review": {
+              "default": "【评审】",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "handoff": {
+              "default": "【传递】",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "dev": {
+              "default": "【研发】",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "interface": {
+              "default": "【接口】",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "test": {
+              "default": "【测试】",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "acceptance": {
+              "default": "【验收】",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "delivery": {
+              "default": "【交付】",
+              "type": "string",
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": false
+        },
+        "legacyTaskPrefixes": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "design": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            },
+            "review": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            },
+            "handoff": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            },
+            "dev": {
+              "default": ["【前端研发】", "【后端开发】"],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            },
+            "interface": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            },
+            "test": {
+              "default": ["【前端测试】"],
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            },
+            "acceptance": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            },
+            "delivery": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "\\S"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "versionTag": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "keywordPrefix": {
+          "default": "版本:",
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "pattern": {
+          "default": "^V\\d+\\.\\d+\\.\\d+$",
+          "type": "string",
+          "pattern": "\\S"
+        }
+      },
+      "additionalProperties": false
+    },
+    "releaseCalendar": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "version": {
+            "type": "string",
+            "pattern": "\\S"
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "owner": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        },
+        "required": ["product", "version", "date", "owner"],
+        "additionalProperties": false
+      }
+    },
+    "legacyReleasePlans": {
+      "type": "object",
+      "properties": {
+        "until": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+        },
+        "titlePattern": {
+          "default": "^V\\d+\\.\\d+",
+          "type": "string",
+          "pattern": "\\S"
+        }
+      },
+      "required": ["until"],
+      "additionalProperties": false
+    },
+    "stageDefaults": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "feature": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "dev": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "after": {
+                  "type": "string",
+                  "enum": [
+                    "design",
+                    "review",
+                    "handoff",
+                    "dev",
+                    "interface",
+                    "test",
+                    "acceptance",
+                    "delivery"
+                  ]
+                },
+                "startOffset": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "durationDays": {
+                  "default": 5,
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "required": {
+                  "default": true,
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "interface": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "after": {
+                  "default": "dev",
+                  "type": "string",
+                  "enum": [
+                    "design",
+                    "review",
+                    "handoff",
+                    "dev",
+                    "interface",
+                    "test",
+                    "acceptance",
+                    "delivery"
+                  ]
+                },
+                "startOffset": {
+                  "default": -2,
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "durationDays": {
+                  "default": 2,
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "required": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "test": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "after": {
+                  "default": "dev",
+                  "type": "string",
+                  "enum": [
+                    "design",
+                    "review",
+                    "handoff",
+                    "dev",
+                    "interface",
+                    "test",
+                    "acceptance",
+                    "delivery"
+                  ]
+                },
+                "startOffset": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "durationDays": {
+                  "default": 2,
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "required": {
+                  "default": true,
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "acceptance": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "after": {
+                  "default": "test",
+                  "type": "string",
+                  "enum": [
+                    "design",
+                    "review",
+                    "handoff",
+                    "dev",
+                    "interface",
+                    "test",
+                    "acceptance",
+                    "delivery"
+                  ]
+                },
+                "startOffset": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "durationDays": {
+                  "default": 1,
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "required": {
+                  "default": true,
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "delivery": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "after": {
+                  "default": "acceptance",
+                  "type": "string",
+                  "enum": [
+                    "design",
+                    "review",
+                    "handoff",
+                    "dev",
+                    "interface",
+                    "test",
+                    "acceptance",
+                    "delivery"
+                  ]
+                },
+                "startOffset": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "durationDays": {
+                  "default": 1,
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "required": {
+                  "default": false,
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "design": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "design": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "after": {
+                  "type": "string",
+                  "enum": [
+                    "design",
+                    "review",
+                    "handoff",
+                    "dev",
+                    "interface",
+                    "test",
+                    "acceptance",
+                    "delivery"
+                  ]
+                },
+                "startOffset": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "durationDays": {
+                  "default": 5,
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "required": {
+                  "default": true,
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "review": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "after": {
+                  "default": "design",
+                  "type": "string",
+                  "enum": [
+                    "design",
+                    "review",
+                    "handoff",
+                    "dev",
+                    "interface",
+                    "test",
+                    "acceptance",
+                    "delivery"
+                  ]
+                },
+                "startOffset": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "durationDays": {
+                  "default": 1,
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "required": {
+                  "default": true,
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "handoff": {
+              "default": {},
+              "type": "object",
+              "properties": {
+                "after": {
+                  "default": "review",
+                  "type": "string",
+                  "enum": [
+                    "design",
+                    "review",
+                    "handoff",
+                    "dev",
+                    "interface",
+                    "test",
+                    "acceptance",
+                    "delivery"
+                  ]
+                },
+                "startOffset": {
+                  "default": 0,
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "durationDays": {
+                  "default": 1,
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "required": {
+                  "default": true,
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "assignees": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "test": {
+              "default": "team:qa.lead",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "acceptance": {
+              "default": "story.maintainer",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "delivery": {
+              "default": "story.maintainer",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "review": {
+              "default": "module.designLead",
+              "type": "string",
+              "pattern": "\\S"
+            },
+            "handoff": {
+              "default": "story.maintainer",
+              "type": "string",
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "rules": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "R01": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "R02": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "type": "boolean"
+            },
+            "missingAfter": {
+              "default": 1,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "waitAfter": {
+              "default": 2,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "R03": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "type": "boolean"
+            },
+            "after": {
+              "default": 3,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "R04": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "R05": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": true,
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "R06": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "systemStartDate": {
+              "type": "string",
+              "format": "date",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "R07": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "after": {
+              "default": 2,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "R08": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "after": {
+              "default": 5,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "R09": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "after": {
+              "default": 5,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "R10": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "fromWorkday": {
+              "default": 5,
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "R11": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "after": {
+              "default": 1,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "R12": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        "R13": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "beforeRelease": {
+              "default": 3,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "R14": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "olderThanDays": {
+              "default": 30,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "R15": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            },
+            "after": {
+              "default": 10,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "additionalProperties": false
+        },
+        "R16": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "timeState": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "dueSoonWorkdays": {
+          "default": 3,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "schedule": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "dailyHours": {
+          "default": 6,
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "weeks": {
+          "default": 4,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "suggestTop": {
+          "default": 3,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "calendar": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "workdays": {
+          "default": [1, 2, 3, 4, 5],
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 7
+          }
+        },
+        "holidays": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          }
+        },
+        "extraWorkdays": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "notify": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "channel": {
+          "default": "wecom-robot",
+          "type": "string",
+          "const": "wecom-robot"
+        },
+        "digest": {
+          "default": {},
+          "type": "object",
+          "properties": {
+            "time": {
+              "default": "09:00",
+              "type": "string",
+              "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+            },
+            "workdaysOnly": {
+              "default": true,
+              "type": "boolean"
+            },
+            "collector": {
+              "type": "string",
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": false
+        },
+        "events": {
+          "default": ["handoff", "decompose", "assign_other", "release_gate"],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["handoff", "decompose", "assign_other", "release_gate"]
+          }
+        },
+        "dedupe": {
+          "default": "per-item-per-day",
+          "type": "string",
+          "const": "per-item-per-day"
+        },
+        "quietHours": {
+          "default": ["20:00", "08:30"],
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+            },
+            {
+              "type": "string",
+              "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+            }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "additionalProperties": false
+    },
+    "wecomMap": {
+      "default": {},
+      "type": "object",
+      "propertyNames": {
+        "type": "string",
+        "pattern": "\\S"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "\\S"
+      }
+    },
+    "write": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "planExpiresMinutes": {
+          "default": 10,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "minConfirmDelaySeconds": {
+          "default": 3,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "importMaxRows": {
+          "default": 50,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "disableCapabilities": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\S"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "probe": {
+      "default": {
+        "productId": 29
+      },
+      "type": "object",
+      "properties": {
+        "productId": {
+          "default": 29,
+          "type": "number",
+          "const": 29
+        }
+      },
+      "additionalProperties": false
+    },
+    "snapshot": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "collector": {
+          "type": "string",
+          "pattern": "\\S"
+        },
+        "day": {
+          "default": 1,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 31
+        },
+        "exportDir": {
+          "type": "string",
+          "pattern": "\\S"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cache": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "directoryMinutes": {
+          "default": 30,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "metaMinutes": {
+          "default": 30,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "executionMinutes": {
+          "default": 5,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "taskMinutes": {
+          "default": 2,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "http": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "concurrency": {
+          "default": 8,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

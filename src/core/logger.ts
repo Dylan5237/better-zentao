@@ -1,5 +1,6 @@
 import { stderr } from "node:process";
 import { z } from "zod";
+import { resolveLogLevel } from "./config.ts";
 import { BztError } from "./errors.ts";
 
 const routeSegment = /^(?:[A-Za-z][A-Za-z0-9_-]*|\{[A-Za-z][A-Za-z0-9_]*\})$/u;
@@ -38,7 +39,6 @@ const httpLogFields = z.object({
 });
 
 const logLevels = { debug: 0, info: 1, warn: 2, error: 3 };
-const logLevel = z.enum(["debug", "info", "warn", "error"]);
 
 export function writeHttpLog(
   input: unknown,
@@ -49,11 +49,7 @@ export function writeHttpLog(
   if (!event.success) {
     throw new BztError("INVALID_INPUT", "日志字段不合法。");
   }
-  const configuredLevel = logLevel.safeParse(
-    env?.BZT_LOG_LEVEL?.trim().toLowerCase(),
-  );
-  const minimum =
-    logLevels[configuredLevel.success ? configuredLevel.data : "info"];
+  const minimum = logLevels[resolveLogLevel(env)];
   const { status } = event.data;
   let severity = logLevels.info;
   if (status === 0 || status >= 500) severity = logLevels.error;
