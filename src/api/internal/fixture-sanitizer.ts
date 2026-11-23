@@ -16,7 +16,9 @@ import {
   FIXTURE_URL,
   fixtureKey,
   isCredentialFixtureField,
+  isFixtureHeaderEnvelope,
   isSensitiveFixtureField,
+  rememberFixtureCredential,
 } from "./fixture-sensitivity.ts";
 import { sanitizeFixtureText } from "./fixture-text.ts";
 
@@ -173,9 +175,13 @@ function collectRecordAliases(
       }
     } else if (isCredentialFixtureField(key)) {
       if (typeof child === "string" || typeof child === "number") {
-        knownSecrets.add(String(child));
+        rememberFixtureCredential(child, knownSecrets);
       }
-    } else if (!isSensitiveFixtureField(key, child)) {
+    } else if (
+      isFixtureHeaderEnvelope(key) ||
+      !isSensitiveFixtureField(key, child)
+    ) {
+      // Removed headers are still inspected for duplicates in fields that must preserve their type.
       collectAliases(child, canonical, aliases, knownSecrets, ancestors);
     }
   }

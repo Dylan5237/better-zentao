@@ -515,6 +515,16 @@ describe("WP-03 独立二次敏感复扫", () => {
     }
   });
 
+  it.each([
+    { headers: { token: "12901" } },
+    { requestHeaders: { authorization: "Bearer 12901" } },
+    { responseHeaders: { "Set-Cookie": "PHPSESSID=12901; HttpOnly" } },
+  ])("已删除头部中的凭据重复出现在保留字段时阻止输出 %#", (envelope) => {
+    expect(() =>
+      createFixtureSanitizer().sanitize({ ...envelope, id: "12901" }),
+    ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
+  });
+
   it("放行脱敏姓名、人员列表、合法字段与目标占位地址", () => {
     expect(() =>
       assertSanitizedJson(

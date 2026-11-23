@@ -32,6 +32,27 @@ export function isCredentialFixtureField(key: string): boolean {
   return credentialField.test(fixtureKey(key).replace(/\d/gu, ""));
 }
 
+export function isFixtureHeaderEnvelope(key: string): boolean {
+  return /^(?:headers|requestheaders|responseheaders)$/u.test(
+    fixtureKey(key).replace(/\d/gu, ""),
+  );
+}
+
+export function rememberFixtureCredential(
+  value: string | number,
+  knownSecrets: Set<string>,
+): void {
+  const text = String(value).trim();
+  knownSecrets.add(text);
+  const authorization = /^(?:Bearer|Basic)\s+(\S+)$/iu.exec(text)?.[1];
+  if (authorization !== undefined) knownSecrets.add(authorization);
+  const cookie =
+    /\b(?:token|zentaosid|phpsessid|session[_-]?id)\s*=\s*["']?([^"';,\s]+)/giu;
+  for (const pair of text.matchAll(cookie)) {
+    if (pair[1] !== undefined) knownSecrets.add(pair[1]);
+  }
+}
+
 // docs/09 §3 uses the same key families as S01. Treat IP as a word so "description" can survive.
 export function isSensitiveFixtureField(key: string, value: unknown): boolean {
   const normalized = fixtureKey(key).replace(/\d/gu, "");
@@ -39,7 +60,7 @@ export function isSensitiveFixtureField(key: string, value: unknown): boolean {
   return (
     credentialField.test(normalized) ||
     privateField.test(normalized) ||
-    /^(?:headers|requestheaders|responseheaders)$/u.test(normalized) ||
+    isFixtureHeaderEnvelope(key) ||
     /\bip(?:v[46])?\b/iu.test(words) ||
     /(?:last|login|client|remote|user)ip/u.test(normalized) ||
     (normalized === "users" &&
