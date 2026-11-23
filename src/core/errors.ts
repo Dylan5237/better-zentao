@@ -19,14 +19,18 @@ export type ErrorCode =
   | "CONFIG_MISSING";
 
 export class BztError extends Error {
+  public readonly code: ErrorCode;
+  public readonly details?: Readonly<Record<string, unknown>>;
   public readonly retryable: boolean;
 
   constructor(
-    public readonly code: ErrorCode,
+    code: ErrorCode,
     message: string,
-    public readonly details?: Readonly<Record<string, unknown>>,
+    details?: Readonly<Record<string, unknown>>,
   ) {
     super(message);
+    this.code = code;
+    this.details = details;
     this.name = "BztError";
     // docs/07 §2.4
     this.retryable = code === "ZENTAO_UNAVAILABLE" || code === "ZENTAO_TIMEOUT";

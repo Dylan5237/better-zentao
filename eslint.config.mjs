@@ -368,7 +368,7 @@ export default [
   { ignores: ["dist/**", "coverage/**"] },
   ...tseslint.configs.recommended,
   {
-    files: ["src/**/*.ts"],
+    files: ["src/**/*.ts", "scripts/**/*.ts"],
     languageOptions: {
       parserOptions: { projectService: true, tsconfigRootDir: basePath },
     },
@@ -417,6 +417,26 @@ export default [
         "process",
         ...nonFetchNetworkGlobals,
       ]),
+    },
+  },
+  {
+    files: ["scripts/**/*.ts"],
+    rules: {
+      "no-restricted-globals": restrictedGlobals(networkGlobals),
+      "import/no-restricted-paths": [
+        "error",
+        {
+          basePath,
+          zones: [
+            {
+              target: "./scripts",
+              from: "./src/api/internal",
+              except: ["./fixture-file.ts"],
+              message: "独立脱敏脚本只从夹具文件入口接收脱敏结果。",
+            },
+          ],
+        },
+      ],
     },
   },
   {

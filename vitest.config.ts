@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     include: ["test/{unit,contract,service,adapters}/**/*.test.ts"],
     coverage: {
-      include: ["src/**/*.ts"],
+      include: ["src/**/*.ts", "scripts/**/*.ts"],
       thresholds: {
         lines: 80,
         "src/{api,core/dto}/**/*.ts": { lines: 85 },
