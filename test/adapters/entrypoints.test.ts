@@ -97,7 +97,8 @@ it("WP-02 doctor 可加载有效的 BZT_CONFIG，日历未覆盖时告警但退�
     path,
     '{"version":1,"probe":{"productId":29},"calendar":{"holidays":[]}}',
   );
-  const webhook = "https://fixture.test/webhook?key=fixture-integration-key";
+  const webhook =
+    "https://fixture.test/cgi-bin/webhook/send?key=fixture-integration-key";
   const result = run(["doctor"], undefined, {
     ...credentialsEnv,
     BZT_CONFIG: path,

@@ -679,7 +679,7 @@ function checkBaseUrl(input: string): string {
     : null;
   if (url) {
     try {
-      if (!/\/api\.php\/*$/iu.test(decodeURIComponent(url.pathname)))
+      if (!/\/api\.php(?:\/|$)/iu.test(decodeURIComponent(url.pathname)))
         return url.href;
     } catch {
       // 非法百分号编码使用同一条脱敏提示。
@@ -699,8 +699,15 @@ export function readConfigEnvironment(env: ConfigEnv) {
   const baseUrl = env.ZENTAO_BASE_URL?.trim();
   const normalizedBaseUrl = baseUrl ? checkBaseUrl(baseUrl) : undefined;
   const webhook = env.BZT_WECOM_WEBHOOK?.trim();
-  if (webhook && (!hasAbsoluteHttpSyntax(webhook) || !URL.parse(webhook))) {
-    throw invalidConfig("企微机器人地址不合法。", ["BZT_WECOM_WEBHOOK"]);
+  if (webhook) {
+    const url = hasAbsoluteHttpSyntax(webhook) ? URL.parse(webhook) : null;
+    const keys = url?.searchParams.getAll("key") ?? [];
+    if (
+      url?.pathname !== "/cgi-bin/webhook/send" ||
+      keys.length !== 1 ||
+      !keys[0]?.trim()
+    )
+      throw invalidConfig("企微机器人地址不合法。", ["BZT_WECOM_WEBHOOK"]);
   }
   return {
     zentao: {
