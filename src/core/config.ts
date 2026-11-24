@@ -549,6 +549,13 @@ function scanConfigCredentials(input: unknown, known: readonly string[]): void {
     throw invalidConfig("配置中含疑似凭据或不安全字段。", fields);
 }
 
+export function assertNoConfigCredentials(
+  input: unknown,
+  env: ConfigEnv = {},
+): void {
+  scanConfigCredentials(input, knownCredentials(env));
+}
+
 function parseConfig<T>(
   schema: z.ZodType<T>,
   input: unknown,

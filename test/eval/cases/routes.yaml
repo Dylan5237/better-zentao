@@ -1,0 +1,514 @@
+# op_eval 表示准备步骤返回的真实操作 ID，回放时由执行器替换。
+# 产品甲、产品乙和文中的角色是假禅道数据。
+- id: "ROUTE-01-1"
+  kind: "route"
+  prompt: "帮我确认前端研发主管在禅道里对应哪个账号"
+  expectedTool: "resolve_context"
+  expectedArgs: { "people": ["研发主管（前端）"] }
+
+- id: "ROUTE-01-2"
+  kind: "route"
+  prompt: "前端设计主管的账号是啥？"
+  expectedTool: "resolve_context"
+  expectedArgs: { "people": ["设计主管（前端）"] }
+
+- id: "ROUTE-01-3"
+  kind: "route"
+  prompt: "禅道里产品甲编号是多少？"
+  expectedTool: "resolve_context"
+  expectedArgs: { "product": "产品甲" }
+
+- id: "ROUTE-01-4"
+  kind: "route"
+  prompt: "找下产品甲的权限模块"
+  expectedTool: "resolve_context"
+  expectedArgs: { "product": "产品甲", "module": "权限" }
+
+- id: "ROUTE-01-5"
+  kind: "route"
+  prompt: "把设计和研发这两个禅道账号都核对一下"
+  expectedTool: "resolve_context"
+  expectedArgs: { "people": ["alice", "bob"] }
+
+- id: "ROUTE-02-1"
+  kind: "route"
+  prompt: "我今天有啥要忙的？"
+  expectedTool: "get_my_work"
+  expectedArgs: {}
+
+- id: "ROUTE-02-2"
+  kind: "route"
+  prompt: "看看我上回之后新增的工作，先别标记已看"
+  expectedTool: "get_my_work"
+  expectedArgs: { "groups": ["new"], "since": "last_seen", "markSeen": false }
+
+- id: "ROUTE-02-3"
+  kind: "route"
+  prompt: "只看已经能开始的测试工作"
+  expectedTool: "get_my_work"
+  expectedArgs: { "groups": ["can_start"] }
+
+- id: "ROUTE-02-4"
+  kind: "route"
+  prompt: "我接下来三天需要处理哪些活？"
+  expectedTool: "get_my_work"
+  expectedArgs: { "groups": ["action"], "horizonDays": 3 }
+
+- id: "ROUTE-02-5"
+  kind: "route"
+  prompt: "我维护的需求和我提的需求都列一下"
+  expectedTool: "get_my_work"
+  expectedArgs: { "groups": ["maintained", "raised"] }
+
+- id: "ROUTE-03-1"
+  kind: "route"
+  prompt: "研发主管（前端）手里还有哪些逾期？"
+  expectedTool: "get_team_work"
+  expectedArgs: { "members": ["研发主管（前端）"], "view": "overdue" }
+
+- id: "ROUTE-03-2"
+  kind: "route"
+  prompt: "查设计主管（前端）即将到期的任务"
+  expectedTool: "get_team_work"
+  expectedArgs: { "members": ["设计主管（前端）"], "view": "due_soon" }
+
+- id: "ROUTE-03-3"
+  kind: "route"
+  prompt: "产品甲逾期活儿按需求汇总"
+  expectedTool: "get_team_work"
+  expectedArgs: { "product": "29", "view": "overdue", "groupBy": "story" }
+
+- id: "ROUTE-03-4"
+  kind: "route"
+  prompt: "给我看产品甲所有未完工的任务，按迭代分"
+  expectedTool: "get_team_work"
+  expectedArgs: { "product": "29", "view": "all_open", "groupBy": "execution" }
+
+- id: "ROUTE-03-5"
+  kind: "route"
+  prompt: "设计和研发这两位今天有哪些待做，按人分组"
+  expectedTool: "get_team_work"
+  expectedArgs:
+    { "members": ["alice", "bob"], "view": "all_open", "groupBy": "member" }
+
+- id: "ROUTE-04-1"
+  kind: "route"
+  prompt: "研发主管（前端）接下来两周怎么排的？"
+  expectedTool: "get_member_schedule"
+  expectedArgs: { "members": ["研发主管（前端）"], "weeks": 2 }
+
+- id: "ROUTE-04-2"
+  kind: "route"
+  prompt: "看看设计主管（前端）下周工作，按天列"
+  expectedTool: "get_member_schedule"
+  expectedArgs: { "members": ["设计主管（前端）"], "weeks": 1, "bucket": "day" }
+
+- id: "ROUTE-04-3"
+  kind: "route"
+  prompt: "给我个研发的三周排期网页"
+  expectedTool: "get_member_schedule"
+  expectedArgs: { "members": ["bob"], "weeks": 3, "format": "html" }
+
+- id: "ROUTE-04-4"
+  kind: "route"
+  prompt: "设计和研发两人的四周排期都看看"
+  expectedTool: "get_member_schedule"
+  expectedArgs: { "members": ["alice", "bob"], "weeks": 4 }
+
+- id: "ROUTE-04-5"
+  kind: "route"
+  prompt: "这活儿需要八小时，月底前做完，看看研发能不能排下"
+  expectedTool: "get_member_schedule"
+  expectedArgs:
+    {
+      "members": ["bob"],
+      "newTask": { "estimateHours": 8, "deadline": "2026-11-30" },
+    }
+
+- id: "ROUTE-05-1"
+  kind: "route"
+  prompt: "产品甲里面找标题带查询的需求"
+  expectedTool: "query_stories"
+  expectedArgs: { "product": "29", "keyword": "查询" }
+
+- id: "ROUTE-05-2"
+  kind: "route"
+  prompt: "我维护着哪些产品甲的需求？"
+  expectedTool: "query_stories"
+  expectedArgs: { "product": "29", "role": "maintainer" }
+
+- id: "ROUTE-05-3"
+  kind: "route"
+  prompt: "权限模块本月有哪些研发类需求？"
+  expectedTool: "query_stories"
+  expectedArgs:
+    {
+      "product": "29",
+      "module": "权限",
+      "month": "本月",
+      "category": "feature",
+    }
+
+- id: "ROUTE-05-4"
+  kind: "route"
+  prompt: "列三条我提出的产品甲需求"
+  expectedTool: "query_stories"
+  expectedArgs: { "product": "29", "role": "raised", "limit": 3 }
+
+- id: "ROUTE-05-5"
+  kind: "route"
+  prompt: "产品甲未关联的用户需求扫一下"
+  expectedTool: "query_stories"
+  expectedArgs: { "product": "29", "type": "requirement", "unlinked": true }
+
+- id: "ROUTE-06-1"
+  kind: "route"
+  prompt: "禅道需求三十一号做到哪了？"
+  expectedTool: "get_story_progress"
+  expectedArgs: { "storyId": 31 }
+
+- id: "ROUTE-06-2"
+  kind: "route"
+  prompt: "把三十一号的进度做成能转发的卡片"
+  expectedTool: "get_story_progress"
+  expectedArgs: { "storyId": 31, "format": "card" }
+
+- id: "ROUTE-06-3"
+  kind: "route"
+  prompt: "我来开发三十一号，先告诉我本次范围"
+  expectedTool: "get_story_progress"
+  expectedArgs: { "storyId": 31, "view": "dev" }
+
+- id: "ROUTE-06-4"
+  kind: "route"
+  prompt: "用户需求四十一号关联的研发项怎么做？"
+  expectedTool: "get_story_progress"
+  expectedArgs: { "requirementId": 41, "view": "dev" }
+
+- id: "ROUTE-06-5"
+  kind: "route"
+  prompt: "三十二号给我看完整进度和关联状态"
+  expectedTool: "get_story_progress"
+  expectedArgs: { "storyId": 32, "view": "full", "format": "data" }
+
+- id: "ROUTE-07-1"
+  kind: "route"
+  prompt: "产品甲权限模块，帮我拟个部门筛选研发需求，验收看列表是否只显示该部门"
+  expectedTool: "create_story"
+  expectedArgs:
+    {
+      "product": 29,
+      "module": 3,
+      "title": "增加筛选",
+      "spec": { "background": "数据较多", "scope": "按部门筛选" },
+      "verify": "显示对应部门的数据",
+      "category": "feature",
+    }
+
+- id: "ROUTE-07-2"
+  kind: "route"
+  prompt: "给产品甲的权限模块提个筛选草稿，数据有点多，按部门缩小范围，正确显示该部门就行"
+  expectedTool: "create_story"
+  expectedArgs:
+    {
+      "product": "产品甲",
+      "module": "权限",
+      "title": "增加筛选",
+      "spec": { "background": "数据较多", "scope": "按部门筛选" },
+      "verify": "显示对应部门的数据",
+    }
+
+- id: "ROUTE-07-3"
+  kind: "route"
+  prompt: "设计主管（前端）来维护这个筛选需求，产品甲权限模块，验收显示对应部门数据"
+  expectedTool: "create_story"
+  expectedArgs:
+    {
+      "product": 29,
+      "module": 3,
+      "title": "增加筛选",
+      "spec": { "background": "数据较多", "scope": "按部门筛选" },
+      "verify": "显示对应部门的数据",
+      "maintainer": "设计主管（前端）",
+    }
+
+- id: "ROUTE-07-4"
+  kind: "route"
+  prompt: "产品甲权限模块加部门筛选，筛选后展示所属部门数据。记录为会上提的原话"
+  expectedTool: "create_story"
+  expectedArgs:
+    {
+      "product": 29,
+      "module": 3,
+      "title": "增加筛选",
+      "spec": { "background": "数据较多", "scope": "按部门筛选" },
+      "verify": "显示对应部门的数据",
+      "intake":
+        {
+          "channel": "meeting",
+          "rawText": "产品甲权限模块加部门筛选，筛选后展示所属部门数据。",
+        },
+    }
+
+- id: "ROUTE-07-5"
+  kind: "route"
+  prompt: "权限模块提个优先级二的部门筛选，验收按对应部门展示，产品甲"
+  expectedTool: "create_story"
+  expectedArgs:
+    {
+      "product": 29,
+      "module": 3,
+      "title": "增加筛选",
+      "spec": { "background": "数据较多", "scope": "按部门筛选" },
+      "verify": "显示对应部门的数据",
+      "pri": 2,
+    }
+
+- id: "ROUTE-08-1"
+  kind: "route"
+  prompt: "把表里这行部门筛选需求导入产品甲权限模块，先列预览"
+  expectedTool: "import_stories"
+  expectedArgs:
+    {
+      "source":
+        {
+          "kind": "table",
+          "rows":
+            [
+              {
+                "product": 29,
+                "module": 3,
+                "title": "增加筛选",
+                "spec": { "background": "数据较多", "scope": "按部门筛选" },
+                "verify": "显示对应部门的数据",
+              },
+            ],
+        },
+    }
+
+- id: "ROUTE-08-2"
+  kind: "route"
+  prompt: "批量登记这些需求，先干跑看看，先别写"
+  expectedTool: "import_stories"
+  expectedArgs:
+    {
+      "source":
+        {
+          "kind": "table",
+          "rows":
+            [
+              {
+                "product": 29,
+                "module": 3,
+                "title": "增加筛选",
+                "spec": { "background": "数据较多", "scope": "按部门筛选" },
+                "verify": "显示对应部门的数据",
+              },
+            ],
+        },
+      "dryRun": true,
+    }
+
+- id: "ROUTE-08-3"
+  kind: "route"
+  prompt: "批量提两条，产品甲权限模块的部门筛选和导出，各自验收照表"
+  expectedTool: "import_stories"
+  expectedArgs:
+    {
+      "source":
+        {
+          "kind": "table",
+          "rows":
+            [
+              {
+                "product": 29,
+                "module": 3,
+                "title": "增加筛选",
+                "spec": { "background": "数据较多", "scope": "按部门筛选" },
+                "verify": "显示对应部门的数据",
+              },
+              {
+                "product": 29,
+                "module": 3,
+                "title": "增加导出",
+                "spec": { "background": "汇总", "scope": "导出结果" },
+                "verify": "下载筛选结果",
+              },
+            ],
+        },
+    }
+
+- id: "ROUTE-08-4"
+  kind: "route"
+  prompt: "表里产品和模块相同，统一默认产品甲权限模块再批量预览"
+  expectedTool: "import_stories"
+  expectedArgs:
+    {
+      "source":
+        {
+          "kind": "table",
+          "rows":
+            [
+              {
+                "title": "增加筛选",
+                "spec": { "background": "数据较多", "scope": "按部门筛选" },
+                "verify": "显示对应部门的数据",
+              },
+            ],
+        },
+      "defaults": { "product": 29, "module": 3 },
+    }
+
+- id: "ROUTE-08-5"
+  kind: "route"
+  prompt: "导入这条前端需求，原话从口头反馈留档，先帮我预览"
+  expectedTool: "import_stories"
+  expectedArgs:
+    {
+      "source":
+        {
+          "kind": "table",
+          "rows":
+            [
+              {
+                "product": 29,
+                "module": 3,
+                "title": "增加筛选",
+                "spec": { "background": "数据较多", "scope": "按部门筛选" },
+                "verify": "显示对应部门的数据",
+                "intake": { "rawText": "部门筛选", "channel": "verbal" },
+              },
+            ],
+        },
+    }
+
+- id: "ROUTE-09-1"
+  kind: "route"
+  prompt: "把需求三十一号指派给设计主管（前端）"
+  expectedTool: "assign_story"
+  expectedArgs: { "storyIds": [31], "to": "设计主管（前端）" }
+
+- id: "ROUTE-09-2"
+  kind: "route"
+  prompt: "把三十一号转给研发主管（前端）看看，备注协助排期"
+  expectedTool: "assign_story"
+  expectedArgs:
+    { "storyIds": [31], "to": "研发主管（前端）", "comment": "协助排期" }
+
+- id: "ROUTE-09-3"
+  kind: "route"
+  prompt: "给研发账号 bob 分三十二号，别发通知"
+  expectedTool: "assign_story"
+  expectedArgs: { "storyIds": [32], "to": "bob", "notify": false }
+
+- id: "ROUTE-09-4"
+  kind: "route"
+  prompt: "三十一和三十二都交给 alice"
+  expectedTool: "assign_story"
+  expectedArgs: { "storyIds": [31, 32], "to": "alice" }
+
+- id: "ROUTE-09-5"
+  kind: "route"
+  prompt: "三十一号让设计接手，记一句补齐范围，并通知"
+  expectedTool: "assign_story"
+  expectedArgs:
+    { "storyIds": [31], "to": "设计", "comment": "补齐范围", "notify": true }
+
+- id: "ROUTE-10-1"
+  kind: "route"
+  prompt: "看产品甲的流程有哪些问题"
+  expectedTool: "scan_workflow_risks"
+  expectedArgs: { "scope": { "product": "29" } }
+
+- id: "ROUTE-10-2"
+  kind: "route"
+  prompt: "产品甲只查研发完成没接测试的 R02"
+  expectedTool: "scan_workflow_risks"
+  expectedArgs: { "scope": { "product": "29" }, "rules": ["R02"] }
+
+- id: "ROUTE-10-3"
+  kind: "route"
+  prompt: "查产品甲权限模块有哪些中度及以上的风险"
+  expectedTool: "scan_workflow_risks"
+  expectedArgs:
+    { "scope": { "product": "29", "module": "权限" }, "minSeverity": "medium" }
+
+- id: "ROUTE-10-4"
+  kind: "route"
+  prompt: "本月产品甲风险按负责人归一下"
+  expectedTool: "scan_workflow_risks"
+  expectedArgs:
+    { "scope": { "product": "29", "month": "本月" }, "groupBy": "owner" }
+
+- id: "ROUTE-10-5"
+  kind: "route"
+  prompt: "我自己的产品甲风险按需求分组看看"
+  expectedTool: "scan_workflow_risks"
+  expectedArgs:
+    { "scope": { "product": "29", "mine": true }, "groupBy": "story" }
+
+- id: "ROUTE-11-1"
+  kind: "route"
+  prompt: "这条我自己维护的筛选草稿确认创建"
+  expectedTool: "confirm_operation"
+  expectedArgs: { "opId": "op_eval" }
+  setup: "w1"
+
+- id: "ROUTE-11-2"
+  kind: "route"
+  prompt: "我看完上轮批量需求预览了，同意执行"
+  expectedTool: "confirm_operation"
+  expectedArgs: { "opId": "op_eval", "previewAck": true }
+  setup: "w2"
+
+- id: "ROUTE-11-3"
+  kind: "route"
+  prompt: "上次操作预览我同意了，请按这个回执继续"
+  expectedTool: "confirm_operation"
+  expectedArgs: { "opId": "op_eval", "previewAck": true, "resume": true }
+  setup: "w2"
+
+- id: "ROUTE-11-4"
+  kind: "route"
+  prompt: "好，批量按上轮预览执行，所有步骤都保留"
+  expectedTool: "confirm_operation"
+  expectedArgs: { "opId": "op_eval", "previewAck": true, "excludeSteps": [] }
+  setup: "w2"
+
+- id: "ROUTE-11-5"
+  kind: "route"
+  prompt: "我确认刚才自己名下的创建预案，一个步骤也不跳过"
+  expectedTool: "confirm_operation"
+  expectedArgs: { "opId": "op_eval", "excludeSteps": [] }
+  setup: "w1"
+
+- id: "ROUTE-12-1"
+  kind: "route"
+  prompt: "看刚才那个拟稿操作的回执"
+  expectedTool: "get_operation"
+  expectedArgs: { "opId": "op_eval" }
+  setup: "w1"
+
+- id: "ROUTE-12-2"
+  kind: "route"
+  prompt: "最近一个操作的回执呢？"
+  expectedTool: "get_operation"
+  expectedArgs: { "recent": 1 }
+
+- id: "ROUTE-12-3"
+  kind: "route"
+  prompt: "帮我找最近三次操作记录"
+  expectedTool: "get_operation"
+  expectedArgs: { "recent": 3 }
+
+- id: "ROUTE-12-4"
+  kind: "route"
+  prompt: "给我看一下我的操作回执列表"
+  expectedTool: "get_operation"
+  expectedArgs: {}
+
+- id: "ROUTE-12-5"
+  kind: "route"
+  prompt: "把最近五条操作结果列出来"
+  expectedTool: "get_operation"
+  expectedArgs: { "recent": 5 }

@@ -1,0 +1,57 @@
+# docs/09 §6 P1 对话评测。
+- id: "EXPR-SCOPE"
+  kind: "expression"
+  check: "scope"
+  prompt: "发我产品甲截至现在的未完任务口径。"
+  expectedTool: "get_team_work"
+  expectedArgs: { "product": "29", "view": "all_open" }
+  replyHas: ["产品甲", "数据时间"]
+
+- id: "EXPR-PARTIAL"
+  kind: "expression"
+  check: "partial"
+  prompt: "产品乙这个列表数据不全，还能说都完成了吗？"
+  expectedTool: "query_stories"
+  expectedArgs: { "product": "30" }
+  replyHas: ["产品乙", "数据时间", "未读全"]
+  replyLacks: ["没有逾期", "全部完成"]
+
+- id: "EXPR-INFERRED"
+  kind: "expression"
+  check: "inferred"
+  prompt: "三十二号证据缺一截，给个带依据的进度卡片。"
+  expectedTool: "get_story_progress"
+  expectedArgs: { "storyId": 32, "format": "card" }
+  replyHas: ["数据时间", "推测", "依据"]
+
+- id: "EXPR-PREVIEW"
+  kind: "expression"
+  check: "preview"
+  prompt: "先完整预览部门筛选这一行怎么批量导入，我看过再说。"
+  expectedTool: "import_stories"
+  expectedArgs:
+    {
+      "source":
+        {
+          "kind": "table",
+          "rows":
+            [
+              {
+                "product": 29,
+                "module": 3,
+                "title": "增加筛选",
+                "spec": { "background": "数据较多", "scope": "按部门筛选" },
+                "verify": "显示对应部门的数据",
+              },
+            ],
+        },
+    }
+  replyHas: ["预览", "影响", "确认"]
+
+- id: "EXPR-MAINTAINED"
+  kind: "expression"
+  check: "maintained"
+  prompt: "先看我维护的需求，如果有正文角色标签没读，提醒我怎么核对。"
+  expectedTool: "get_my_work"
+  expectedArgs: { "groups": ["maintained"] }
+  replyHas: ["正文角色标签", "query_stories", "maintainer"]

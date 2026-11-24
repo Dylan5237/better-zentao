@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "better-zentao": {
+      "command": "bzt",
+      "args": ["mcp"],
+      "env": { "BZT_CONFIG": "path/to/team.json" }
+    }
+  }
+}

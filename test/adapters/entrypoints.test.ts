@@ -65,6 +65,24 @@ it("WP-00 编译后的 bzt --help 可用", () => {
   expect(result.stdout).toContain("bzt doctor");
   expect(result.stdout).toContain("bzt probe capture");
   expect(result.stdout).toContain("bzt mcp");
+  expect(result.stdout).toContain("bzt install-agent");
+});
+
+it.each([
+  ["codex", ".codex"],
+  ["claude", ".claude"],
+  ["gemini", ".gemini"],
+])("WP-21 编译入口可安装 %s Skill", (agent, dir) => {
+  expect(run(["install-agent", agent], undefined, credentialsEnv).status).toBe(
+    0,
+  );
+  expect(
+    existsSync(join(homeDir, dir, "skills", "better-zentao", "SKILL.md")),
+  ).toBe(true);
+});
+
+it("WP-21 编译入口拒绝同时传入两种 Agent 参数", () => {
+  expect(run(["install-agent", "codex", "--agent", "gemini"]).status).toBe(2);
 });
 
 it("WP-00 错误命令只写 stderr 且不复述参数", () => {
