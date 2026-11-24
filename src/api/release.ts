@@ -13,6 +13,7 @@ export async function listReleases(
     {
       pathTemplate: "/api.php/v1/products/{id}/releases",
       params: { id: productId },
+      objectId: productId,
       schemaFields: ["releases", "total", "pager"],
     },
     releases,

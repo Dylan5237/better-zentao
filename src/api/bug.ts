@@ -14,6 +14,7 @@ export async function listProductBugs(
     {
       pathTemplate: "/api.php/v1/products/{id}/bugs",
       params: { id: productId },
+      objectId: productId,
       query: { status: "unclosed" },
       schemaFields: ["bugs", "total", "pager"],
     },
@@ -40,6 +41,7 @@ export async function listProjectBugs(
     {
       pathTemplate: "/api.php/v1/projects/{id}/bugs",
       params: { id: projectId },
+      objectId: projectId,
       schemaFields: ["bugs", "total", "pager"],
     },
     {

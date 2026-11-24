@@ -27,6 +27,7 @@ export async function getInstanceConfig(
     {
       pathTemplate: "/index.php",
       query: { mode: "getconfig" },
+      schemaFields: Object.keys(instanceConfigDto.in.shape),
     },
     instanceConfigDto,
   );
@@ -36,7 +37,10 @@ export async function getCurrentUser(
   client: ZentaoReadClient,
 ): Promise<CurrentUser> {
   return getReadClient(client).http.read(
-    { pathTemplate: "/api.php/v1/user" },
+    {
+      pathTemplate: "/api.php/v1/user",
+      schemaFields: Object.keys(currentUserDto.in.shape),
+    },
     currentUserDto,
   );
 }
@@ -45,7 +49,10 @@ export async function getRequiredFields(
   client: ZentaoReadClient,
 ): Promise<RequiredFieldsMap> {
   return getReadClient(client).http.read(
-    { pathTemplate: "/api.php/v1/requiredFields" },
+    {
+      pathTemplate: "/api.php/v1/requiredFields",
+      schemaFields: Object.keys(requiredFieldsDto.in.shape),
+    },
     requiredFieldsDto,
   );
 }
@@ -54,7 +61,10 @@ export async function getDepartments(
   client: ZentaoReadClient,
 ): Promise<DepartmentNode[]> {
   return getReadClient(client).http.read(
-    { pathTemplate: "/api.php/v1/departments" },
+    {
+      pathTemplate: "/api.php/v1/departments",
+      schemaFields: ["id", "name", "parent", "items"],
+    },
     z.array(departmentNodeDto),
   );
 }
@@ -64,7 +74,10 @@ export async function listUsers(
 ): Promise<{ items: User[]; truncated: boolean }> {
   return paginate(
     getReadClient(client).http,
-    { pathTemplate: "/api.php/v2/users" },
+    {
+      pathTemplate: "/api.php/v2/users",
+      schemaFields: ["users", "total", "pager"],
+    },
     {
       mode: "v2",
       pageSize: 3000,
@@ -83,6 +96,7 @@ export async function listUsersByDepartment(
       pathTemplate: "/api.php/v2/company/browse",
       objectId: departmentId,
       query: { param: departmentId, type: "bydept" },
+      schemaFields: ["users", "total", "pager"],
     },
     {
       mode: "v2",

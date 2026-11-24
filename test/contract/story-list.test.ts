@@ -56,6 +56,17 @@ it("Q3 未关闭口径过滤掉源响应里的关闭项", async () => {
   expect(page.items.some(({ status }) => status === "closed")).toBe(false);
 });
 
+it.each(["", " ", "done"])(
+  "Q3 研发需求拒绝无效查询状态 %j 且不会发请求",
+  async (status) => {
+    const { client, fetch } = mockReadFixture("product-stories");
+    // @ts-expect-error 模拟未经 TypeScript 检查的调用方。
+    const result = listProductStories(client, 42, status);
+    await expect(result).rejects.toHaveProperty("code", "INVALID_INPUT");
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
+
 it("Q3 研发需求空页且 total 仍为正数时标记截断", async () => {
   const { client } = mockReadFixture("product-stories.empty", {
     path: "/api.php/v1/products/42/stories",

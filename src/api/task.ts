@@ -35,6 +35,7 @@ export async function listExecutionTasks(
     {
       pathTemplate: "/api.php/v1/executions/{id}/tasks",
       params: { id: executionId },
+      objectId: executionId,
       query: { status },
       schemaFields: ["tasks", "total", "pager"],
     },
@@ -56,6 +57,7 @@ export async function getTaskDetail(
     {
       pathTemplate: "/api.php/v1/tasks/{id}",
       params: { id: taskId },
+      objectId: taskId,
       schemaFields: Object.keys(schema.in.shape),
     },
     schema,

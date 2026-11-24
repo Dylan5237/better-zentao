@@ -18,7 +18,10 @@ export function readFixture(name: string) {
   return fixtureSchema.parse(JSON.parse(readFileSync(url, "utf8")));
 }
 
-export function mockReadClient(respond: (url: URL) => Response) {
+export function mockReadClient(
+  respond: (url: URL) => Response,
+  logSink: (line: string) => void = () => undefined,
+) {
   const fetch = vi.fn<typeof globalThis.fetch>(async (input, request) => {
     const url = new URL(String(input));
     if (
@@ -51,7 +54,7 @@ export function mockReadClient(respond: (url: URL) => Response) {
     account: "acct_fixture",
     password: "offline-contract-password",
     clock: () => 0,
-    logSink: () => undefined,
+    logSink,
   });
   return { client, fetch };
 }
@@ -60,6 +63,7 @@ interface FixtureOptions {
   readonly transform?: (body: unknown) => unknown;
   readonly path?: string;
   readonly query?: Readonly<Record<string, string | number>>;
+  readonly logSink?: (line: string) => void;
 }
 
 export function mockReadFixture(name: string, options: FixtureOptions = {}) {
@@ -81,7 +85,7 @@ export function mockReadFixture(name: string, options: FixtureOptions = {}) {
       ? options.transform(fixture.body)
       : fixture.body;
     return Response.json(body, { status: fixture.status });
-  });
+  }, options.logSink);
 }
 
 afterEach(() => vi.unstubAllGlobals());

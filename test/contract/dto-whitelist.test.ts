@@ -37,6 +37,8 @@ import { mockReadFixture, readFixture } from "./read-fixture.ts";
 interface Endpoint {
   readonly path: string;
   readonly query?: Readonly<Record<string, string | number>>;
+  readonly objectId?: number;
+  readonly schemaField: string;
   readonly call: (client: ZentaoReadClient) => Promise<object>;
 }
 
@@ -44,106 +46,163 @@ const endpoints: Readonly<Record<string, Endpoint>> = {
   "instance-config": {
     path: "/index.php",
     query: { mode: "getconfig" },
+    schemaField: "URAndSR",
     call: getInstanceConfig,
   },
-  "current-user": { path: "/api.php/v1/user", call: getCurrentUser },
+  "current-user": {
+    path: "/api.php/v1/user",
+    schemaField: "profile",
+    call: getCurrentUser,
+  },
   "required-fields": {
     path: "/api.php/v1/requiredFields",
+    schemaField: "story",
     call: getRequiredFields,
   },
-  departments: { path: "/api.php/v1/departments", call: getDepartments },
-  users: { path: "/api.php/v2/users", query: { pageID: 1 }, call: listUsers },
+  departments: {
+    path: "/api.php/v1/departments",
+    schemaField: "id",
+    call: getDepartments,
+  },
+  users: {
+    path: "/api.php/v2/users",
+    query: { pageID: 1 },
+    schemaField: "users",
+    call: listUsers,
+  },
   "users-by-department": {
     path: "/api.php/v2/company/browse",
     query: { param: 11111311, type: "bydept" },
+    objectId: 11111311,
+    schemaField: "users",
     call: (client) => listUsersByDepartment(client, 11111311),
   },
   "my-work": {
     path: "/api.php/v2/my/work",
     query: { mode: "task", browseType: "assignedTo" },
+    schemaField: "tasks",
     call: (client) =>
       listMyWork(client, { mode: "task", browseType: "assignedTo" }),
   },
   "my-contribute": {
     path: "/api.php/v2/my/contribute",
     query: { mode: "story", browseType: "openedBy" },
+    schemaField: "stories",
     call: (client) =>
       listMyContributions(client, { mode: "story", browseType: "openedBy" }),
   },
   products: {
     path: "/api.php/v1/products",
     query: { page: 1 },
+    schemaField: "products",
     call: listProducts,
   },
   "product-modules": {
     path: "/api.php/v1/products/42",
     query: { fields: "moduleOptionMenu" },
+    objectId: 42,
+    schemaField: "id",
     call: (client) => getProductModules(client, 42),
   },
   "product-plans": {
     path: "/api.php/v1/products/42/plans",
+    objectId: 42,
+    schemaField: "plans",
     call: (client) => listProductPlans(client, 42),
   },
   "plan-detail": {
     path: "/api.php/v2/productplan/view",
     query: { planID: 707 },
+    objectId: 707,
+    schemaField: "plan",
     call: (client) => getPlanDetail(client, 707),
   },
   "product-stories": {
     path: "/api.php/v1/products/42/stories",
     query: { status: "all" },
+    objectId: 42,
+    schemaField: "stories",
     call: (client) => listProductStories(client, 42),
   },
   "product-requirements": {
     path: "/api.php/v2/product/browse",
     query: { productID: 42, storyType: "requirement" },
+    objectId: 42,
+    schemaField: "stories",
     call: (client) => listProductRequirements(client, 42),
   },
   "story-detail": {
     path: "/api.php/v1/stories/4837",
+    objectId: 4837,
+    schemaField: "id",
     call: (client) => getStoryDetail(client, 4837),
   },
   "story-detail-v2": {
     path: "/api.php/v2/story/view",
     query: { storyID: 4837 },
+    objectId: 4837,
+    schemaField: "story",
     call: (client) => getStoryDetailV2(client, 4837),
   },
   "requirement-detail": {
     path: "/api.php/v2/requirement/view",
     query: { storyID: 4845 },
+    objectId: 4845,
+    schemaField: "story",
     call: (client) => getRequirementDetail(client, 4845),
   },
-  projects: { path: "/api.php/v1/projects", call: listProjects },
-  "executions-v2": { path: "/api.php/v2/executions", call: listExecutions },
+  projects: {
+    path: "/api.php/v1/projects",
+    schemaField: "projects",
+    call: listProjects,
+  },
+  "executions-v2": {
+    path: "/api.php/v2/executions",
+    schemaField: "executions",
+    call: listExecutions,
+  },
   "executions-v1": {
     path: "/api.php/v1/executions",
+    schemaField: "executions",
     call: listExecutionsIncludingClosed,
   },
   "execution-tasks": {
     path: "/api.php/v1/executions/189/tasks",
     query: { status: "all" },
+    objectId: 189,
+    schemaField: "tasks",
     call: (client) => listExecutionTasks(client, 189),
   },
   "task-detail": {
     path: "/api.php/v1/tasks/4324",
+    objectId: 4324,
+    schemaField: "id",
     call: (client) => getTaskDetail(client, 4324),
   },
   "product-bugs": {
     path: "/api.php/v1/products/42/bugs",
     query: { status: "unclosed" },
+    objectId: 42,
+    schemaField: "bugs",
     call: (client) => listProductBugs(client, 42),
   },
   "project-bugs": {
     path: "/api.php/v1/projects/20/bugs",
+    objectId: 20,
+    schemaField: "bugs",
     call: (client) => listProjectBugs(client, 20),
   },
   releases: {
     path: "/api.php/v1/products/42/releases",
+    objectId: 42,
+    schemaField: "releases",
     call: (client) => listReleases(client, 42),
   },
   "story-create-metadata": {
     path: "/api.php/v2/story/create",
     query: { productID: 42 },
+    objectId: 42,
+    schemaField: "fields",
     call: (client) => getStoryCreateMetadata(client, 42),
   },
 };
@@ -182,10 +241,29 @@ function dtoValues(result: object): readonly object[] {
 const fixtureNames = readdirSync(
   new URL("../fixtures/zentao-22.6/", import.meta.url),
 );
+const idEndpoints = Object.entries(endpoints).filter(
+  ([, endpoint]) => endpoint.objectId !== undefined,
+);
+
+function fixtureFor(endpoint: string): string {
+  return fixtureNames.includes(`${endpoint}.json`)
+    ? endpoint
+    : `${endpoint}.empty`;
+}
+
+function malformedField(body: unknown, field: string): unknown {
+  const invalid = { [secrets.token]: secrets.password };
+  if (Array.isArray(body)) {
+    const rows = z.array(record).min(1).parse(body);
+    return [{ ...rows[0], [field]: invalid }, ...rows.slice(1)];
+  }
+  return { ...record.parse(body), [field]: invalid };
+}
 
 describe("Q1/S01 WP-04 真实夹具门面白名单", () => {
   it("登记 26 个端点并使用全部 39 份真实夹具", () => {
     expect(Object.keys(endpoints)).toHaveLength(26);
+    expect(idEndpoints).toHaveLength(15);
     expect(fixtureNames).toHaveLength(39);
     expect(
       new Set(fixtureNames.map((name) => readFixture(name).endpoint)),
@@ -225,22 +303,46 @@ describe("Q1/S01 WP-04 真实夹具门面白名单", () => {
     },
   );
 
-  it("关键字段畸形只报安全的结构错误", async () => {
-    const { client } = mockReadFixture("story-detail", {
-      transform: (body) => ({
-        ...record.parse(body),
-        id: { hidden: secrets.password },
-      }),
-    });
-    const outcome = await getStoryDetail(client, 4837).catch(
-      (error: unknown) => error,
-    );
-    expect(outcome).toMatchObject({
-      code: "ZENTAO_SCHEMA_MISMATCH",
-      details: { fields: ["id"] },
-    });
-    assertNoSensitiveData(outcome, Object.values(secrets));
-  });
+  it.each(idEndpoints)(
+    "P1-1 %s 记录只读请求的对象 ID",
+    async (name, endpoint) => {
+      const filename = fixtureFor(name);
+      const logs: string[] = [];
+      const { client } = mockReadFixture(filename, {
+        path: endpoint.path,
+        query: endpoint.query,
+        logSink: (line) => logs.push(line),
+      });
+      await endpoint.call(client);
+      const entries = logs.map((line) => record.parse(JSON.parse(line)));
+      expect(entries.map(({ method }) => method)).toEqual(["POST", "GET"]);
+      expect(entries[0]).not.toHaveProperty("objectId");
+      expect(entries[1]).toMatchObject({
+        objectId: endpoint.objectId,
+        status: readFixture(filename).status,
+      });
+      assertNoSensitiveData(logs, Object.values(secrets));
+    },
+  );
+
+  it.each(Object.entries(endpoints))(
+    "P1-1 %s 结构漂移只报告白名单字段",
+    async (name, endpoint) => {
+      const { client } = mockReadFixture(fixtureFor(name), {
+        path: endpoint.path,
+        query: endpoint.query,
+        transform: (body) => malformedField(body, endpoint.schemaField),
+      });
+      const outcome = await endpoint
+        .call(client)
+        .catch((error: unknown) => error);
+      expect(outcome).toMatchObject({
+        code: "ZENTAO_SCHEMA_MISMATCH",
+        details: { fields: [endpoint.schemaField] },
+      });
+      assertNoSensitiveData(outcome, Object.values(secrets));
+    },
+  );
 
   it("Q12 保留任务原始类型供后续阶段识别", async () => {
     const { client } = mockReadFixture("execution-tasks");

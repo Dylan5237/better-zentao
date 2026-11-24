@@ -28,6 +28,7 @@ export async function listProductPlans(
       pathTemplate: "/api.php/v1/products/{id}/plans",
       params: { id: productId },
       objectId: productId,
+      schemaFields: ["plans", "total", "pager"],
     },
     {
       mode: "v1",
@@ -53,6 +54,7 @@ export async function getPlanDetail(
       pathTemplate: "/api.php/v2/productplan/view",
       query: { planID: planId },
       objectId: planId,
+      schemaFields: Object.keys(schema.in.shape),
     },
     schema,
   );

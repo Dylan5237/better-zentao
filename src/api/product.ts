@@ -12,7 +12,10 @@ export async function listProducts(
 ): Promise<{ items: Product[]; truncated: boolean }> {
   return paginate(
     getReadClient(client).http,
-    { pathTemplate: "/api.php/v1/products" },
+    {
+      pathTemplate: "/api.php/v1/products",
+      schemaFields: ["products", "total", "pager"],
+    },
     {
       mode: "v1",
       pageSize: 100,
@@ -35,6 +38,7 @@ export async function getProductModules(
       params: { id: productId },
       objectId: productId,
       query: { fields: "moduleOptionMenu" },
+      schemaFields: Object.keys(productModuleMenuSchema.in.shape),
     },
     schema,
   );

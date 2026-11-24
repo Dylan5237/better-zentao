@@ -188,7 +188,9 @@ function decodeJson<T>(
   if (decoded?.success) return decoded.data;
   const fields = new Set<string>();
   for (const issue of decoded?.error?.issues ?? []) {
-    const field = issue.path[0];
+    const [first, second] = issue.path;
+    const field =
+      Array.isArray(payload) && typeof first === "number" ? second : first;
     if (typeof field === "string" && schemaFields?.includes(field))
       fields.add(field);
   }

@@ -16,6 +16,7 @@ export async function listProductRequirements(
       pathTemplate: "/api.php/v2/product/browse",
       query: { productID: productId, storyType: "requirement" },
       objectId: productId,
+      schemaFields: ["stories", "total", "pager"],
     },
     {
       mode: "v2",
@@ -40,6 +41,7 @@ export function getRequirementDetail(
       pathTemplate: "/api.php/v2/requirement/view",
       query: { storyID: requirementId },
       objectId: requirementId,
+      schemaFields: ["story", "actions", "bugs", "relations"],
     },
     requirementDetailDtoFor(timezone),
   );
