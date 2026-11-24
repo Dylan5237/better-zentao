@@ -17,8 +17,8 @@ const help = `用法
   bzt --help
   bzt doctor [--live] [--config 路径] [--product ID]    环境自检
   bzt probe capture [--out 目录] [--config 路径] [--product ID]    只读采集脱敏夹具
-  bzt probe write <能力> --product 29 [--config 路径] [--assignee 测试账号] [--out 目录]
-  bzt probe write --all --product 29 [--config 路径] [--assignee 测试账号] [--out 目录]
+  bzt probe write <能力> --product 29 [--config 路径] [--assignee 测试账号] [--visible-tag] [--out 目录]
+  bzt probe write --all --product 29 [--config 路径] [--assignee 测试账号] [--visible-tag] [--out 目录]
   bzt probe cleanup --product 29 --story ID [--config 路径]    关闭 #29 测试需求
   bzt mcp       启动 stdio 服务
 `;
@@ -44,6 +44,7 @@ export async function runCli(
         live: { type: "boolean" },
         story: { type: "string" },
         assignee: { type: "string" },
+        "visible-tag": { type: "boolean" },
         all: { type: "boolean" },
       },
       allowPositionals: true,
@@ -64,7 +65,10 @@ export async function runCli(
     positionals.length > (write ? 3 : probe ? 2 : 1) ||
     (!probe && command === "probe") ||
     (!capture && !write && values.out !== undefined) ||
-    (!write && (values.assignee !== undefined || values.all !== undefined)) ||
+    (!write &&
+      (values.assignee !== undefined ||
+        values.all !== undefined ||
+        values["visible-tag"] !== undefined)) ||
     (!cleanup && values.story !== undefined) ||
     (command !== "doctor" && values.live !== undefined)
   ) {
@@ -124,6 +128,7 @@ export async function runCli(
             capability,
             all: values.all,
             assignee: values.assignee,
+            visibleTag: values["visible-tag"],
             out: values.out,
           },
     });

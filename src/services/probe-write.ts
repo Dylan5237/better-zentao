@@ -18,7 +18,11 @@ import { loadConfig, PROBE_PRODUCT_ID } from "../core/config.ts";
 import type { ConfigEnv } from "../core/config.ts";
 import type { StoryDetail } from "../core/dto/story.ts";
 import { BztError } from "../core/errors.ts";
-import { buildStoryHtmlSpec } from "../domain/story-html-spec.ts";
+import {
+  buildStoryHtmlSpec,
+  parseStoryRoleTag,
+} from "../domain/story-html-spec.ts";
+import type { StoryRoleTagFormat } from "../domain/story-html-spec.ts";
 
 const storyProbes = [
   "story.create",
@@ -45,6 +49,7 @@ type WriteCli = {
   readonly capability?: string;
   readonly all?: boolean;
   readonly assignee?: string;
+  readonly visibleTag?: boolean;
   readonly out?: string;
 };
 type CleanupCli = {
@@ -117,14 +122,57 @@ function errorCode(error: unknown): string {
   return error instanceof BztError ? error.code : "ZENTAO_UNAVAILABLE";
 }
 
-function draftMatches(story: StoryDetail, expected: ProbeDraft) {
+function unwrapVisibleFooter(footer: string): string {
+  const trimBreaks = (value: string) =>
+    value
+      .trim()
+      .replace(/^(?:<br\s*\/?>\s*)+|(?:\s*<br\s*\/?>)+$/giu, "")
+      .trim();
+  const wrapper =
+    /^<(p|div|span)(?=[\s>])(?:[^"'<>]|"[^"]*"|'[^']*')*>([\s\S]*?)<\/\1\s*>$/iu;
+  const unwrap = (value: string) =>
+    trimBreaks(wrapper.exec(value)?.[2] ?? value);
+  return unwrap(unwrap(trimBreaks(footer)));
+}
+
+function storySpecReadback(
+  actual: string | null | undefined,
+  expected: string,
+  format: StoryRoleTagFormat,
+): NonNullable<Attempt["readback"]> {
   const normalize = (html: string) => html.replace(/\r\n?/gu, "\n").trim();
-  const roleComment = /<!-- bzt:v1 [^<>]+ -->/u.exec(expected.spec)?.[0];
-  const spec = normalize(story.spec ?? "");
-  const roleTag = roleComment !== undefined && spec.includes(roleComment);
-  const expectedBody = normalize(expected.spec.replace(roleComment ?? "", ""));
-  const htmlStructure =
-    normalize(spec.replace(roleComment ?? "", "")) === expectedBody;
+  // 构造器把角色标签单独写在正文末行。只容许该页脚的包装变化。
+  const expectedBody = normalize(expected.slice(0, expected.lastIndexOf("\n")));
+  const spec = normalize(actual ?? "");
+  if (!spec.startsWith(expectedBody))
+    return { htmlStructure: false, roleTag: false };
+  const footer = spec.slice(expectedBody.length).trim();
+  if (footer === "") return { htmlStructure: true, roleTag: false };
+
+  const comment = /^<!--\s*bzt:v1\s+[^<>]+-->$/u.test(footer);
+  const fragment = comment ? footer : unwrapVisibleFooter(footer);
+  const returned =
+    comment || /^\[bzt:v1\s+([^[\]\r\n<>]*)\]$/u.test(fragment)
+      ? parseStoryRoleTag(fragment)
+      : undefined;
+  const requested = parseStoryRoleTag(expected);
+  return {
+    htmlStructure: returned !== undefined,
+    roleTag:
+      (comment ? "comment" : "visible") === format &&
+      returned !== undefined &&
+      returned.maintainer === requested?.maintainer &&
+      returned.receiver === requested?.receiver &&
+      returned.intake === requested?.intake,
+  };
+}
+
+function draftMatches(
+  story: StoryDetail,
+  expected: ProbeDraft,
+  format: StoryRoleTagFormat,
+) {
+  const readback = storySpecReadback(story.spec, expected.spec, format);
   const plan = story.plan ?? [];
   return {
     matches:
@@ -138,9 +186,9 @@ function draftMatches(story: StoryDetail, expected: ProbeDraft) {
       story.category === expected.category &&
       (expected.feedbackBy === undefined ||
         story.feedbackBy === expected.feedbackBy) &&
-      htmlStructure &&
-      roleTag,
-    readback: { htmlStructure, roleTag },
+      readback.htmlStructure &&
+      readback.roleTag,
+    readback,
   };
 }
 
@@ -233,7 +281,7 @@ async function createDraft(
       };
     }
     state.created.set(id, body);
-    const { matches, readback } = draftMatches(story, body);
+    const { matches, readback } = draftMatches(story, body, state.tagFormat);
     const confirmed =
       response.accepted && response.storyId !== undefined && matches;
     if (confirmed) state.recordFixture(capability, id, response);
@@ -264,6 +312,7 @@ interface ProbeRun {
   readonly client: ZentaoReadClient;
   readonly session: Session;
   readonly startedAt: number;
+  readonly tagFormat: StoryRoleTagFormat;
   readonly created: Map<number, ProbeDraft | undefined>;
   readonly cleanup: Attempt[];
   readonly recordFixture: (
@@ -448,10 +497,19 @@ async function probeAction(
             body: { title: body.title, keywords },
           },
         ],
-        (story) =>
-          story.keywords === keywords &&
-          story.title === body.title &&
-          story.spec === body.spec,
+        (story) => {
+          const { htmlStructure, roleTag } = storySpecReadback(
+            story.spec,
+            body.spec,
+            state.tagFormat,
+          );
+          return (
+            story.keywords === keywords &&
+            story.title === body.title &&
+            htmlStructure &&
+            roleTag
+          );
+        },
       );
     }
     case "story.activate":
@@ -479,6 +537,7 @@ function makeDraft(
   module: number,
   reference: string,
   capability: StoryProbe,
+  format: StoryRoleTagFormat,
   plan?: number,
 ): ProbeDraft {
   return {
@@ -503,6 +562,7 @@ function makeDraft(
         scope: ["验证结构列表。", "完成后关闭本测试需求。"],
       },
       { maintainer: account, receiver: account, intake: "probe-p0" },
+      format,
     ),
   };
 }
@@ -572,13 +632,26 @@ async function probeDrafts(
       await createDraft(
         state,
         capability,
-        makeDraft(account, module, reference, capability, plan),
+        makeDraft(
+          account,
+          module,
+          reference,
+          capability,
+          state.tagFormat,
+          plan,
+        ),
       ),
     );
     return;
   }
 
-  const body = makeDraft(account, module, reference, "story.create");
+  const body = makeDraft(
+    account,
+    module,
+    reference,
+    "story.create",
+    state.tagFormat,
+  );
   const created = await createDraft(state, "story.create", body);
   attempts.push(created);
   if (created.status !== "confirmed" || created.storyId === undefined) return;
@@ -627,7 +700,7 @@ async function probeDrafts(
     const result = await createDraft(
       state,
       variant,
-      makeDraft(account, module, reference, variant, plan),
+      makeDraft(account, module, reference, variant, state.tagFormat, plan),
     );
     attempts.push(result);
     if (result.status === "unknown") return;
@@ -720,6 +793,8 @@ export async function runProbeWrite({
       client,
       session,
       startedAt: clock(),
+      tagFormat:
+        cli.action === "write" && cli.visibleTag ? "visible" : "comment",
       created: new Map(),
       cleanup,
       recordFixture(action, id, response) {

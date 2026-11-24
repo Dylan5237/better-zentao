@@ -70,6 +70,7 @@ function fakeZentao(
     includeOtherStory?: boolean;
     fixtureSecret?: boolean;
     unrelatedReceiptId?: boolean;
+    normalizeSpec?: (spec: string) => string;
   } = {},
 ) {
   const entries: Entry[] = [];
@@ -173,6 +174,7 @@ function fakeZentao(
         status: "draft",
       });
       const story = makeStory(101 + stories.size, body);
+      story.spec = options.normalizeSpec?.(story.spec) ?? story.spec;
       stories.set(story.id, story);
       if (options.uncertainCreate) throw new Error(token);
       return respond(
@@ -235,7 +237,98 @@ function fakeZentao(
 
 afterEach(() => vi.unstubAllGlobals());
 
+const stripRoleComment = (spec: string) =>
+  spec.replace(/<!-- bzt:v1 [^<>]+ -->/gu, "");
+const visibleFooter = /<p style="[^"]+">(\[bzt:v1 [^\]]+\])<\/p>/u;
+
 describe("WP-05 #29 探查闭环", () => {
+  it("注释被服务器剥离时保留原探查结果，关闭已建需求且不自动改用微标签重建", async () => {
+    const zen = fakeZentao({ normalizeSpec: stripRoleComment });
+    const result = await runProbeWrite({
+      ...runtime,
+      cli: { action: "write", product: "29", all: true, assignee: alternate },
+    });
+    expect(result.attempts).toEqual([
+      expect.objectContaining({
+        capability: "story.create",
+        status: "unknown",
+        storyId: 101,
+        readback: { htmlStructure: true, roleTag: false },
+      }),
+    ]);
+    expect(zen.sends("/v2/stories")).toHaveLength(1);
+    expect(zen.sends("/close")).toHaveLength(1);
+    expect(zen.stories.get(101)?.status).toBe("closed");
+  });
+
+  it.each([
+    "<p>$1</p>",
+    '<p>\n<span style="font-size: 12px">$1</span>\n</p>',
+    "<br />\n$1<br>",
+  ])(
+    "CLI 显式选用微标签，并在编辑回读接受服务器规范化的页脚 %s",
+    async (footer) => {
+      const zen = fakeZentao({
+        normalizeSpec: (spec) =>
+          stripRoleComment(spec).replace(visibleFooter, footer),
+      });
+      const cli = {
+        ...runtime,
+        nodeVersion: "24.11.0",
+        stdout: vi.fn(),
+        stderr: vi.fn(),
+      };
+      expect(
+        await runCli(
+          ["probe", "write", "story.edit", "--product", "29", "--visible-tag"],
+          cli,
+        ),
+      ).toBe(0);
+      expect(zen.sends("/v2/stories")).toHaveLength(1);
+      expect(zen.sends("/v2/stories")[0]?.body?.spec).toMatch(visibleFooter);
+      expect(
+        zen.entries.filter((entry) => entry.method === "PUT"),
+      ).toHaveLength(1);
+      expect(zen.stories.get(101)?.status).toBe("closed");
+      const report: unknown = JSON.parse(String(cli.stdout.mock.calls[0]?.[0]));
+      expect(report).toMatchObject({
+        attempts: [
+          {
+            capability: "story.create",
+            status: "confirmed",
+            readback: { htmlStructure: true, roleTag: true },
+          },
+          { capability: "story.edit", status: "confirmed" },
+        ],
+      });
+    },
+  );
+
+  it.each([
+    (spec: string) =>
+      spec.replace(
+        visibleFooter,
+        (_, tag: string) => `<!-- ${tag.slice(1, -1)} -->`,
+      ),
+    (spec: string) =>
+      spec.replace(`receiver=${account};`, `receiver=${alternate};`),
+  ])("拒绝错误标签格式或内容，即使 HTML 正文仍完整", async (normalizeSpec) => {
+    const zen = fakeZentao({ normalizeSpec });
+    const result = await runProbeWrite({
+      ...runtime,
+      cli: { action: "write", product: "29", all: true, visibleTag: true },
+    });
+    expect(result.attempts).toEqual([
+      expect.objectContaining({
+        capability: "story.create",
+        status: "unknown",
+        readback: { htmlStructure: true, roleTag: false },
+      }),
+    ]);
+    expect(zen.sends("/v2/stories")).toHaveLength(1);
+    expect(zen.stories.get(101)?.status).toBe("closed");
+  });
+
   it("创建保留 HTML 标签与换行，指派覆盖同值跳过和实际改派，自动关闭所有变体并存脱敏证据", async () => {
     const zen = fakeZentao({ fixtureSecret: true });
     const dir = await mkdtemp(join(tmpdir(), "bzt-write-fixtures-"));
@@ -482,6 +575,26 @@ describe("WP-05 #29 探查闭环", () => {
       ["probe", "cleanup", "--product", "29", "--story", "4e2"],
       ["probe", "write", "story.delete", "--product", "29"],
       ["probe", "write", "--all", "--product", "29", "--live"],
+      [
+        "probe",
+        "write",
+        "--all",
+        "--product",
+        "29",
+        "--visible-tag",
+        "--visible-tag",
+      ],
+      [
+        "probe",
+        "cleanup",
+        "--product",
+        "29",
+        "--story",
+        "101",
+        "--visible-tag",
+      ],
+      ["probe", "capture", "--visible-tag"],
+      ["doctor", "--visible-tag"],
     ])
       expect(await runCli(args, cli)).not.toBe(0);
     expect(zen.entries).toHaveLength(0);
