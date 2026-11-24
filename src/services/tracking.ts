@@ -620,13 +620,28 @@ class TrackingRead {
     this.storyTitles.set(id, story.title);
     const tag = parseStoryRoleTag(story.spec ?? "");
     if (tag?.maintainer || tag?.receiver) {
+      const maintainer = tag.maintainer ?? null;
+      const receiver = tag.receiver ?? null;
       try {
-        this.options.store.storyRoles.upsert({
-          storyId: story.id,
-          maintainer: tag.maintainer ?? null,
-          receiver: tag.receiver ?? null,
-          updatedAt: this.now,
-        });
+        let existing: ReturnType<LocalStore["storyRoles"]["get"]> | undefined;
+        try {
+          existing = this.options.store.storyRoles.get(story.id);
+        } catch (error) {
+          if (!(error instanceof BztError && error.code === "NOT_FOUND")) {
+            throw error;
+          }
+        }
+        if (
+          existing?.maintainer !== maintainer ||
+          existing?.receiver !== receiver
+        ) {
+          this.options.store.storyRoles.upsert({
+            storyId: story.id,
+            maintainer,
+            receiver,
+            updatedAt: this.now,
+          });
+        }
       } catch {
         // 角色缓存更新失败不影响只读查询。
       }

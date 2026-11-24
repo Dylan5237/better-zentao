@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   getMyWorkInputSchema,
   getMyWorkOutputSchema,
@@ -932,4 +932,63 @@ it("get_my_work 支持 raised 分组与 horizonDays=0 窗口，N4 进展卡片�
   expect(progress.data).not.toMatchObject({
     card: expect.stringContaining("下一步：功能测试"),
   });
+});
+
+it("requiredDetail 命中响应缓存或角色未变更时不重复写入 story_roles", async () => {
+  const localStore = openLocalStore({
+    dbPath: ":memory:",
+    baseUrl,
+    account: "tag_dm",
+    clock,
+  });
+  const upsertSpy = vi.spyOn(localStore.storyRoles, "upsert");
+  try {
+    const taggedStory = {
+      ...story,
+      openedBy: "other",
+      assignedTo: "dev",
+      status: "active",
+      feedbackBy: "",
+      spec: "<p>需求说明</p><p>[bzt:v1 maintainer=tag_dm;receiver=dev]</p>",
+    };
+    const { service } = setup({
+      account: "tag_dm",
+      extraUsers: [
+        {
+          id: 5,
+          account: "tag_dm",
+          realname: "标签维护人",
+          role: "po",
+          dept: 0,
+          deleted: false,
+        },
+      ],
+      stories: [taggedStory],
+      tasks: [],
+      requirements: [],
+      localStore,
+      useCache: true,
+    });
+
+    const first = await service.queryStories({ role: "maintainer" });
+    expect(first.data.items.map(({ id }) => id)).toEqual([31]);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+
+    const second = await service.queryStories({ role: "maintainer" });
+    expect(second.data.items.map(({ id }) => id)).toEqual([31]);
+    expect(upsertSpy).toHaveBeenCalledTimes(1);
+
+    taggedStory.spec =
+      "<p>需求说明</p><p>[bzt:v1 maintainer=tag_dm;receiver=other]</p>";
+    localStore.cache.delete("story:31");
+    await service.getStoryProgress({ storyId: 31 });
+    expect(upsertSpy).toHaveBeenCalledTimes(2);
+    expect(localStore.storyRoles.get(31)).toMatchObject({
+      maintainer: "tag_dm",
+      receiver: "other",
+    });
+  } finally {
+    upsertSpy.mockRestore();
+    localStore.close();
+  }
 });
