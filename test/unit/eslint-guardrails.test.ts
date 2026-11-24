@@ -631,11 +631,19 @@ export function read(): StoryDetail { return forged; }`,
   const { eslint, program } = createFixtureChecks();
 
   beforeAll(async () => {
-    // 首次加载 ESLint 解析器与类型信息，单独留出初始化时间。
-    const fixture = blocked[0];
-    if (!fixture) throw new Error("未加载 ESLint 自检片段。");
-    await eslint.lintText(fixture.source, { filePath: fixture.filePath });
-  }, 20_000);
+    // 首次加载 ESLint 解析器、import 解析器与 TypeScript 类型信息，单独留出初始化时间。
+    const warmup = [
+      blocked[0],
+      blocked.find(({ ruleId }) => ruleId === "bzt/no-raw-api-exports"),
+      blocked.find(
+        ({ ruleId }) => ruleId === "@typescript-eslint/no-unsafe-assignment",
+      ),
+    ];
+    for (const fixture of warmup) {
+      if (!fixture) throw new Error("未加载 ESLint 自检片段。");
+      await eslint.lintText(fixture.source, { filePath: fixture.filePath });
+    }
+  }, 30_000);
 
   it.each(blocked)("拦截 $name", async ({ filePath, source, ruleId }) => {
     const [result] = await eslint.lintText(source, { filePath });
