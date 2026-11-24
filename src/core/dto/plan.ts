@@ -51,7 +51,10 @@ export function planDetailDtoFor(timezone: string) {
     .object({
       plan: productPlanDto,
       planStories: zCollection(storyDtoFor(timezone)),
-      modulePairs: z.record(moduleKey, z.string()),
+      modulePairs: z.union([
+        z.record(moduleKey, z.string()),
+        z.tuple([]).transform((): Record<string, string> => ({})),
+      ]),
       childrenPlans: zCollection(productPlanDto).default([]),
     })
     .transform((detail) => brandDto(detail, planDetailBrand));

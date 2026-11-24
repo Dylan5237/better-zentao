@@ -14,6 +14,8 @@ it("Q6 多人串行任务保留账号、工时、状态与顺位", async () => {
   expect(detail).toMatchObject({
     id: 4324,
     assignedTo: "acct_076",
+    pri: 3,
+    finishedBy: null,
     mode: "linear",
     estimate: 22,
     story: null,
@@ -47,6 +49,37 @@ it("Q6 多人串行任务保留账号、工时、状态与顺位", async () => {
   ]);
   expect(detail).not.toHaveProperty("members");
   assertNoSensitiveData(detail);
+});
+
+it.each([
+  {
+    label: "数字字符串优先级和完成人账号",
+    input: { pri: "2", finishedBy: "acct_076" },
+    expected: { pri: 2, finishedBy: "acct_076" },
+  },
+  {
+    label: "零优先级和空完成人",
+    input: { pri: 0, finishedBy: "" },
+    expected: { pri: null, finishedBy: null },
+  },
+])("任务详情规范化$label", async ({ input, expected }) => {
+  const { client } = mockReadFixture("task-detail", {
+    transform: (body) => ({ ...z.looseObject({}).parse(body), ...input }),
+  });
+  await expect(getTaskDetail(client, 4324)).resolves.toMatchObject(expected);
+});
+
+it("任务详情允许省略优先级和完成人", async () => {
+  const { client } = mockReadFixture("task-detail", {
+    transform: (body) => ({
+      ...z.looseObject({}).parse(body),
+      pri: undefined,
+      finishedBy: undefined,
+    }),
+  });
+  const detail = await getTaskDetail(client, 4324);
+  expect(detail).not.toHaveProperty("pri");
+  expect(detail).not.toHaveProperty("finishedBy");
 });
 
 it("任务详情逐层投影团队、动作和子任务", async () => {

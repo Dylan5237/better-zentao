@@ -59,6 +59,30 @@ it("Q11 计划详情把数字键需求投影为数组，保留模块 ID 字典",
   assertNoSensitiveData(result);
 });
 
+it("Q11 计划详情将 PHP 空模块数组投影为空字典", async () => {
+  const { client } = mockReadFixture("plan-detail", {
+    transform: (body) => ({
+      ...z.looseObject({}).parse(body),
+      modulePairs: [],
+    }),
+  });
+  const result = await getPlanDetail(client, 707);
+  expect(result.modulePairs).toStrictEqual({});
+});
+
+it("Q11 计划详情拒绝非空模块数组", async () => {
+  const { client } = mockReadFixture("plan-detail", {
+    transform: (body) => ({
+      ...z.looseObject({}).parse(body),
+      modulePairs: ["/"],
+    }),
+  });
+  await expect(getPlanDetail(client, 707)).rejects.toHaveProperty(
+    "code",
+    "ZENTAO_SCHEMA_MISMATCH",
+  );
+});
+
 it("Q11 计划详情兼容子计划和数组版需求集合", async () => {
   const { client } = mockReadFixture("plan-detail", {
     transform: (body) => {

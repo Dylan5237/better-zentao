@@ -28,6 +28,7 @@ describe("WP-04 公共 DTO 解析契约", () => {
     ).toEqual([null, null, null, null, 42]);
     expect(zParentPlanId.parse("-1")).toBe(-1);
     expect(zHours.parse("1.25")).toBe(1.25);
+    expect(zHours.parse("0")).toBe(0);
     expect(zHours.parse("")).toBeNull();
     expect(zHours.safeParse("x").success).toBe(false);
     expect(zAccount.parse({ account: "acct_001", password: "synthetic" })).toBe(
@@ -39,6 +40,33 @@ describe("WP-04 公共 DTO 解析契约", () => {
     expect(parsePlanIds("678")).toEqual([678]);
     expect(parsePlanIds("0")).toEqual([]);
     expect(() => parsePlanIds("12,invalid")).toThrow();
+  });
+
+  it.each([
+    { input: null, expected: [] },
+    { input: undefined, expected: [] },
+    { input: 0, expected: [] },
+    { input: 42, expected: [42] },
+    { input: Number.MAX_SAFE_INTEGER, expected: [Number.MAX_SAFE_INTEGER] },
+  ])("P1-2 规范化单个计划编号或空值 $input", ({ input, expected }) => {
+    expect(parsePlanIds(input)).toEqual(expected);
+  });
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53])(
+    "P1-2 用编号校验拒绝非法数字 %s",
+    (input) => {
+      expect(() => parsePlanIds(input)).toThrow(z.ZodError);
+    },
+  );
+
+  it("P1-2 去除计划编号逗号串中的空段和 0 并校验其余编号", () => {
+    expect(parsePlanIds(" 0, , 12, 13, 0, ")).toEqual([12, 13]);
+    expect(parsePlanIds(" 0, , 0 ")).toEqual([]);
+    expect(() => parsePlanIds("12,0,9007199254740992")).toThrow(z.ZodError);
+  });
+
+  it.each([-5, "-5"])("P2-2 拒绝负工时（%j）", (input) => {
+    expect(zHours.safeParse(input).success).toBe(false);
   });
 
   it("Q2 字符串 0 和 false 为假，拒绝未知布尔表示", () => {
@@ -66,6 +94,22 @@ describe("WP-04 公共 DTO 解析契约", () => {
       dateTimeSchema("America/New_York").safeParse("2026-03-08 02:30:00")
         .success,
     ).toBe(false);
+  });
+
+  it("P2-3 将小写 z 后缀的日期时间按 UTC 解释", () => {
+    const shanghai = dateTimeSchema("Asia/Shanghai");
+    expect(shanghai.parse("2026-11-01T00:00:00.125z")).toBe(1793491200125);
+  });
+
+  it.each([
+    "0000-00-00T24:00:00Z",
+    "0000-00-00 08:60:00",
+    "0000-00-00T08:00:60+08:00",
+  ])("P2-3 拒绝时分秒越界的零日期时间 %s", (input) => {
+    expect([
+      zDate.safeParse(input).success,
+      dateTimeSchema("Asia/Shanghai").safeParse(input).success,
+    ]).toEqual([false, false]);
   });
 
   it("集合仅接收数字键，分页吸收 v2 pager 但不返回包裹数据", () => {

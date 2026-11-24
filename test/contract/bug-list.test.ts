@@ -32,6 +32,7 @@ it("产品 Bug 转发 unclosed 并兜底过滤关闭项，保留 active 和 reso
     project: null,
     story: null,
     severity: 3,
+    pri: 2,
     openedBy: "acct_017",
     assignedTo: "acct_068",
     openedDate: Date.parse("2026-11-23T09:24:28Z"),
@@ -53,9 +54,30 @@ it("项目 Bug 保留已关闭记录，账号字符串不变", async () => {
   expect(result.items[0]).toMatchObject({
     id: 1699,
     project: 20,
+    pri: 3,
     openedBy: "acct_022",
     assignedTo: "acct_017",
   });
+});
+
+it("Bug 优先级的数字字符串转为数字，零值转为空，缺失保持省略", async () => {
+  const priorities = ["4", "0", undefined];
+  const { client } = mockReadFixture("project-bugs", {
+    transform(body) {
+      const page = fixturePage.parse(body);
+      return {
+        ...page,
+        total: priorities.length,
+        bugs: page.bugs.slice(0, priorities.length).map((bug, index) => ({
+          ...bug,
+          pri: priorities[index],
+        })),
+      };
+    },
+  });
+  const result = await listProjectBugs(client, 20);
+  expect(result.items.map(({ pri }) => pri)).toEqual([4, null, undefined]);
+  expect(result.items[2]).not.toHaveProperty("pri");
 });
 
 it.each([

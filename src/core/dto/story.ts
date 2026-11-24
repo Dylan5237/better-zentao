@@ -29,8 +29,7 @@ const nullableText = z
   .nullable()
   .transform((value) => (value === "" ? null : value));
 const idList = z
-  .string()
-  .nullable()
+  .union([z.string(), z.number(), z.null()])
   .transform((value, context) => {
     try {
       return parsePlanIds(value);
@@ -163,9 +162,9 @@ export function storyDetailDtoFor(timezone?: string) {
 const groupedTasks = zCollection(z.array(storyTaskDto), true).transform(
   (groups) => groups.flat(),
 );
-const reviewerAccounts = zCollection(zAccount).transform((accounts) =>
-  accounts.filter((account) => account !== null),
-);
+const reviewerAccounts = z
+  .union([zCollection(zAccount), z.literal([null, ""]).transform(() => [])])
+  .transform((accounts) => accounts.filter((account) => account !== null));
 
 function storyDetailV2Shape<T extends "story" | "requirement">(
   timezone: string,

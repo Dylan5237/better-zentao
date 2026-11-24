@@ -3,7 +3,27 @@ import { z } from "zod";
 import { decodeStoryResponse } from "../../src/api/internal/story-response.ts";
 import { getStoryDetail, getStoryDetailV2 } from "../../src/api/story.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
-import { mockReadFixture, readFixture } from "./read-fixture.ts";
+import {
+  mockReadClient,
+  mockReadFixture,
+  readFixture,
+} from "./read-fixture.ts";
+
+function readV2DetailWithReviewer(reviewer: unknown) {
+  const { client } = mockReadClient(() =>
+    Response.json({
+      story: {
+        id: 4837,
+        product: 42,
+        type: "story",
+        title: "测试需求",
+        status: "draft",
+        reviewer,
+      },
+    }),
+  );
+  return getStoryDetailV2(client, 4837);
+}
 
 it("ADR-18 内部 Response 解码入口投影真实 v1 需求", async () => {
   const { body, status } = readFixture("story-detail");
@@ -121,3 +141,25 @@ it("Q4 v2 动作列表同时兼容数组", async () => {
     115166, 115167, 115168, 115169, 115171, 115174, 115233,
   ]);
 });
+
+it.each([
+  ["null", null],
+  ["空串", ""],
+] as const)(
+  "Q4 v2 需求的 reviewer 为 %s 时输出空评审人列表",
+  async (_name, reviewer) => {
+    await expect(readV2DetailWithReviewer(reviewer)).resolves.toMatchObject({
+      reviewers: [],
+    });
+  },
+);
+
+it.each([0, { account: "acct_068" }])(
+  "Q4 v2 需求拒绝非集合评审人值 %#",
+  async (reviewer) => {
+    await expect(readV2DetailWithReviewer(reviewer)).rejects.toHaveProperty(
+      "code",
+      "ZENTAO_SCHEMA_MISMATCH",
+    );
+  },
+);

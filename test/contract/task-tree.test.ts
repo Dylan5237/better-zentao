@@ -24,6 +24,7 @@ it("Q5 执行任务保留扁平父子、父任务截止日和子任务工时", a
     execution: 189,
     story: 4651,
     status: "wait",
+    pri: 3,
     mode: null,
     estStarted: "2026-11-23",
     deadline: "2026-11-27",
@@ -31,6 +32,14 @@ it("Q5 执行任务保留扁平父子、父任务截止日和子任务工时", a
     consumed: 0,
     left: 7,
     assignedTo: "acct_780",
+  });
+});
+
+it("执行任务将实采的完成人对象投影为账号", async () => {
+  const { client } = mockReadFixture("execution-tasks");
+  const result = await listExecutionTasks(client, 189);
+  expect(result.items.find(({ id }) => id === 4830)).toMatchObject({
+    finishedBy: "acct_329",
   });
 });
 

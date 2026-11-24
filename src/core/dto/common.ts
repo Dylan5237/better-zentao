@@ -12,10 +12,10 @@ const nullableIdSentinel = z.union([
   z.null(),
 ]);
 const dateSentinel =
-  /^(?:|0000-00-00(?:[ Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?)?)$/u;
+  /^(?:|0000-00-00(?:[ Tt](?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:[Zz]|[+-]\d{2}:?\d{2})?)?)$/u;
 const absoluteDateTime = z.iso.datetime({ offset: true });
 const absoluteParts =
-  /^(.*T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/u;
+  /^(.*T\d{2}:\d{2}:\d{2})(?:\.(\d+))?([Zz]|[+-]\d{2}:\d{2})$/u;
 
 export const zId = z.union([z.number(), idString]).pipe(z.int().positive());
 export const zCount = z
@@ -62,7 +62,7 @@ export const zHours = z.union([
         .regex(/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/u)
         .transform(Number),
     ])
-    .pipe(z.number()),
+    .pipe(z.number().nonnegative()),
   z.union([z.literal(""), z.null()]).transform(() => null),
 ]);
 
@@ -88,7 +88,7 @@ export function dateTimeSchema(timezone?: string) {
         if (
           wallTime !== undefined &&
           zone !== undefined &&
-          absoluteDateTime.safeParse(value).success
+          absoluteDateTime.safeParse(value.replace(/z$/u, "Z")).success
         ) {
           const whole = parseZentaoDateTime(wallTime, "UTC");
           if (whole === null) return null;
@@ -96,7 +96,7 @@ export function dateTimeSchema(timezone?: string) {
             (absolute?.[2] ?? "").padEnd(3, "0").slice(0, 3),
           );
           const minutes =
-            zone === "Z"
+            zone.toUpperCase() === "Z"
               ? 0
               : Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4));
           return (
@@ -115,14 +115,16 @@ export function dateTimeSchema(timezone?: string) {
 
 export const zDateTime = dateTimeSchema();
 
-export function parsePlanIds(value: string | null | undefined): number[] {
-  const text = value?.trim();
-  if (!text || text === "0") return [];
+export function parsePlanIds(
+  value: string | number | null | undefined,
+): number[] {
+  if (value == null || value === 0) return [];
+  if (typeof value === "number") return [zId.parse(value)];
   return z.array(zId).parse(
-    text
+    value
       .split(",")
       .map((id) => id.trim())
-      .filter(Boolean),
+      .filter((id) => id !== "" && id !== "0"),
   );
 }
 

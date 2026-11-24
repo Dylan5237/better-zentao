@@ -26,6 +26,7 @@ export function bugDtoFor(timezone: string) {
       title: z.string().min(1),
       status: z.string().min(1),
       severity: zCount,
+      pri: zNullableId.optional(),
       feedbackBy: z.string().nullable().optional(),
       openedBy: zAccount.optional(),
       assignedTo: zAccount.optional(),

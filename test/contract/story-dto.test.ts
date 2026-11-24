@@ -103,6 +103,42 @@ it("Q1 / S01 不合法的计划编号只报告白名单路径", async () => {
 });
 
 it.each([
+  [674, [674]],
+  [0, []],
+  [" ,674, 0, 675, ", [674, 675]],
+] as const)(
+  "Q4 计划和关联编号兼容单个数字与逗号分隔串 %s",
+  async (value, ids) => {
+    await expect(
+      readStoryDetailWithResponse(
+        Response.json({
+          ...expected,
+          plan: value,
+          linkStories: value,
+          linkRequirements: value,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      plan: ids,
+      linkStories: ids,
+      linkRequirements: ids,
+    });
+  },
+);
+
+it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+  "Q4 拒绝无效的数字计划编号 %s",
+  async (plan) => {
+    await expect(
+      readStoryDetailWithResponse(Response.json({ ...expected, plan })),
+    ).rejects.toMatchObject({
+      code: "ZENTAO_SCHEMA_MISMATCH",
+      details: { fields: ["plan"] },
+    });
+  },
+);
+
+it.each([
   [new Response("sensitive raw text", { status: 502 }), "ZENTAO_UNAVAILABLE"],
   [new Response("sensitive raw text"), "ZENTAO_SCHEMA_MISMATCH"],
   [
