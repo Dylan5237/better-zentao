@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import { getDoctorStatus } from "../../services/doctor.ts";
+import { installAgent } from "../../services/install-agent.ts";
 import { runProbeCapture } from "../../services/probe-capture.ts";
 import { runProbeWrite } from "../../services/probe-write.ts";
 import { startMcpServer } from "../mcp/server.ts";
@@ -20,6 +21,8 @@ const help = `用法
   bzt probe write <能力> --product 29 [--config 路径] [--assignee 测试账号] [--visible-tag] [--out 目录]
   bzt probe write --all --product 29 [--config 路径] [--assignee 测试账号] [--visible-tag] [--out 目录]
   bzt probe cleanup --product 29 --story ID [--config 路径]    关闭 #29 测试需求
+  bzt install-agent <codex|claude|gemini> [--config 路径] [--project 目录] [--dry-run]
+      也接受 --agent <codex|claude|gemini>，--project 仅用于 Claude Code
   bzt mcp       启动 stdio 服务
 `;
 
@@ -46,6 +49,9 @@ export async function runCli(
         assignee: { type: "string" },
         "visible-tag": { type: "boolean" },
         all: { type: "boolean" },
+        agent: { type: "string" },
+        project: { type: "string" },
+        "dry-run": { type: "boolean" },
       },
       allowPositionals: true,
       strict: true,
@@ -61,8 +67,9 @@ export async function runCli(
   const write = command === "probe" && action === "write";
   const cleanup = command === "probe" && action === "cleanup";
   const probe = capture || write || cleanup;
+  const install = command === "install-agent";
   if (
-    positionals.length > (write ? 3 : probe ? 2 : 1) ||
+    positionals.length > (write ? 3 : probe || install ? 2 : 1) ||
     (!probe && command === "probe") ||
     (!capture && !write && values.out !== undefined) ||
     (!write &&
@@ -70,11 +77,18 @@ export async function runCli(
         values.all !== undefined ||
         values["visible-tag"] !== undefined)) ||
     (!cleanup && values.story !== undefined) ||
-    (command !== "doctor" && values.live !== undefined)
+    (command !== "doctor" && values.live !== undefined) ||
+    (!install &&
+      (values.agent !== undefined ||
+        values.project !== undefined ||
+        values["dry-run"] !== undefined)) ||
+    (install &&
+      (values.product !== undefined ||
+        (action !== undefined && values.agent !== undefined)))
   ) {
     return invalidArgs(runtime);
   }
-  if (write || cleanup) {
+  if (write || cleanup || install) {
     const names = tokens.flatMap((token) =>
       token.kind === "option" ? [token.name] : [],
     );
@@ -85,6 +99,22 @@ export async function runCli(
     return 0;
   }
 
+  if (install) {
+    const result = await installAgent({
+      agent: action ?? values.agent,
+      config: values.config,
+      project: values.project,
+      dryRun: values["dry-run"],
+      homeDir: runtime.homeDir,
+      env: runtime.env,
+    });
+    if (!result.ok) {
+      runtime.stderr(result.message + "\n");
+      return result.invalidArgs ? 2 : 1;
+    }
+    runtime.stdout(JSON.stringify(result) + "\n");
+    return 0;
+  }
   if (command === "doctor") {
     const status = await getDoctorStatus(runtime.env, runtime.nodeVersion, {
       homeDir: runtime.homeDir,

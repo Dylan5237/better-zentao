@@ -1,0 +1,7 @@
+[mcp_servers.better-zentao]
+command = "bzt"
+args = ["mcp"]
+
+# 可选，替换为团队配置文件路径后取消注释。
+# [mcp_servers.better-zentao.env]
+# BZT_CONFIG = "path/to/team.json"

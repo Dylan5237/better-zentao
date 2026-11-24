@@ -1,0 +1,74 @@
+# docs/09 §6 P1 对话评测。
+- id: "AC-01-MODULE"
+  kind: "clarification"
+  prompt: "产品甲想加个部门筛选，具体模块还没定。"
+  expectedTool: "create_story"
+  expectedArgs:
+    {
+      "product": 29,
+      "title": "增加筛选",
+      "spec": { "background": "数据较多", "scope": "按部门筛选" },
+      "verify": "显示对应部门的数据",
+    }
+  expectedCode: "INVALID_INPUT"
+  replyHas: ["模块"]
+
+- id: "AC-01-VERIFY"
+  kind: "clarification"
+  prompt: "在权限模块加部门筛选，验收结果还没想好。"
+  expectedTool: "create_story"
+  expectedArgs:
+    {
+      "product": 29,
+      "module": 3,
+      "title": "增加筛选",
+      "spec": { "background": "数据较多", "scope": "按部门筛选" },
+    }
+  expectedCode: "MISSING_REQUIRED"
+  missing: ["verify"]
+  replyHas: ["验收标准"]
+
+- id: "AC-01-SCOPE"
+  kind: "clarification"
+  prompt: "产品甲权限模块补点能力，实现范围还没确定，验收按预期显示。"
+  expectedTool: "create_story"
+  expectedArgs:
+    {
+      "product": 29,
+      "module": 3,
+      "title": "增加筛选",
+      "spec": { "background": "近期反馈较多" },
+      "verify": "显示对应部门的数据",
+    }
+  expectedCode: "MISSING_REQUIRED"
+  missing: ["spec.scope"]
+  replyHas: ["实现范围"]
+
+- id: "AC-01-DESIGN"
+  kind: "clarification"
+  prompt: "按权限改造设计稿做部门筛选，稿子章节没说。"
+  expectedTool: "create_story"
+  expectedArgs:
+    {
+      "product": 29,
+      "module": 3,
+      "title": "增加筛选",
+      "spec":
+        {
+          "background": "数据较多",
+          "scope": "按部门筛选",
+          "designRef": { "doc": "权限改造设计稿" },
+        },
+      "verify": "显示对应部门的数据",
+    }
+  expectedCode: "MISSING_REQUIRED"
+  missing: ["spec.designRef.section"]
+  replyHas: ["章节"]
+
+- id: "AC-02-AMBIGUITY"
+  kind: "clarification"
+  prompt: "帮我查一下重名同事的账号，我不知道是哪位。"
+  expectedTool: "resolve_context"
+  expectedArgs: { "people": ["重名同事"] }
+  expectedCode: "AMBIGUOUS_ENTITY"
+  replyHas: ["候选", "请选择"]

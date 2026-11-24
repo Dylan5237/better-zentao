@@ -23,3 +23,4 @@ Thumbs.db
 *.sqlite*
 .better-zentao/
 config/team.local.json
+test/eval/report.md
