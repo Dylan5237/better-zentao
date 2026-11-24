@@ -54,10 +54,16 @@ export async function writeStory(
   product: number,
   storyId: number | undefined,
   fields: Readonly<Record<string, z.infer<z.ZodJSONSchema>>>,
+  options?: Readonly<{ opId?: string; instanceVersion?: string }>,
 ): Promise<
   { status: "accepted"; data: { id: number } } | { status: "unknown" }
 > {
-  assertCapabilityExecutable(action, { channel: "mcp" });
+  const capability = {
+    channel: "mcp",
+    instanceVersion: options?.instanceVersion,
+  } satisfies Parameters<typeof assertCapabilityExecutable>[1];
+  const opLog = options?.opId === undefined ? {} : { opId: options.opId };
+  assertCapabilityExecutable(action, capability);
   const { http } = getReadClient(client, "write");
   if (
     action === "story.create" ||
@@ -65,7 +71,7 @@ export async function writeStory(
     action === "story.create.feedbackBy"
   ) {
     if (Object.hasOwn(fields, "plan"))
-      assertCapabilityExecutable("story.create.plan");
+      assertCapabilityExecutable("story.create.plan", capability);
     const body = parse(createBody, fields);
     if (
       body.product !== product ||
@@ -77,10 +83,12 @@ export async function writeStory(
         "新需求的产品或模块与操作计划不一致。",
       );
     if (body.category === "design")
-      assertCapabilityExecutable("story.create.design");
-    if (body.feedbackBy) assertCapabilityExecutable("story.create.feedbackBy");
+      assertCapabilityExecutable("story.create.design", capability);
+    if (body.feedbackBy)
+      assertCapabilityExecutable("story.create.feedbackBy", capability);
     return http.write(
       {
+        ...opLog,
         method: "POST",
         pathTemplate: "/api.php/v2/stories",
         query: { productID: product },
@@ -92,7 +100,7 @@ export async function writeStory(
   }
 
   const objectId = parse(id, storyId);
-  const target = { params: { id: objectId }, objectId };
+  const target = { params: { id: objectId }, objectId, ...opLog };
   switch (action) {
     case "story.assign":
       return http.write(
@@ -137,6 +145,7 @@ export async function writeStory(
     case "story.comment":
       return http.write(
         {
+          ...opLog,
           method: "POST",
           pathTemplate: "/api.php/v2/action/comment",
           objectId,

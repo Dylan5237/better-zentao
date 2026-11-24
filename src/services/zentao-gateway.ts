@@ -25,6 +25,8 @@ interface GatewayOptions {
   };
 }
 
+const commentSkewMs = 60_000;
+
 function snapshot(
   story: StoryDetail,
   type: OperationStep["type"],
@@ -98,7 +100,7 @@ export function createZentaoGateway(options: GatewayOptions): OperationGateway {
         throw new BztError("INVALID_INPUT", "此操作只支持研发需求。");
       return storySnapshot(await readStory(id, product), type);
     },
-    async write({ step, id }) {
+    async write({ opId, step, id }) {
       const capability = {
         channel: "mcp",
         instanceVersion,
@@ -119,7 +121,8 @@ export function createZentaoGateway(options: GatewayOptions): OperationGateway {
         const target = await readStory(id, step.product);
         if (
           step.action === "story.assign" &&
-          target.assignedTo === fields.assignedTo
+          target.assignedTo === fields.assignedTo &&
+          !(typeof fields.comment === "string" && fields.comment.trim() !== "")
         )
           return { id };
         if (
@@ -138,6 +141,7 @@ export function createZentaoGateway(options: GatewayOptions): OperationGateway {
         step.product,
         id,
         fields,
+        { opId, instanceVersion },
       );
       if (receipt.status === "unknown") return {};
       if (step.action === "story.comment") return { actionId: receipt.data.id };
@@ -182,14 +186,18 @@ export function createZentaoGateway(options: GatewayOptions): OperationGateway {
               return { verified: false };
             actions = detail.actions;
           }
+          const commentSince =
+            attemptedAt === undefined
+              ? undefined
+              : Math.floor(attemptedAt / 1000) * 1000 - commentSkewMs;
           verified =
             actions.filter(
               (action) =>
                 action.actor === account &&
                 (actionId === undefined
                   ? action.date !== null &&
-                    attemptedAt !== undefined &&
-                    action.date > attemptedAt
+                    commentSince !== undefined &&
+                    action.date >= commentSince
                   : action.id === actionId) &&
                 (action.comment?.trim() === comment.trim() ||
                   action.comment?.trim() === `<p>${comment.trim()}</p>`),

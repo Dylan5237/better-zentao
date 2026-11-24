@@ -103,3 +103,55 @@ it("创建回执没有 ID 且只有提示时标记结果不明", async () => {
     }),
   ).resolves.toMatchObject({ status: "unknown" });
 });
+
+it("writeStory 对实例版本漂移与 failed/error 回执进行拦截", async () => {
+  const fetcher = vi.fn<typeof fetch>(async (request) => {
+    const url = new URL(String(request));
+    if (url.pathname.endsWith("/tokens"))
+      return Response.json({ token: "fixture-session" }, { status: 201 });
+    return Response.json({ status: "failed", id: 99 });
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const client = createZentaoReadClient({
+    baseUrl: "https://write.fixture.test",
+    account: "alice",
+    password: "offline-password",
+    clock: () => 0,
+    logSink: () => undefined,
+  });
+  const fields = {
+    product: 29,
+    module: 1,
+    modules: [1],
+    title: "需求",
+    category: "feature",
+    spec: "说明",
+    verify: "验收",
+    assignedTo: "alice",
+    reviewer: [],
+    status: "draft",
+  };
+  await expect(
+    writeStory(client, "story.create", 29, undefined, fields, {
+      instanceVersion: "22.7",
+    }),
+  ).rejects.toMatchObject({ code: "CAPABILITY_UNVERIFIED" });
+  expect(fetcher).not.toHaveBeenCalled();
+
+  await expect(
+    writeStory(client, "story.create", 29, undefined, fields, {
+      opId: "op_01J9Z000000000000000000000",
+      instanceVersion: "22.6",
+    }),
+  ).rejects.toMatchObject({ code: "ZENTAO_BUSINESS_ERROR" });
+
+  fetcher.mockImplementationOnce(async () =>
+    Response.json({ status: "error", id: 99 }),
+  );
+  await expect(
+    writeStory(client, "story.create", 29, undefined, fields, {
+      opId: "op_01J9Z000000000000000000000",
+      instanceVersion: "22.6",
+    }),
+  ).rejects.toMatchObject({ code: "ZENTAO_BUSINESS_ERROR" });
+});

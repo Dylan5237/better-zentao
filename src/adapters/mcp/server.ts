@@ -76,22 +76,32 @@ const tools = {
         await schedule.getMemberSchedule(raw),
       );
       if (input.format !== "html") return result;
-      await mkdir(reportDir, { recursive: true, mode: 0o700 });
-      const stamp = result.scope.asOf.replaceAll(/[^\d]/gu, "");
-      const file = join(reportDir, `schedule-${stamp}-${randomUUID()}.html`);
-      await writeFile(file, renderScheduleHtml(result), {
-        encoding: "utf8",
-        mode: 0o600,
-        flag: "wx",
-      });
-      return {
-        ...result,
-        links: [
-          ...(result.links ?? []),
-          { label: "本地成员排期报告", url: pathToFileURL(file).href },
-        ],
-        hints: [...(result.hints ?? []), "可打开本地成员排期报告查看 HTML。"],
-      };
+      try {
+        await mkdir(reportDir, { recursive: true, mode: 0o700 });
+        const stamp = result.scope.asOf.replaceAll(/[^\d]/gu, "");
+        const file = join(reportDir, `schedule-${stamp}-${randomUUID()}.html`);
+        await writeFile(file, renderScheduleHtml(result), {
+          encoding: "utf8",
+          mode: 0o600,
+          flag: "wx",
+        });
+        return {
+          ...result,
+          links: [
+            ...(result.links ?? []),
+            { label: "本地成员排期报告", url: pathToFileURL(file).href },
+          ],
+          hints: [...(result.hints ?? []), "可打开本地成员排期报告查看 HTML。"],
+        };
+      } catch {
+        return {
+          ...result,
+          hints: [
+            ...(result.hints ?? []),
+            "本地排期 HTML 报告写入失败，已返回表格数据。",
+          ],
+        };
+      }
     },
   ),
   query_stories: register(p1Tools.query_stories, ({ tracking }, _input, raw) =>
@@ -122,6 +132,10 @@ const tools = {
   ),
 } satisfies Record<keyof typeof p1Tools, unknown>;
 
+function isDeleteToolRequest(name: string): boolean {
+  return /(?:^|[._-])delete(?:$|[._-])|delete_story/iu.test(name);
+}
+
 function isToolName(name: string): name is keyof typeof tools {
   return Object.hasOwn(tools, name);
 }
@@ -146,12 +160,20 @@ export function createMcpServer(runtime?: WorkbenchRuntime): Server {
     try {
       if (!isToolName(params.name))
         return jsonResult(
-          {
-            ok: false,
-            code: "INVALID_INPUT",
-            message: "当前没有此 MCP 工具。",
-            retryable: false,
-          },
+          isDeleteToolRequest(params.name)
+            ? {
+                ok: false,
+                code: "CAPABILITY_CLI_ONLY",
+                message:
+                  "删除操作属于 W3 高危能力，不开放给 MCP，请改用 CLI（bzt delete）。",
+                retryable: false,
+              }
+            : {
+                ok: false,
+                code: "INVALID_INPUT",
+                message: "当前没有此 MCP 工具。",
+                retryable: false,
+              },
           true,
         );
       return await tools[params.name].call(workbench, params.arguments ?? {});

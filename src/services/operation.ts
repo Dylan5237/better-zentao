@@ -154,6 +154,8 @@ const repeatable = new Set([
 const destructive = new Set(["story.delete", "task.finish"]);
 const staleStepAction = "plan.stale";
 const unknownError = "无法确认禅道写入结果。";
+const reverseLookupSkewMs = 60_000;
+const reverseLookupWindowMs = 600_000;
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -824,7 +826,10 @@ export class OperationExecutor {
     const title = step.fields.title?.value;
     if (typeof title !== "string") return false;
     const createdBy = this.store.location.account;
-    const until = Math.min(this.options.clock(), attemptedAt + 300_000);
+    const since = Math.floor(attemptedAt / 1000) * 1000 - reverseLookupSkewMs;
+    const until =
+      Math.min(this.options.clock(), attemptedAt + reverseLookupWindowMs) +
+      reverseLookupSkewMs;
     let lookup: z.infer<typeof lookupResult>;
     try {
       lookup = lookupResult.parse(
@@ -834,7 +839,7 @@ export class OperationExecutor {
           product: step.product,
           title,
           createdBy,
-          since: attemptedAt,
+          since,
           until,
         }),
       );
@@ -849,7 +854,7 @@ export class OperationExecutor {
             match.product === step.product &&
             match.title === title &&
             match.createdBy === createdBy &&
-            match.createdAt >= attemptedAt &&
+            match.createdAt >= since &&
             match.createdAt <= until,
         )
         .map(({ id }) => id),

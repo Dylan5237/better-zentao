@@ -71,13 +71,28 @@ const create = {
   spec: { background: "数据很多", scope: "按部门筛选" },
   verify: "显示对应部门的数据",
 };
+const zentaoSecondFormat = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+function zentaoTimestamp(timestamp: number): string {
+  return zentaoSecondFormat.format(timestamp);
+}
+
 let homeDir: string;
 let now: number;
 const clock = () => now;
 const disposals: (() => Promise<void>)[] = [];
 beforeEach(() => {
   homeDir = mkdtempSync(join(tmpdir(), "bzt-mcp-"));
-  now = Date.UTC(2026, 10, 24);
+  now = Date.UTC(2026, 10, 24, 0, 0, 0, 350);
 });
 afterEach(async () => {
   for (const dispose of disposals.splice(0)) await dispose();
@@ -88,9 +103,16 @@ afterEach(async () => {
 function fakeZentao(
   options: {
     unknownCreate?: boolean;
+    unknownComment?: boolean;
+    hideComment?: boolean;
     version?: string;
     hideCreated?: boolean;
     instanceError?: boolean;
+    serverClockSkewMs?: number;
+    truncateStories?: boolean;
+    detail503?: boolean;
+    openedByOverride?: string;
+    extraUsers?: Array<typeof alice>;
   } = {},
 ) {
   const stories = new Map<number, Record<string, unknown>>([[31, story]]);
@@ -125,7 +147,8 @@ function fakeZentao(
           ...story,
           ...body,
           id,
-          openedDate: new Date(now).toISOString(),
+          openedBy: options.openedByOverride ?? "alice",
+          openedDate: zentaoTimestamp(now + (options.serverClockSkewMs ?? 0)),
         });
         if (options.unknownCreate) throw new Error("发送后连接中断");
         return Response.json({
@@ -152,14 +175,17 @@ function fakeZentao(
           id,
           actor: "alice",
           action: "commented",
-          date: new Date(now).toISOString(),
+          date: zentaoTimestamp(now + (options.serverClockSkewMs ?? 0)),
           comment: body.comment,
         });
+        if (options.unknownComment) throw new Error("评论发送后连接中断");
         return Response.json({ data: id });
       }
       throw new Error("未定义的离线写入");
     }
     if (Number.isFinite(storyId)) {
+      if (options.detail503 && storyId === 31)
+        return Response.json({}, { status: 503 });
       if (options.hideCreated && storyId !== 31)
         return Response.json({}, { status: 404 });
       return Response.json(stories.get(storyId) ?? {}, {
@@ -178,7 +204,9 @@ function fakeZentao(
     const routes: Record<string, unknown> = {
       "/index.php": { version: options.version ?? "22.6", URAndSR: true },
       "/api.php/v1/user": { profile: alice },
-      "/api.php/v2/users": { users: [alice, bob] },
+      "/api.php/v2/users": {
+        users: [alice, bob, ...(options.extraUsers ?? [])],
+      },
       "/api.php/v1/products": { products: [product] },
       "/api.php/v1/products/29": {
         ...product,
@@ -186,7 +214,10 @@ function fakeZentao(
       },
       "/api.php/v1/products/29/plans": { plans: [] },
       "/api.php/v1/products/29/bugs": { bugs: [] },
-      "/api.php/v1/products/29/stories": { stories: [...stories.values()] },
+      "/api.php/v1/products/29/stories": {
+        stories: [...stories.values()],
+        ...(options.truncateStories ? { total: stories.size + 10 } : {}),
+      },
       "/api.php/v2/product/browse": { stories: [] },
       "/api.php/v2/requirement/view": {
         story: { ...story, id: 41, type: "requirement", linkStories: "31" },
@@ -206,9 +237,13 @@ function fakeZentao(
       },
       "/api.php/v2/story/view": {
         story: stories.get(Number(url.searchParams.get("storyID"))),
-        actions: [...actions].flatMap(([target, action]) =>
-          target === Number(url.searchParams.get("storyID")) ? [action] : [],
-        ),
+        actions: options.hideComment
+          ? []
+          : [...actions].flatMap(([target, action]) =>
+              target === Number(url.searchParams.get("storyID"))
+                ? [action]
+                : [],
+            ),
         users: { [privatePerson]: "公司人员" },
         password: hash,
       },
@@ -567,4 +602,242 @@ it("提需并激活时依次回读创建、激活、改派与评论", async () =
     "POST /api.php/v1/stories/32/assign",
     "POST /api.php/v2/action/comment?objectType=story&objectID=32",
   ]);
+});
+
+it.each([
+  [-2_000, true],
+  [2_000, true],
+  [-120_000, false],
+])(
+  "B-1 反查容忍 ±60s 时钟偏差与秒级截断（skew=%i ms -> confirmed=%s）",
+  async (serverClockSkewMs, recovered) => {
+    const options = {
+      unknownCreate: true,
+      hideCreated: true,
+      serverClockSkewMs,
+    };
+    const { writes } = fakeZentao(options);
+    const { call, logs } = await connect(configuredEnv());
+    const opId = opIdOf((await call("create_story", create)).value);
+    expect(await call("confirm_operation", { opId })).toMatchObject({
+      value: { status: "unknown" },
+    });
+    options.hideCreated = false;
+    expect(
+      await call("confirm_operation", { opId, resume: true }),
+    ).toMatchObject({
+      value: { status: recovered ? "confirmed" : "unknown" },
+    });
+    expect(writes).toHaveLength(1);
+    const logEntry = z.object({
+      method: z.string(),
+      pathTemplate: z.string(),
+      opId: z.string().optional(),
+    });
+    const writeLogs = logs
+      .map((line) => logEntry.parse(JSON.parse(line)))
+      .filter((entry) => entry.method !== "GET");
+    expect(writeLogs).toContainEqual(
+      expect.objectContaining({
+        method: "POST",
+        pathTemplate: "/api.php/v2/stories",
+        opId,
+      }),
+    );
+    assertNoSensitiveData(logs, secrets);
+  },
+);
+
+it("B-1 列表分页截断或创建人不匹配时反查保持 unknown", async () => {
+  for (const extra of [
+    { truncateStories: true },
+    { openedByOverride: "bob" },
+  ]) {
+    const options = { unknownCreate: true, hideCreated: true, ...extra };
+    fakeZentao(options);
+    const { call } = await connect(configuredEnv());
+    const opId = opIdOf((await call("create_story", create)).value);
+    expect(await call("confirm_operation", { opId })).toMatchObject({
+      value: { status: "unknown" },
+    });
+    options.hideCreated = false;
+    expect(
+      await call("confirm_operation", { opId, resume: true }),
+    ).toMatchObject({
+      value: { status: "unknown" },
+    });
+  }
+});
+
+it("B-1 评论回执丢失且时钟带毫秒偏差时可通过 resume 回读恢复", async () => {
+  const options = {
+    unknownComment: true,
+    hideComment: true,
+    serverClockSkewMs: -2_000,
+  };
+  const { writes } = fakeZentao(options);
+  const { call, logs } = await connect(configuredEnv());
+  const opId = opIdOf(
+    (
+      await call("create_story", {
+        ...create,
+        states: { activate: true },
+      })
+    ).value,
+  );
+  now += 3_001;
+  expect(
+    await call("confirm_operation", { opId, previewAck: true }),
+  ).toMatchObject({
+    value: {
+      status: "unknown",
+      steps: [
+        { action: "story.create", state: "done" },
+        { action: "story.activate", state: "done" },
+        { action: "story.assign", state: "done" },
+        { action: "story.comment", state: "unknown" },
+      ],
+    },
+  });
+  expect(writes).toHaveLength(4);
+  options.hideComment = false;
+  expect(
+    await call("confirm_operation", {
+      opId,
+      previewAck: true,
+      resume: true,
+    }),
+  ).toMatchObject({
+    isError: false,
+    value: {
+      status: "confirmed",
+      steps: [
+        { action: "story.create", state: "done" },
+        { action: "story.activate", state: "done" },
+        { action: "story.assign", state: "done" },
+        { action: "story.comment", state: "done" },
+      ],
+    },
+  });
+  expect(writes).toHaveLength(4);
+  assertNoSensitiveData(logs, secrets);
+});
+
+it("N-2 同值指派无备注时幂等跳过，有备注时发送指派", async () => {
+  const { writes } = fakeZentao();
+  const { call } = await connect(configuredEnv());
+  const skipOpId = opIdOf(
+    (await call("assign_story", { storyIds: [31], to: "alice" })).value,
+  );
+  expect(await call("confirm_operation", { opId: skipOpId })).toMatchObject({
+    isError: false,
+    value: { status: "confirmed" },
+  });
+  expect(writes).toEqual([]);
+
+  const sendOpId = opIdOf(
+    (
+      await call("assign_story", {
+        storyIds: [31],
+        to: "alice",
+        comment: "请跟进",
+      })
+    ).value,
+  );
+  expect(await call("confirm_operation", { opId: sendOpId })).toMatchObject({
+    isError: false,
+    value: { status: "confirmed" },
+  });
+  expect(writes).toEqual([
+    {
+      method: "POST",
+      route: "/api.php/v1/stories/31/assign",
+      body: { assignedTo: "alice", comment: "请跟进" },
+    },
+  ]);
+});
+
+it("N-4 HTML 报告目录不可写时降级返回表格数据并提示", async () => {
+  fakeZentao();
+  const { call } = await connect(configuredEnv());
+  writeFileSync(join(homeDir, "reports"), "occupied");
+  const schedule = await call("get_member_schedule", {
+    members: ["bob"],
+    format: "html",
+  });
+  expect(schedule).toMatchObject({
+    isError: false,
+    value: {
+      ok: true,
+      hints: expect.arrayContaining([
+        "本地排期 HTML 报告写入失败，已返回表格数据。",
+      ]),
+    },
+  });
+  expect(schedule.value).not.toHaveProperty("links");
+});
+
+it("N-7 / AC-84 / N-9 直呼删除工具、上游 503 重试语义与候选脱敏", async () => {
+  const { call: noConfigCall } = await connect();
+  expect(await noConfigCall("delete_story", { id: 31 })).toMatchObject({
+    isError: true,
+    value: {
+      code: "CAPABILITY_CLI_ONLY",
+      message: expect.stringContaining("bzt delete"),
+      retryable: false,
+    },
+  });
+  expect(await noConfigCall("unknown_tool", {})).toMatchObject({
+    isError: true,
+    value: { code: "INVALID_INPUT", retryable: false },
+  });
+
+  fakeZentao({ detail503: true });
+  const { call: unavailableCall } = await connect(configuredEnv());
+  expect(
+    await unavailableCall("get_story_progress", { storyId: 31 }),
+  ).toMatchObject({
+    isError: true,
+    value: { code: "ZENTAO_UNAVAILABLE", retryable: true },
+  });
+
+  fakeZentao({
+    extraUsers: [
+      {
+        id: 3,
+        account: "https://secret.test/" + password,
+        realname: "重名同事",
+        role: "dev",
+        dept: 0,
+        deleted: false,
+      },
+      {
+        id: 4,
+        account: "dup_ok",
+        realname: "重名同事",
+        role: "dev",
+        dept: 0,
+        deleted: false,
+      },
+    ],
+  });
+  const { call: ambiguousCall } = await connect(configuredEnv());
+  expect(
+    await ambiguousCall("resolve_context", { people: ["重名同事"] }),
+  ).toMatchObject({
+    isError: true,
+    value: {
+      code: "AMBIGUOUS_ENTITY",
+      retryable: false,
+      details: {
+        candidates: [
+          expect.objectContaining({
+            account: "[已脱敏]",
+            realname: "重名同事",
+          }),
+          expect.objectContaining({ account: "dup_ok", realname: "重名同事" }),
+        ],
+      },
+    },
+  });
 });

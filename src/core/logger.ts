@@ -24,8 +24,13 @@ export const httpPathTemplate = z.string().refine((value) => {
   );
 });
 
+const operationLogId = z.union([
+  z.uuid(),
+  z.string().regex(/^op_[0-9A-HJKMNP-TV-Z]{26}$/u),
+]);
+
 export const httpLogIds = z.object({
-  opId: z.uuid().optional(),
+  opId: operationLogId.optional(),
   objectId: z.int().positive().optional(),
 });
 export type HttpLogIds = Readonly<z.infer<typeof httpLogIds>>;

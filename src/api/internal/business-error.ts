@@ -68,7 +68,10 @@ export function assertNoBusinessError(
     isNonEmptyText(error) ||
     (!hasValidBody && hasBusinessError(error)) ||
     (allowReceiptMessage
-      ? status === "fail" || receiptDiagnostic !== "禅道返回业务错误。"
+      ? status === "fail" ||
+        status === "failed" ||
+        status === "error" ||
+        receiptDiagnostic !== "禅道返回业务错误。"
       : (result !== "success" && isNonEmptyText(message)) ||
         (!hasValidBody && hasBusinessError(message)))
   ) {
