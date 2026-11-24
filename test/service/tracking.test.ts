@@ -110,6 +110,7 @@ afterEach(() => {
 
 function setup({
   account = "dev",
+  extraUsers = [],
   tasks = [task],
   stories = [story, draft, closed],
   failedExecution = false,
@@ -133,7 +134,8 @@ function setup({
   ],
 }: {
   account?: string;
-  tasks?: (typeof task)[];
+  extraUsers?: typeof users;
+  tasks?: (typeof task & { closedReason?: string })[];
   stories?: (typeof story & {
     plan?: string;
     deleted?: boolean;
@@ -150,6 +152,7 @@ function setup({
   contributeStatus?: number;
   bugs?: unknown[];
 } = {}) {
+  const allUsers = [...users, ...extraUsers];
   const { client, fetch } = mockReadClient((url) => {
     const path = url.pathname.replace("/zentao", "");
     const id = Number(path.split("/").at(-1));
@@ -169,9 +172,9 @@ function setup({
       return Response.json({}, { status: contributeStatus });
     const rows: Record<string, unknown> = {
       "/api.php/v1/user": {
-        profile: users.find((person) => person.account === account),
+        profile: allUsers.find((person) => person.account === account),
       },
-      "/api.php/v2/users": { users },
+      "/api.php/v2/users": { users: allUsers },
       "/api.php/v1/products": {
         products: [
           { id: 29, name: "示例产品", status: "normal", deleted: false },
@@ -823,4 +826,110 @@ it("N11 按编号读取需求保留错误码和重试语义", async () => {
       storyId: 31,
     }),
   ).rejects.toMatchObject({ code: "ZENTAO_UNAVAILABLE", retryable: true });
+});
+
+it("B-1 仅正文标签指定维护人且已移交研发时明示未读提示，刷新角色缓存后纳入我维护的", async () => {
+  const localStore = openLocalStore({
+    dbPath: ":memory:",
+    baseUrl,
+    account: "tag_dm",
+    clock,
+  });
+  try {
+    const taggedStory = {
+      ...story,
+      openedBy: "other",
+      assignedTo: "dev",
+      status: "active",
+      feedbackBy: "",
+      spec: "<p>需求说明</p><p>[bzt:v1 maintainer=tag_dm;receiver=dev]</p>",
+    };
+    const { service } = setup({
+      account: "tag_dm",
+      extraUsers: [
+        {
+          id: 5,
+          account: "tag_dm",
+          realname: "标签维护人",
+          role: "po",
+          dept: 0,
+          deleted: false,
+        },
+      ],
+      stories: [taggedStory],
+      tasks: [],
+      requirements: [],
+      localStore,
+    });
+    const first = await service.getMyWork({ groups: ["maintained"] });
+    expect(first.data.maintained).toEqual([]);
+    expect(first.inferences).toContainEqual(
+      expect.objectContaining({ field: "maintained", level: "inferred" }),
+    );
+    expect(first.hints?.join(" ")).toContain(
+      'query_stories(role="maintainer")',
+    );
+
+    const queried = await service.queryStories({ role: "maintainer" });
+    expect(queried.data.items.map(({ id }) => id)).toEqual([31]);
+    expect(localStore.storyRoles.get(31)).toMatchObject({
+      maintainer: "tag_dm",
+      receiver: "dev",
+    });
+
+    const second = await service.getMyWork({ groups: ["maintained"] });
+    expect(second.data.maintained.map(({ id }) => id)).toEqual([31]);
+    expect(second.inferences.some(({ field }) => field === "maintained")).toBe(
+      false,
+    );
+    expect(second.hints).toBeUndefined();
+  } finally {
+    localStore.close();
+  }
+});
+
+it("get_my_work 支持 raised 分组与 horizonDays=0 窗口，N4 进展卡片跳过已取消阶段", async () => {
+  const { service: designService } = setup({
+    account: "design",
+    tasks: [{ ...task, id: 14, assignedTo: "design", deadline: "2026-11-25" }],
+  });
+  const mine = await designService.getMyWork({
+    groups: ["action", "raised"],
+    horizonDays: 0,
+  });
+  expect(mine.scope.filters).toMatchObject({ horizonDays: 0 });
+  expect(mine.data.action.dueSoon).toEqual([]);
+  expect(mine.data.raised.map(({ id }) => id)).toEqual([31, 32, 33]);
+
+  const { service: cardService } = setup({
+    tasks: [
+      { ...task, id: 11, name: "【研发】查询", status: "done" },
+      {
+        ...task,
+        id: 12,
+        name: "【测试】查询",
+        status: "cancel",
+        closedReason: "cancel",
+        deadline: "2026-11-28",
+      },
+      {
+        ...task,
+        id: 13,
+        name: "【验收】查询",
+        status: "wait",
+        assignedTo: "design",
+        deadline: "2026-11-29",
+      },
+    ],
+  });
+  const progress = await cardService.getStoryProgress({
+    storyId: 31,
+    format: "card",
+  });
+  expect(progress.data).toMatchObject({
+    card: expect.stringContaining("下一步：产品验收（预计 2026-11-29）"),
+  });
+  expect(progress.data).not.toMatchObject({
+    card: expect.stringContaining("下一步：功能测试"),
+  });
 });

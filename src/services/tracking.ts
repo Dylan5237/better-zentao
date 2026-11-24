@@ -251,6 +251,7 @@ function evidenceText(html: string) {
     );
 }
 
+// docs/07 §3.6、docs/05 §7 SEC-06：提取研发视图字段并截断不可信正文。
 function developmentText(story: StoryDetail) {
   const sections: Record<"scope" | "design" | "acceptance", string[]> = {
     scope: [],
@@ -617,6 +618,19 @@ class TrackingRead {
       () => true,
     );
     this.storyTitles.set(id, story.title);
+    const tag = parseStoryRoleTag(story.spec ?? "");
+    if (tag?.maintainer || tag?.receiver) {
+      try {
+        this.options.store.storyRoles.upsert({
+          storyId: story.id,
+          maintainer: tag.maintainer ?? null,
+          receiver: tag.receiver ?? null,
+          updatedAt: this.now,
+        });
+      } catch {
+        // 角色缓存更新失败不影响只读查询。
+      }
+    }
     for (const execution of story.executions)
       if (!this.executions.has(execution.id))
         this.executions.set(execution.id, execution);
@@ -1407,7 +1421,11 @@ async function storyEvidence(
     ];
   });
   const nextStage = stages.find(
-    ({ state, required }) => required && state !== "done" && state !== "waived",
+    ({ state, required }) =>
+      required &&
+      state !== "done" &&
+      state !== "waived" &&
+      state !== "cancelled",
   );
   const next = nextStage?.tasks
     .filter(({ timeState }) => timeState !== "done")
@@ -1764,12 +1782,15 @@ export class TrackingService {
       since,
       markSeen,
     };
-    const finish = () =>
-      state.finish(
+    const hints: string[] = [];
+    const finish = (): GetMyWorkOutput => ({
+      ...state.finish(
         data,
         filters,
         "按叶子任务截止日期和工作日日历；新增按指派时间与本地已读时间。",
-      );
+      ),
+      ...(hints.length ? { hints } : {}),
+    });
     const me = await state.me();
     if (!me?.account || !selected.size) return finish();
     filters.account = bounded(me.account);
@@ -1898,6 +1919,20 @@ export class TrackingService {
       for (const id of ownStoryIds) candidates.add(id);
     if (selected.has("action")) for (const id of reviewIds) candidates.add(id);
     for (const id of contributionIds) candidates.add(id);
+    const uninspectedMaintained = selected.has("maintained")
+      ? stories.filter(
+          ({ id, status }) => status !== "closed" && !candidates.has(id),
+        ).length
+      : 0;
+    if (uninspectedMaintained > 0) {
+      state.inferred(
+        "maintained",
+        `需求列表不含正文角色标签；本次已按提出人、当前处理人、模块设计主管与本地角色缓存筛选，另有 ${uninspectedMaintained} 条未关闭需求未读取正文标签，仅由正文标签指定维护人且尚未入本地缓存的需求可能漏列。`,
+      );
+      hints.push(
+        `另有 ${uninspectedMaintained} 条未关闭需求未读取正文角色标签；如需全量核对仅由正文标签指定维护人的需求，请调用 query_stories(role="maintainer") 刷新本地角色缓存。`,
+      );
+    }
 
     const details = await Promise.all(
       [...candidates].map(async (id) => ({
@@ -2001,6 +2036,7 @@ export class TrackingService {
     return finish();
   }
 
+  // docs/04 §3.2、§4.4，docs/07 §3.2：按上游阶段完成度与严重 Bug 门禁计算可开始任务。
   private addReadyTasks(
     state: TrackingRead,
     output: GetMyWorkOutput["data"]["can_start"],
