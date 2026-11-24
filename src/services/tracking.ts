@@ -2,7 +2,7 @@ import { z } from "zod";
 import { listProductBugs } from "../api/bug.ts";
 import type { ZentaoReadClient } from "../api/client.ts";
 import { listExecutionsIncludingClosed } from "../api/execution.ts";
-import { listMyWork } from "../api/my.ts";
+import { listMyContributions, listMyWork } from "../api/my.ts";
 import { getCurrentUser, listUsers } from "../api/org.ts";
 import { listProductPlans } from "../api/plan.ts";
 import { listProducts } from "../api/product.ts";
@@ -44,7 +44,12 @@ import type { TeamConfig } from "../core/config.ts";
 import type { Execution } from "../core/dto/execution.ts";
 import type { User } from "../core/dto/org.ts";
 import { walkProductPlans, type ProductPlan } from "../core/dto/plan.ts";
-import type { Story, StoryDetail } from "../core/dto/story.ts";
+import {
+  storyDetailDtoFor,
+  storyDtoFor,
+  type Story,
+  type StoryDetail,
+} from "../core/dto/story.ts";
 import type { Task, TaskDetail } from "../core/dto/task.ts";
 import { BztError } from "../core/errors.ts";
 import type { LocalStore } from "../core/store/index.ts";
@@ -58,6 +63,7 @@ import { summarizeLeafWork, taskTimeStatus } from "../domain/task.ts";
 import {
   evaluateRules,
   rules,
+  type RiskHit,
   type RuleContext,
   type RuleInput,
 } from "../rules/index.ts";
@@ -71,7 +77,8 @@ interface TrackingOptions {
   readonly store: Pick<
     LocalStore,
     "seenCursor" | "sourceLinks" | "intake" | "storyRoles"
-  >;
+  > &
+    Partial<Pick<LocalStore, "cache">>;
 }
 
 type WorkTask = Pick<Task, Extract<keyof Task, string>> & {
@@ -84,7 +91,7 @@ type StoryRow =
 type StageTask = Parameters<typeof summarizeStages>[0][number] & WorkTask;
 type Inferences = GetStoryProgressOutput["inferences"];
 type Gaps = GetStoryProgressOutput["gaps"];
-type ParentRisk = GetTeamWorkOutput["data"]["parentRisks"][number];
+type ParentRisk = NonNullable<GetTeamWorkOutput["data"]["parentRisks"]>[number];
 type FullProgress = Extract<
   GetStoryProgressOutput["data"],
   { story: StoryItem }
@@ -134,11 +141,36 @@ function isoTime(timestamp: number) {
   return `${fields.year?.padStart(4, "0")}-${fields.month}-${fields.day}T${fields.hour}:${fields.minute}:${fields.second}.${fields.fractionalSecond}Z`;
 }
 
-function bounded(text: string) {
+function bounded(text: string, limit = 200) {
   const line = text.trim().replace(/[\r\n\u2028\u2029]+/gu, " ");
-  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+  return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
 }
 
+function cachedDate(value: number | null | undefined) {
+  return value == null ? value : isoTime(value);
+}
+
+// SQLite 保存已投影的字段。回读仍经 DTO 校验并恢复日期与编号列表。
+function encodeStory(story: Story | StoryDetail) {
+  return {
+    ...story,
+    openedDate: cachedDate(story.openedDate),
+    assignedDate: cachedDate(story.assignedDate),
+    closedDate: cachedDate(story.closedDate),
+    lastEditedDate: cachedDate(story.lastEditedDate),
+    reviewedDate: cachedDate(story.reviewedDate),
+    plan: story.plan?.join(","),
+    linkStories: story.linkStories?.join(","),
+    linkRequirements: story.linkRequirements?.join(","),
+    actions:
+      "actions" in story
+        ? story.actions?.map(({ date, ...action }) => ({
+            ...action,
+            date: cachedDate(date),
+          }))
+        : undefined,
+  };
+}
 function indexById<T extends { id: number }>(rows: readonly T[]) {
   return new Map(rows.map((row) => [row.id, row]));
 }
@@ -178,7 +210,10 @@ function includesText(value: string | null | undefined, query: string) {
 
 function feedbackTokens(value: string | null | undefined) {
   return (
-    value?.split(/[、，,;；]/u).map((token) => token.trim().toLowerCase()) ?? []
+    value
+      ?.split(/[、，,;；]/u)
+      .map((token) => token.trim().toLowerCase())
+      .filter(Boolean) ?? []
   );
 }
 
@@ -243,10 +278,10 @@ function developmentText(story: StoryDetail) {
   }
   const acceptance = story.verify ? evidenceText(story.verify).trim() : "";
   return {
-    scope: bounded(sections.scope.join(" ")) || undefined,
-    design: bounded(sections.design.join(" ")) || undefined,
-    acceptance:
-      bounded(acceptance || sections.acceptance.join(" ")) || undefined,
+    scope: bounded(sections.scope.join(" "), 2000) || undefined,
+    designRef: bounded(sections.design.join(" "), 2000) || undefined,
+    verify:
+      bounded(acceptance || sections.acceptance.join(" "), 2000) || undefined,
   };
 }
 
@@ -367,6 +402,52 @@ class TrackingRead {
     return page;
   }
 
+  private async cached<T>(
+    key: string,
+    schema: z.ZodType<T>,
+    load: () => Promise<T>,
+    encode: (value: T) => unknown,
+    cacheable: (value: T) => boolean,
+    fresh = false,
+  ): Promise<T> {
+    const {
+      config,
+      store: { cache },
+    } = this.options;
+    // docs/05 §8 查询最多缓存一分钟，可通过任务缓存配置缩短或关闭。
+    const ttl = Math.min(60_000, config.cache.taskMinutes * 60_000);
+    if (!cache || ttl === 0) return load();
+    try {
+      const raw = cache.get(key);
+      if (raw) {
+        const parsed = z
+          .object({ observedAt: z.int(), value: schema })
+          .safeParse(JSON.parse(raw));
+        if (
+          parsed.success &&
+          parsed.data.observedAt <= this.now &&
+          (!fresh || parsed.data.observedAt === this.now)
+        )
+          return parsed.data.value;
+      }
+    } catch {
+      // 缓存损坏或不可用时直接请求禅道。
+    }
+    const value = await load();
+    if (cacheable(value)) {
+      try {
+        cache.set(
+          key,
+          JSON.stringify({ observedAt: this.now, value: encode(value) }),
+          ttl,
+        );
+      } catch {
+        // 缓存写入失败不影响已取得的结果。
+      }
+    }
+    return value;
+  }
+
   me() {
     return this.read("me", () => getCurrentUser(this.options.client));
   }
@@ -456,13 +537,40 @@ class TrackingRead {
     );
   }
 
-  async stories(product?: number, type: "story" | "requirement" = "story") {
-    const list =
-      type === "story" ? listProductStories : listProductRequirements;
+  async stories(
+    product?: number,
+    type: "story" | "requirement" = "story",
+    fresh = false,
+  ) {
     const products = await this.products(product);
+    const { client, config } = this.options;
     const pages = await Promise.all(
       products.map(({ id }) =>
-        this.page(`${type}s:${id}`, () => list(this.options.client, id)),
+        this.page(`${type}s:${id}`, () =>
+          type === "requirement"
+            ? listProductRequirements(client, id)
+            : this.cached(
+                `stories:${id}`,
+                z.object({
+                  items: z
+                    .array(storyDtoFor(config.timezone))
+                    .refine((rows) =>
+                      rows.every(
+                        (row) => row.type === "story" && row.product === id,
+                      ),
+                    ),
+                  truncated: z.boolean(),
+                }),
+                () => listProductStories(client, id),
+                ({ items, truncated }) => ({
+                  items: items.map(encodeStory),
+                  truncated,
+                }),
+                ({ truncated, items }) =>
+                  !truncated && items.every((row) => row.product === id),
+                fresh,
+              ),
+        ),
       ),
     );
     const stories = [
@@ -483,21 +591,36 @@ class TrackingRead {
   detail(id: number) {
     const pending =
       this.storyDetails.get(id) ??
-      this.read(`story:${id}`, async () => {
-        const story = await getStoryDetail(this.options.client, id);
-        if (story.id !== id || story.deleted)
+      this.read(`story:${id}`, () => this.requiredDetail(id));
+    this.storyDetails.set(id, pending);
+    return pending;
+  }
+
+  async requiredDetail(id: number) {
+    const { client, config } = this.options;
+    const story = await this.cached(
+      `story:${id}`,
+      storyDetailDtoFor(config.timezone).refine(
+        (row) => row.id === id && !row.deleted,
+      ),
+      async () => {
+        const row = await getStoryDetail(client, id);
+        if (row.id !== id)
           throw new BztError(
             "ZENTAO_SCHEMA_MISMATCH",
             "需求详情与查询对象不一致。",
           );
-        this.storyTitles.set(id, story.title);
-        for (const execution of story.executions)
-          if (!this.executions.has(execution.id))
-            this.executions.set(execution.id, execution);
-        return story;
-      });
-    this.storyDetails.set(id, pending);
-    return pending;
+        if (row.deleted) throw new BztError("NOT_FOUND", "需求已删除。");
+        return row;
+      },
+      encodeStory,
+      () => true,
+    );
+    this.storyTitles.set(id, story.title);
+    for (const execution of story.executions)
+      if (!this.executions.has(execution.id))
+        this.executions.set(execution.id, execution);
+    return story;
   }
 
   allExecutions() {
@@ -514,11 +637,8 @@ class TrackingRead {
     return this.executionList;
   }
 
-  async allTasks(projects?: readonly number[]) {
-    const executions = (await this.allExecutions()).filter(
-      ({ project }) =>
-        !projects?.length || (project != null && projects.includes(project)),
-    );
+  async allTasks() {
+    const executions = await this.allExecutions();
     return this.loadTasks(executions.map(({ id }) => id));
   }
 
@@ -797,6 +917,66 @@ class TrackingRead {
     return { roles, roleInput, intakes, links: links ?? [] };
   }
 
+  async maintainedCandidates(stories: Story[], account: string) {
+    const { config, store } = this.options;
+    const matches = await Promise.all(
+      stories
+        .filter(({ status }) => status !== "closed")
+        .map(async (story) => {
+          const module = config.modules[`${story.product}:${story.module}`];
+          if (
+            story.openedBy === account ||
+            story.assignedTo === account ||
+            (module?.designLead ??
+              config.moduleDefaults[story.product]?.designLead) === account
+          )
+            return story.id;
+          const stored = await this.read(
+            `storyRoles:${story.id}`,
+            () => store.storyRoles.get(story.id),
+            true,
+          );
+          return stored?.maintainer === account ? story.id : undefined;
+        }),
+    );
+    return new Set(matches.filter((id) => id !== undefined));
+  }
+
+  async feedbackStoryIds(account: string, realname: string) {
+    const { intake, sourceLinks } = this.options.store;
+    const records = await this.read("intake", () => intake.list());
+    const matched =
+      records?.filter(
+        ({ feedbackByAccount, feedbackByText }) =>
+          feedbackByAccount === account ||
+          feedbackTokens(feedbackByText).some(
+            (token) =>
+              token === account.toLowerCase() ||
+              token === realname.toLowerCase(),
+          ),
+      ) ?? [];
+    const links = await Promise.all(
+      matched.map(({ intakeId }) =>
+        this.read("sourceLinks:intake", () =>
+          sourceLinks.listFrom("intake", intakeId),
+        ),
+      ),
+    );
+    return new Set(
+      numericIds(
+        links.flatMap(
+          (page) =>
+            page
+              ?.filter(
+                ({ toType, relation }) =>
+                  toType === "story" && relation === "source",
+              )
+              .map(({ toId }) => toId) ?? [],
+        ),
+      ),
+    );
+  }
+
   storyItem(
     story: StoryRow,
     people: Awaited<ReturnType<TrackingRead["roles"]>>,
@@ -888,6 +1068,7 @@ function selectedPlan(
   return linked.find((plan) => month && overlapsPlan(plan, month)) ?? linked[0];
 }
 
+// docs/04 §4.6 只按 L3 的起止日期判断计划月份。
 function overlapsPlan(plan: ProductPlan, month: string) {
   return (
     planOverlapDays(
@@ -1037,6 +1218,51 @@ async function relatedStories(
   };
 }
 
+// docs/07 §3.10 风险输出与巡检工具共用契约，领域证据保留在原因中。
+function projectRisk(
+  state: TrackingRead,
+  story: StoryDetail,
+  risk: RiskHit & { waived?: { by: string; reason: string } },
+): FullProgress["risks"][number] {
+  const task =
+    risk.objectType === "task" ? state.tasks.get(risk.objectId) : undefined;
+  const owner = state.person(task ? task.assignedTo : story.assignedTo);
+  const level = risk.confidence === "recorded" ? "recorded" : "inferred";
+  if (level === "inferred")
+    state.inferred(
+      `${risk.objectType}:${risk.objectId}:risk:${risk.ruleId}`,
+      "规则命中使用了推测的阶段或流程证据。",
+    );
+  const limit = risk.threshold
+    ? `（${risk.threshold.source === "default" ? "默认" : "已确认配置"}阈值：${risk.threshold.workdays} 个工作日）`
+    : "";
+  return {
+    rule: risk.ruleId,
+    severity: risk.severity,
+    level,
+    object: {
+      type: risk.objectType,
+      id: risk.objectId,
+      title: bounded(task?.name ?? story.title),
+      url: state.url(risk.objectType, risk.objectId),
+      untrusted: true,
+    },
+    owner: owner
+      ? { account: owner.account, realname: owner.realname }
+      : undefined,
+    since: risk.since ?? undefined,
+    reason: `${risk.state === "stalled" ? "滞留" : "缺口"}：${risk.evidence.join("，")}${limit}`,
+    suggestion: risk.suggestion,
+    waived: risk.waived
+      ? {
+          by: bounded(risk.waived.by),
+          reason: bounded(risk.waived.reason),
+          untrusted: true,
+        }
+      : undefined,
+  };
+}
+
 async function storyEvidence(
   state: TrackingRead,
   story: StoryDetail,
@@ -1109,7 +1335,7 @@ async function storyEvidence(
       ...Object.values(config.moduleDefaults),
     ].flatMap(({ devLead }) => (devLead ? [devLead] : [])),
   ]);
-  const risks = evaluateRules(
+  const evaluation = evaluateRules(
     {
       story,
       tasks: stageInputs,
@@ -1131,7 +1357,10 @@ async function storyEvidence(
         rules.filter(({ id }) => !config.rules[id].enabled).map(({ id }) => id),
       ),
     },
-  ).hits.map((risk) => ({ ...risk, evidence: [...risk.evidence] }));
+  );
+  const risks = [...evaluation.hits, ...evaluation.waived].map((risk) =>
+    projectRisk(state, story, risk),
+  );
   const lacksQualityEvidence =
     story.category !== "design" &&
     bugPage?.truncated !== false &&
@@ -1187,7 +1416,7 @@ async function storyEvidence(
     )[0];
   const riskCodes = [
     ...new Set([
-      ...risks.map(({ ruleId }) => ruleId),
+      ...evaluation.hits.map(({ ruleId }) => ruleId),
       ...business.flags.filter(
         (flag) => /^R\d+$/u.test(flag) && !rules.some(({ id }) => id === flag),
       ),
@@ -1251,6 +1480,7 @@ function feedbackMatches(
   );
 }
 
+// docs/04 §4.2–4.3 先在完整任务树判叶子，再按有效责任人过滤。
 function workItems(
   state: TrackingRead,
   members: Set<string>,
@@ -1407,25 +1637,13 @@ export class TrackingService {
     filters.teams = teams.map(({ id }) => id);
     filters.product = scope.product?.id ?? product;
     const productId = scope.product?.id;
-    const pages = await state.allTasks(
-      productId ? this.options.config.products[productId]?.projects : undefined,
-    );
+    const pages = await state.allTasks();
     await state.hydrateWorkTasks();
     const rows = [...state.tasks.values()].sort((a, b) => a.id - b.id);
-    const storyProducts = new Map<number, number>();
-    if (productId || group === "story") {
-      const ids = new Set(
-        rows.flatMap((task) => {
-          const id = state.storyId(task);
-          return id && (group === "story" || !task.product) ? [id] : [];
-        }),
-      );
-      await Promise.all(
-        [...ids].map(async (id) => {
-          const detail = await state.detail(id);
-          if (detail) storyProducts.set(id, detail.product);
-        }),
-      );
+    for (const task of rows) {
+      const id = state.storyId(task);
+      if (id && task.storyTitle?.trim() && !state.storyTitles.has(id))
+        state.storyTitles.set(id, task.storyTitle);
     }
     const work = workItems(
       state,
@@ -1433,11 +1651,33 @@ export class TrackingService {
       pages.every((page) => page?.truncated === false),
       rows,
     );
+    const detailIds = new Set<number>();
+    for (const { task, item } of work.leaves) {
+      if (
+        item.story &&
+        ((productId && !task.product) ||
+          (group === "story" &&
+            !item.story.title &&
+            (view === "all_open" || item.timeState === view)))
+      )
+        detailIds.add(item.story.id);
+    }
+    if (productId)
+      for (const { task } of work.parents)
+        if (task.story && !state.tasks.get(task.id)?.product)
+          detailIds.add(task.story.id);
+    const storyProducts = new Map<number, number>();
+    await Promise.all(
+      [...detailIds].map(async (id) => {
+        const detail = await state.detail(id);
+        if (detail) storyProducts.set(id, detail.product);
+      }),
+    );
     const inProduct = (task: WorkTask) => {
       if (!productId) return true;
       const storyId = state.storyId(task);
       const actual =
-        (storyId ? storyProducts.get(storyId) : undefined) ?? task.product;
+        task.product ?? (storyId ? storyProducts.get(storyId) : undefined);
       if (!actual)
         state.gap(`task:${task.id}:product`, "任务缺少可确认的产品归属。");
       return actual === productId;
@@ -1458,6 +1698,12 @@ export class TrackingService {
     const visible = leaves.filter(
       ({ item }) => view === "all_open" || item.timeState === view,
     );
+    if (group === "story")
+      for (const { item } of visible)
+        if (item.story && !item.story.title)
+          item.story.title = bounded(
+            state.storyTitles.get(item.story.id) ?? "",
+          );
     const grouped = groupBy(visible, ({ item, account }) =>
       group === "member"
         ? account
@@ -1555,21 +1801,35 @@ export class TrackingService {
       assignedAt > sinceMs &&
       assignedAt <= state.now;
 
-    const [pages, stories, review] = await Promise.all([
+    const [pages, stories, review, contributions] = await Promise.all([
       needsTasks ? state.allTasks() : [],
-      state.stories(),
+      // 游标不能越过来源列表的观察时间。
+      state.stories(undefined, "story", selected.has("new") && markSeen),
       selected.has("action")
         ? state.page("myWork:reviewBy", () =>
             listMyWork(client, { mode: "story", browseType: "reviewBy" }),
           )
         : undefined,
+      selected.has("raised")
+        ? state.page("my_contribute", () =>
+            listMyContributions(client, {
+              mode: "story",
+              browseType: "openedBy",
+            }),
+          )
+        : undefined,
       state.directory(),
     ]);
-    const reviewIds = new Set(
-      review?.items
-        .filter((item) => "type" in item && item.type === "story")
-        .map(({ id }) => id),
-    );
+    const storyIds = (page: typeof review) =>
+      new Set(
+        page?.items
+          .filter(
+            (item) => "type" in item && item.type === "story" && !item.deleted,
+          )
+          .map(({ id }) => id),
+      );
+    const reviewIds = storyIds(review);
+    const contributionIds = storyIds(contributions);
     if (needsTasks) await state.hydrateWorkTasks();
     const candidateTasks = [...state.tasks.values()].sort(
       (a, b) => a.id - b.id,
@@ -1579,6 +1839,12 @@ export class TrackingService {
       new Set([me.account]),
       pages.every((page) => page?.truncated === false),
       candidateTasks,
+    );
+    // docs/07 §3.2 新增用分配列表判定。此后补取的详情、角色或 Bug 均是辅助证据。
+    const newInputsComplete = !state.gaps.some(({ source }) =>
+      /^(?:me$|products$|executions$|stories:|tasks:|task:|my_contribute$|seenCursor:)/u.test(
+        source,
+      ),
     );
     if (selected.has("action")) data.parentRisks = work.parents;
     for (const { task, item } of work.leaves) {
@@ -1592,45 +1858,96 @@ export class TrackingService {
     const ownStoryIds = new Set(
       work.leaves.flatMap(({ item }) => (item.story ? [item.story.id] : [])),
     );
-    const candidates = new Set(
-      stories
-        .filter(
-          (story) =>
-            selected.has("maintained") ||
-            selected.has("raised") ||
-            story.assignedTo === me.account ||
-            reviewIds.has(story.id),
-        )
-        .map(({ id }) => id),
+    const [maintainedIds, feedbackIds] = await Promise.all([
+      selected.has("maintained")
+        ? state.maintainedCandidates(stories, me.account)
+        : new Set<number>(),
+      selected.has("raised")
+        ? state.feedbackStoryIds(me.account, me.realname)
+        : new Set<number>(),
+    ]);
+    const freshStories = indexById(
+      stories.filter(
+        (story) => story.assignedTo === me.account && isNew(story.assignedDate),
+      ),
     );
+    const candidates = new Set<number>();
+    for (const story of stories) {
+      const raised =
+        selected.has("raised") &&
+        (story.openedBy === me.account ||
+          feedbackIds.has(story.id) ||
+          feedbackTokens(story.feedbackBy).some(
+            (token) =>
+              token === me.account.toLowerCase() ||
+              me.realname.toLowerCase().includes(token),
+          ));
+      const open =
+        story.status !== "closed" &&
+        (maintainedIds.has(story.id) ||
+          (selected.has("action") &&
+            (story.assignedTo === me.account ||
+              story.reviewedBy === me.account)) ||
+          (selected.has("waiting_ready") &&
+            story.assignedTo === me.account &&
+            isWaiting(story)));
+      if (raised || open || freshStories.has(story.id))
+        candidates.add(story.id);
+    }
     if (selected.has("can_start"))
       for (const id of ownStoryIds) candidates.add(id);
     if (selected.has("action")) for (const id of reviewIds) candidates.add(id);
+    for (const id of contributionIds) candidates.add(id);
 
     const details = await Promise.all(
-      [...candidates].map((id) => state.detail(id)),
+      [...candidates].map(async (id) => ({
+        id,
+        story: await state.detail(id),
+      })),
     );
-    for (const story of details) {
-      if (!story) continue;
+    for (const { id, story } of details) {
+      const fresh = freshStories.get(id);
+      if (!story) {
+        if (fresh) {
+          const people = await state.roles(fresh);
+          state.inferred(
+            `story:${id}:progress`,
+            "仅已确认指派，需求进展待确认。",
+          );
+          data.new.push(
+            state.storyItem(
+              fresh,
+              people,
+              { value: "无法判断", level: "inferred" },
+              [],
+            ),
+          );
+        }
+        continue;
+      }
       const people = await state.roles(story);
       const { roles } = people;
       const assigned = roles.currentHandler === me.account;
       const waiting =
         assigned && isWaiting(story) && roles.maintainer !== me.account;
       const maintained =
-        selected.has("maintained") && roles.maintainer === me.account;
+        selected.has("maintained") &&
+        story.status !== "closed" &&
+        roles.maintainer === me.account;
       const raised =
         selected.has("raised") &&
-        (roles.proposer === me.account ||
+        (contributionIds.has(id) ||
+          roles.proposer === me.account ||
           feedbackMatches(story, people, me.account, me.realname));
       const action =
-        selected.has("action") && (assigned || reviewIds.has(story.id));
+        selected.has("action") &&
+        story.status !== "closed" &&
+        (assigned || reviewIds.has(story.id));
       const canStart =
         selected.has("can_start") &&
         ownStoryIds.has(story.id) &&
         story.category === "feature" &&
         story.status === "active";
-      const fresh = assigned && isNew(story.assignedDate);
       if (!(
         maintained ||
         raised ||
@@ -1642,7 +1959,11 @@ export class TrackingService {
         continue;
       const evidence = await storyEvidence(state, story, people);
       const { item } = evidence;
-      if (fresh) data.new.push(item);
+      if (fresh)
+        data.new.push({
+          ...item,
+          currentOwner: state.person(fresh.assignedTo),
+        });
       if (waiting && selected.has("waiting_ready"))
         data.waiting_ready.push({ ...item, waitingFor: item.maintainer });
       if (maintained) data.maintained.push(item);
@@ -1671,8 +1992,7 @@ export class TrackingService {
           me.account,
         );
     }
-    // 部分结果保留游标，避免下次查询时跳过本次未能读取的新增事项。
-    if (markSeen && selected.has("new") && !state.gaps.length) {
+    if (markSeen && selected.has("new") && newInputsComplete) {
       await state.read("seenCursor:my_work", () => {
         const previous = store.seenCursor.get("my_work")?.lastSeenAt;
         store.seenCursor.set("my_work", Math.max(state.now, previous ?? 0));
@@ -1727,7 +2047,8 @@ export class TrackingService {
       }
       if (
         (item.stage === "acceptance" || item.stage === "delivery") &&
-        test?.status === "completed"
+        test?.status === "completed" &&
+        ["待验收", "待交付", "可关闭"].includes(evidence.progress.value)
       )
         output.acceptDeliver.push(owned);
     }
@@ -1815,8 +2136,22 @@ export class TrackingService {
         let story: StoryRow;
         let storyDetail: StoryDetail | undefined;
         if (type === "requirement") {
+          const links =
+            unlinked !== undefined
+              ? await state.read(`sourceLinks:requirement:${row.id}`, () =>
+                  store.sourceLinks.listFrom("requirement", String(row.id)),
+                )
+              : undefined;
+          const knownLinked = Boolean(
+            row.linkStories?.length ||
+            links?.some(
+              ({ toType, relation }) =>
+                toType === "story" && relation === "links",
+            ),
+          );
+          if (unlinked === true && knownLinked) return undefined;
           const detail =
-            unlinked !== undefined || role || who || keyword
+            (unlinked !== undefined && !knownLinked) || role || who || keyword
               ? await state.read(`requirement:${row.id}`, () =>
                   getRequirementDetail(client, row.id),
                 )
@@ -1830,21 +2165,12 @@ export class TrackingService {
             state.gap(`requirement:${row.id}`, "用户需求详情与列表不一致。");
             return undefined;
           }
-          const links =
-            unlinked !== undefined
-              ? await state.read(`sourceLinks:requirement:${row.id}`, () =>
-                  store.sourceLinks.listFrom("requirement", String(row.id)),
-                )
-              : undefined;
-          if (unlinked !== undefined && (!detail || !links)) return undefined;
+          if (unlinked !== undefined && !knownLinked && (!detail || !links))
+            return undefined;
           const linked = Boolean(
-            row.linkStories?.length ||
+            knownLinked ||
             detail?.story.linkStories?.length ||
-            detail?.relations.some(({ type }) => type === "story") ||
-            links?.some(
-              ({ toType, relation }) =>
-                toType === "story" && relation === "links",
-            ),
+            detail?.relations.some(({ type }) => type === "story"),
           );
           if (unlinked !== undefined && unlinked === linked) return undefined;
           story = detail?.story ?? row;
@@ -2036,7 +2362,10 @@ export class TrackingService {
     }
     if (!ids.length && !state.gaps.length)
       throw new BztError("NOT_FOUND", "没有找到相关的研发需求。");
-    const details = await Promise.all(ids.map((id) => state.detail(id)));
+    const details =
+      storyId === undefined
+        ? await Promise.all(ids.map((id) => state.detail(id)))
+        : [await state.requiredDetail(storyId)];
     const story = details[0];
     if (!story || ids.length !== 1)
       return finish({
@@ -2057,13 +2386,17 @@ export class TrackingService {
     if (view === "dev") {
       const { rows } = await state.storyTasks(story);
       const stages = indexById(state.stageInputs(rows));
-      return finish({
-        ...developmentText(story),
+      const content = developmentText(story);
+      const result = finish({
+        ...content,
         tasks: rows.map((task) =>
           state.taskItem(task, task.assignedTo, stages),
         ),
         untrusted: true,
       });
+      return !content.scope && story.category === "feature"
+        ? { ...result, hints: ["R05 缺少本次实现范围，请与状态维护人确认。"] }
+        : result;
     }
     const [people, plans] = await Promise.all([
       state.roles(story),
@@ -2099,15 +2432,20 @@ export class TrackingService {
         nextStage && isStage(nextStage.stage)
           ? stageNames[nextStage.stage]
           : "待确认";
+      const nextDate =
+        item.nextDeadline && item.nextDeadline >= state.today
+          ? item.nextDeadline
+          : undefined;
       card = [
         `【需求进度】${item.title}`,
-        `当前：${businessProgress}${progress.level === "inferred" ? "（推测）" : ""}`,
+        `当前：${businessProgress}（${progress.level === "inferred" ? "推测" : "记录"}）`,
         `负责人：${owner}`,
         `进度联系人：${maintainer}`,
-        `下一步：${followUp}${item.nextDeadline ? `（预计 ${item.nextDeadline}）` : ""}`,
+        `下一步：${followUp}${nextDate ? `（预计 ${nextDate}）` : ""}`,
+        `数据时间：${isoTime(state.now)}`,
         `查看详情：${item.url}`,
       ].join("\n");
-      if (item.nextDeadline)
+      if (nextDate)
         state.inferred("card.nextDate", "预计按下一阶段已登记的截止日期展示。");
     }
     return finish({

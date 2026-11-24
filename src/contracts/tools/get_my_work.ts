@@ -47,7 +47,7 @@ export const getMyWorkOutputSchema = queryResultSchema(
       upcomingTests: z.array(taskItemSchema),
       acceptDeliver: z.array(taskItemSchema),
     }),
-    parentRisks: z.array(parentRiskSchema),
+    parentRisks: z.array(parentRiskSchema).optional(),
   }),
 );
 export type GetMyWorkInput = z.input<typeof getMyWorkInputSchema>;

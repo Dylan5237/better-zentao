@@ -2,6 +2,7 @@ import { z } from "zod";
 import { queryResultSchema } from "../result.ts";
 import { taskItemSchema } from "./get_team_work.ts";
 import { progressLevelSchema, storyItemSchema } from "./query_stories.ts";
+import { scanWorkflowRisksOutputSchema } from "./scan_workflow_risks.ts";
 
 const id = z.int().positive();
 export const getStoryProgressInputSchema = z
@@ -28,23 +29,6 @@ const bugItem = z.strictObject({
   story: id.optional(),
   url: z.url(),
   untrusted: z.literal(true),
-});
-const risk = z.strictObject({
-  ruleId: z.string(),
-  objectType: z.enum(["task", "story"]),
-  objectId: id,
-  state: z.enum(["gap", "stalled"]),
-  severity: z.enum(["high", "medium", "low"]),
-  confidence: z.enum(["recorded", "inferred", "unknown"]),
-  since: z.iso.date().nullable(),
-  evidence: z.array(z.string()),
-  suggestion: z.string(),
-  threshold: z
-    .strictObject({
-      workdays: z.int().nonnegative(),
-      source: z.enum(["default", "configured"]),
-    })
-    .optional(),
 });
 const full = z.strictObject({
   story: storyItemSchema,
@@ -81,11 +65,11 @@ const full = z.strictObject({
     requirement: id.optional(),
     pair: id.optional(),
     derivesFrom: id.optional(),
-    requirements: z.array(id),
-    pairs: z.array(id),
+    requirements: z.array(id).optional(),
+    pairs: z.array(id).optional(),
     bugs: z.array(bugItem),
   }),
-  risks: z.array(risk),
+  risks: scanWorkflowRisksOutputSchema.shape.data.shape.hits,
   card: z.string().optional(),
   untrusted: z.literal(true),
 });
@@ -94,9 +78,9 @@ export const getStoryProgressOutputSchema = queryResultSchema(
   z.union([
     full,
     z.strictObject({
-      scope: z.string().optional(),
-      design: z.string().optional(),
-      acceptance: z.string().optional(),
+      scope: z.string().max(2000).optional(),
+      designRef: z.string().max(2000).optional(),
+      verify: z.string().max(2000).optional(),
       tasks: z.array(taskItemSchema),
       untrusted: z.literal(true),
     }),

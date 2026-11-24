@@ -70,7 +70,7 @@ export const getTeamWorkOutputSchema = queryResultSchema(
       dueSoon: z.int().nonnegative(),
       open: z.int().nonnegative(),
     }),
-    parentRisks: z.array(parentRiskSchema),
+    parentRisks: z.array(parentRiskSchema).optional(),
   }),
 );
 export type TaskItem = z.infer<typeof taskItemSchema>;
