@@ -27,6 +27,14 @@ const listSchema = z.array(z.unknown());
 const keyedList = z.record(z.string().regex(/^\d+$/u), z.unknown());
 const entity = z.looseObject({ id: receivedId });
 const deletedValues: readonly unknown[] = [true, 1, "1", "true"];
+const taskSamplingStages = new Set([
+  "developing",
+  "developed",
+  "testing",
+  "tested",
+  "verified",
+  "released",
+]);
 const lastSamplePage = 50;
 const diagnosticFields = new Set([
   "status",
@@ -273,15 +281,22 @@ export async function collectProbeFixtures(
   const stories = await capture(routes.productStories, productId);
   const requirements = await capture(routes.productRequirements, productId);
   // docs/06 §4 Q3、Q9：混返中只取对应类型，避免将用户需求发到 v1 详情。
+  const storyRows = entities(stories?.rows).filter(
+    (story) => story.type === "story",
+  );
   const storyId = firstSample(
-    entities(stories?.rows).filter((story) => story.type === "story"),
+    storyRows,
+    (story) =>
+      story.status !== "closed" &&
+      typeof story.stage === "string" &&
+      taskSamplingStages.has(story.stage),
   );
   const requirementId = firstSample(
     entities(requirements?.rows).filter(
       (story) => story.type === undefined || story.type === "requirement",
     ),
   );
-  await capture(routes.storyDetail, storyId);
+  const story = await capture(routes.storyDetail, storyId);
   await capture(routes.storyDetailV2, storyId);
   await capture(routes.requirementDetail, requirementId);
 
@@ -292,12 +307,16 @@ export async function collectProbeFixtures(
     ...entities(currentExecutions?.rows),
     ...entities(allExecutions?.rows),
   ];
-  const executionId = firstSample(
-    executions,
-    (execution) =>
-      projectId !== undefined &&
-      id(execution.project ?? execution.projectID) === projectId,
-  );
+  // docs/06 §3.1：需求详情中的关联执行比全局项目列表更贴近采集产品。
+  const linkedExecutions = entities(collection(story?.body, ["executions"]));
+  const executionId =
+    firstSample(linkedExecutions) ??
+    firstSample(
+      executions,
+      (execution) =>
+        projectId !== undefined &&
+        id(execution.project ?? execution.projectID) === projectId,
+    );
   const tasks = await capture(routes.executionTasks, executionId);
   const taskId = firstSample(
     entities(tasks?.rows),

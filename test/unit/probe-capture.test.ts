@@ -410,6 +410,113 @@ describe("WP-03 夹具采集（06 §3、09 §1.1、AC-82）", () => {
     expect(JSON.stringify([report, events])).not.toContain("/private?");
   });
 
+  it.each([
+    { stage: "developing", status: "active", expectedId: 52 },
+    { stage: "developed", status: "active", expectedId: 52 },
+    { stage: "testing", status: "active", expectedId: 52 },
+    { stage: "tested", status: "active", expectedId: 52 },
+    { stage: "verified", status: "active", expectedId: 52 },
+    { stage: "released", status: "active", expectedId: 52 },
+    { stage: "planned", status: "active", expectedId: 51 },
+    { stage: "developing", status: "closed", expectedId: 51 },
+  ])(
+    "P2-2 候选需求为 $status/$stage 时采集研发需求 #$expectedId",
+    async ({ stage, status, expectedId }) => {
+      const routes = samples();
+      const { options, fetch } = setup(routes, (url) => {
+        if (
+          url.pathname.endsWith("/products/42/stories") &&
+          url.searchParams.get("page") === "1"
+        ) {
+          return Response.json(
+            {
+              stories: [
+                { id: 61, type: "requirement", status, stage: "developed" },
+                {
+                  id: 53,
+                  type: "story",
+                  status,
+                  stage: "developed",
+                  deleted: "1",
+                },
+                { id: "51", type: "story", status, stage: "planned" },
+                { id: 54, type: "story", status: "closed", stage: "developed" },
+                { id: "52", type: "story", status, stage },
+              ],
+            },
+            { status: 201 },
+          );
+        }
+        if (url.pathname.endsWith("/v1/stories/52")) {
+          return Response.json({ id: "52", stage });
+        }
+        if (url.pathname.endsWith("/v2/story/view")) {
+          return Response.json({
+            story: { id: url.searchParams.get("storyID") },
+          });
+        }
+      });
+
+      const report = await collectProbeFixtures(options);
+      const sent = requests(fetch);
+      expect(
+        sent
+          .map(([url]) => url.pathname)
+          .filter((path) => path.includes("/v1/stories/")),
+      ).toEqual([`/zentao/api.php/v1/stories/${expectedId}`]);
+      expect(
+        sent
+          .map(([url]) => url)
+          .filter((url) => url.pathname.endsWith("/v2/story/view"))
+          .map((url) => url.searchParams.get("storyID")),
+      ).toEqual([String(expectedId)]);
+      expect(report.gaps).toEqual([]);
+      expect(sent).toHaveLength(
+        1 + routes.length + routes.filter((route) => route.empty).length,
+      );
+    },
+  );
+
+  it("优先采集所选产品需求关联执行的任务列表和详情", async () => {
+    const { options, fetch } = setup(samples(), (url) => {
+      if (url.pathname.endsWith("/v1/stories/51")) {
+        return Response.json({
+          id: "51",
+          executions: {
+            "700": { id: "700", deleted: "1" },
+            "701": { id: "701" },
+          },
+        });
+      }
+      if (url.pathname.endsWith("/executions/601/tasks")) {
+        return Response.json({ tasks: [] });
+      }
+      if (url.pathname.endsWith("/executions/701/tasks")) {
+        const firstPage = url.searchParams.get("page") === "1";
+        return Response.json({ tasks: firstPage ? [{ id: "611" }] : [] });
+      }
+    });
+
+    const report = await collectProbeFixtures(options);
+    expect(report.gaps).toEqual([]);
+    expect(
+      report.fixtures.filter(({ endpoint }) => endpoint === "execution-tasks"),
+    ).toMatchObject([
+      { sample: "normal", body: { tasks: [{ id: "611" }] } },
+      { sample: "empty", body: { tasks: [] } },
+    ]);
+    expect(report.fixtures).toContainEqual(
+      expect.objectContaining({ endpoint: "task-detail", sample: "normal" }),
+    );
+    const taskLists = requests(fetch)
+      .map(([url]) => url.pathname)
+      .filter((path) => path.endsWith("/tasks"));
+    expect(taskLists).toEqual([
+      "/zentao/api.php/v1/executions/701/tasks",
+      "/zentao/api.php/v1/executions/701/tasks",
+    ]);
+  });
+
   it("按显式产品采样并继续处理 404、真实空列表和耗尽重试的分支", async () => {
     const { options, fetch, sleep, logSink } = setup(samples(81), (url) => {
       if (url.pathname.endsWith("/requiredFields"))
