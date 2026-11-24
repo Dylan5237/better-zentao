@@ -44,6 +44,7 @@ export interface ReadRequest extends HttpLogIds {
   readonly pathTemplate: string;
   readonly params?: Readonly<Record<string, number>>;
   readonly query?: Readonly<Record<string, string | number>>;
+  readonly schemaFields?: readonly string[];
 }
 
 interface ReadCapture {
@@ -169,7 +170,11 @@ function requestError(result: FailedAttempt): BztError {
   return new BztError("ZENTAO_UNAVAILABLE", "禅道返回异常状态。", { status });
 }
 
-function decodeJson<T>(text: string, schema: z.ZodType<T>): T {
+function decodeJson<T>(
+  text: string,
+  schema: z.ZodType<T>,
+  schemaFields?: readonly string[],
+): T {
   let payload: unknown;
   let decoded: z.ZodSafeParseResult<T> | undefined;
   try {
@@ -181,7 +186,36 @@ function decodeJson<T>(text: string, schema: z.ZodType<T>): T {
   // 即使端点解码异常，响应中明确的业务失败仍可安全识别。
   assertNoBusinessError(payload, decoded?.success === true);
   if (decoded?.success) return decoded.data;
-  throw new BztError("ZENTAO_SCHEMA_MISMATCH", "禅道响应无法按预期结构解码。");
+  const fields = new Set<string>();
+  for (const issue of decoded?.error?.issues ?? []) {
+    const field = issue.path[0];
+    if (typeof field === "string" && schemaFields?.includes(field))
+      fields.add(field);
+  }
+  throw new BztError(
+    "ZENTAO_SCHEMA_MISMATCH",
+    "禅道响应无法按预期结构解码。",
+    fields.size > 0 ? { fields: [...fields] } : undefined,
+  );
+}
+
+export async function decodeReadResponse<T>(
+  response: Response,
+  schema: z.ZodType<T>,
+  schemaFields?: readonly string[],
+): Promise<T> {
+  if (!response.ok) {
+    void response.body?.cancel().catch(() => {});
+    throw requestError({ kind: "http-error", status: response.status });
+  }
+
+  let text: string;
+  try {
+    text = await response.text();
+  } catch {
+    throw requestError({ kind: "network" });
+  }
+  return decodeJson(text, schema, schemaFields);
 }
 
 export function createZentaoHttp(options: ZentaoHttpOptions) {
@@ -297,7 +331,7 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       capture?.observeSession(session.token);
       const result = await withReadSlot(() => send(prepared, session.token));
       if (result.kind === "success") {
-        const body = decodeJson(result.text, schema);
+        const body = decodeJson(result.text, schema, request.schemaFields);
         return capture ? { status: result.status, body } : body;
       }
       if (result.kind === "http-error" && result.status === 401) {

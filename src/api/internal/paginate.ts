@@ -10,6 +10,7 @@ interface PaginationOptions<T> {
   readonly mode: z.infer<typeof paginationMode>;
   readonly pageSize: number;
   readonly schema: z.ZodType<{ items: readonly T[]; total?: number }>;
+  readonly countItems?: (items: readonly T[]) => number;
 }
 
 export async function paginate<T>(
@@ -17,7 +18,7 @@ export async function paginate<T>(
   request: ReadRequest,
   options: PaginationOptions<T>,
 ): Promise<{ items: T[]; truncated: boolean }> {
-  const { mode, pageSize, schema } = options;
+  const { mode, pageSize, schema, countItems } = options;
   if (
     !pageSizeSetting.safeParse(pageSize).success ||
     !paginationMode.safeParse(mode).success
@@ -26,6 +27,7 @@ export async function paginate<T>(
   }
 
   const items: T[] = [];
+  let received = 0;
   let total: number | undefined;
   const [sizeKey, pageKey] =
     mode === "v1"
@@ -40,11 +42,12 @@ export async function paginate<T>(
       schema,
     );
     for (const item of data.items) items.push(item);
+    const pageCount = countItems?.(data.items) ?? data.items.length;
+    received += pageCount;
     total = data.total ?? total;
-    if (total !== undefined && items.length >= total)
+    if (total !== undefined && received >= total)
       return { items, truncated: false };
-    if (data.items.length < pageSize)
-      return { items, truncated: total !== undefined };
+    if (pageCount < pageSize) return { items, truncated: total !== undefined };
   }
   return { items, truncated: true };
 }
