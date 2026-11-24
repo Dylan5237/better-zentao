@@ -1,8 +1,12 @@
 import { defineConfig } from "vitest/config";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   test: {
-    include: ["test/{unit,contract,service,adapters}/**/*.test.ts"],
+    include:
+      mode === "smoke"
+        ? ["test/smoke/**/*.test.ts"]
+        : ["test/{unit,contract,service,adapters}/**/*.test.ts"],
+    ...(mode === "smoke" ? { testTimeout: 120_000 } : {}),
     coverage: {
       include: ["src/**/*.ts", "scripts/**/*.ts"],
       thresholds: {
@@ -13,4 +17,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

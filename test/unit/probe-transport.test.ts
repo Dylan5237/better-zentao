@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createZentaoReadClient } from "../../src/api/client.ts";
 import {
   decodeProbeOwnership,
   parseProbeBaseUrl,
@@ -6,6 +7,9 @@ import {
 import {
   createProbeWriteApproval,
   createProbeWriteSender,
+  getProbeWriteRoute,
+  readProbeWriteResponse,
+  sendAuthenticatedProbeWrite,
 } from "../../src/api/internal/probe-transport.ts";
 import type { ProbeWriteOptions } from "../../src/api/internal/probe-transport.ts";
 import { PROBE_APPROVAL_MAX_TTL_MS } from "../../src/core/config.ts";
@@ -40,6 +44,13 @@ const plans = [{ id: 4, product: 29 }];
 const defaultOwnership = await decodeProbeOwnership(
   origin,
   Response.json({ modules, plans }),
+);
+const liveOwnership = await decodeProbeOwnership(
+  origin,
+  Response.json({
+    modules,
+    plans: [{ id: 4, product: 29, status: "wait", deleted: false }],
+  }),
 );
 
 function setup(
@@ -509,4 +520,362 @@ describe("WP-05 / ADR-19 #29 发送层熔断", () => {
       expect(send).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("WP-05 / ADR-19 需求 ID 路由", () => {
+  const assign = {
+    action: "story.assign",
+    productId: 29,
+    id: 11,
+    body: { assignedTo: "acct_a", comment: "离线指派" },
+  };
+  const close = {
+    action: "story.close",
+    productId: 29,
+    id: 11,
+    body: { closedReason: "cancel" },
+  };
+  const comment = {
+    action: "story.comment",
+    productId: 29,
+    id: 11,
+    body: { comment: "离线备注" },
+  };
+  const edit = {
+    action: "story.edit",
+    productId: 29,
+    id: 11,
+    body: { title: "离线编辑" },
+  };
+  const activate = {
+    action: "story.activate",
+    productId: 29,
+    id: 11,
+    body: {},
+  };
+  const basePlan = { ...confirmation, expiresAt: 100 };
+
+  function mockProbeClient({
+    product = 29,
+    storyId = 11,
+    deleted = false,
+    title = candidate.body.title,
+    openedBy = "acct_a",
+    afterRead = () => {},
+    writeResponse = () =>
+      Response.json(
+        {
+          result: "success",
+          changes: { objectID: 11 },
+          secret: "fixture-probe-secret",
+        },
+        { status: 201 },
+      ),
+  } = {}) {
+    const fetch = vi.fn<typeof globalThis.fetch>(async (request, init) => {
+      const url = new URL(String(request));
+      expect(url.origin).toBe(new URL(origin).origin);
+      expect(init?.redirect).toBe("error");
+      if (url.pathname.endsWith("/tokens")) {
+        expect(init?.method).toBe("POST");
+        return Response.json({ token: "fixture-probe-secret" });
+      }
+      expect(new Headers(init?.headers).get("Token")).toBe(
+        "fixture-probe-secret",
+      );
+      if (init?.method === "GET") {
+        expect(url.pathname).toBe("/zentao/api.php/v1/stories/11");
+        afterRead();
+        return Response.json({
+          type: "story",
+          id: storyId,
+          product,
+          title,
+          openedBy,
+          status: "draft",
+          deleted,
+        });
+      }
+      return writeResponse();
+    });
+    vi.stubGlobal("fetch", fetch);
+    const log: string[] = [];
+    const client = createZentaoReadClient({
+      baseUrl: origin,
+      account: "acct_a",
+      password: "fixture-probe-password",
+      clock: () => 1,
+      env: { BZT_LOG_LEVEL: "debug" },
+      logSink: (line) => log.push(line),
+    });
+    const requests = () =>
+      fetch.mock.calls.map(
+        ([url, init]) =>
+          `${init?.method} ${new URL(String(url)).pathname}${new URL(String(url)).search}`,
+      );
+    return { client, log, requests };
+  }
+
+  function options(
+    client: ReturnType<typeof createZentaoReadClient>,
+    input: unknown,
+    clock = () => 1,
+  ) {
+    return {
+      baseUrl: origin,
+      client,
+      ownership: liveOwnership,
+      preflight: { isPlanOpen: () => true, isAssigneeActive: () => true },
+      approval: createProbeWriteApproval(
+        { ...basePlan, route: getProbeWriteRoute(input), clock },
+        input,
+      ),
+      clock,
+    };
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    [assign, "POST /api.php/v1/stories/11/assign"],
+    [close, "POST /api.php/v1/stories/11/close"],
+    [comment, "POST /api.php/v1/stories/11/comment"],
+    [
+      { ...comment, candidate: "v2" },
+      "POST /api.php/v2/action/comment?objectType=story&objectID=11",
+    ],
+    [edit, "PUT /api.php/v1/stories/11"],
+    [activate, "POST /api.php/v1/stories/11/activate"],
+    [
+      { ...activate, candidate: "put", body: { status: "active" } },
+      "PUT /api.php/v1/stories/11",
+    ],
+  ])("从严格配方导出固定端点 %#", (input, route) => {
+    expect(getProbeWriteRoute(input)).toBe(route);
+  });
+
+  it.each([
+    { ...assign, productId: 42 },
+    { ...assign, id: "11" },
+    { ...assign, id: -1 },
+    { ...assign, body: { ...assign.body, product: 42 } },
+    { ...close, body: { ...close.body, delete: true } },
+    { ...comment, candidate: "v2", body: { ...comment.body, objectID: 42 } },
+    { ...comment, candidate: "https://outside.fixture.test" },
+    { ...activate, candidate: "put", body: { status: "closed" } },
+    { ...edit, body: {} },
+  ])("拒绝申请不在配方内的对象变更 %#", (input) => {
+    expect(() => getProbeWriteRoute(input)).toThrow(
+      expect.objectContaining({ code: "PERMISSION_DENIED" }),
+    );
+  });
+
+  it.each([assign, close])(
+    "先用同一认证客户端回读 #29 需求，再发送 $action",
+    async (input) => {
+      const { client, log, requests } = mockProbeClient();
+      const result = await sendAuthenticatedProbeWrite(
+        options(client, input),
+        input,
+      );
+      expect(result).toHaveProperty("status", 201);
+      expect(requests()).toEqual([
+        "POST /zentao/api.php/v1/tokens",
+        "GET /zentao/api.php/v1/stories/11",
+        `POST /zentao/api.php/v1/stories/11/${input.action.split(".")[1]}`,
+      ]);
+      assertNoSensitiveData(log, [
+        "fixture-probe-secret",
+        "fixture-probe-password",
+        "离线指派",
+      ]);
+    },
+  );
+
+  it.each([{ product: 42 }, { storyId: 42 }, { deleted: true }])(
+    "需求归属不符时仅回读，写入次数为 0 %#",
+    async (invalid) => {
+      const { client, requests } = mockProbeClient(invalid);
+      await expect(
+        sendAuthenticatedProbeWrite(options(client, close), close),
+      ).rejects.toHaveProperty("code", "PERMISSION_DENIED");
+      expect(requests()).toEqual([
+        "POST /zentao/api.php/v1/tokens",
+        "GET /zentao/api.php/v1/stories/11",
+      ]);
+    },
+  );
+
+  it("ID 校验期间批准过期，写入次数为 0", async () => {
+    let now = 1;
+    const { client, requests } = mockProbeClient({
+      afterRead: () => {
+        now = basePlan.expiresAt;
+      },
+    });
+    await expect(
+      sendAuthenticatedProbeWrite(
+        options(client, close, () => now),
+        close,
+      ),
+    ).rejects.toHaveProperty("code", "PLAN_EXPIRED");
+    expect(requests()).toEqual([
+      "POST /zentao/api.php/v1/tokens",
+      "GET /zentao/api.php/v1/stories/11",
+    ]);
+  });
+
+  it("并发重放 ID 路由的批准时只发送一次", async () => {
+    const { client, requests } = mockProbeClient();
+    const approved = options(client, close);
+    const first = sendAuthenticatedProbeWrite(approved, close);
+    const second = sendAuthenticatedProbeWrite(approved, close);
+    await expect(first).resolves.toHaveProperty("status", 201);
+    await expect(second).rejects.toHaveProperty("code", "PERMISSION_DENIED");
+    expect(requests()).toEqual([
+      "POST /zentao/api.php/v1/tokens",
+      "GET /zentao/api.php/v1/stories/11",
+      "POST /zentao/api.php/v1/stories/11/close",
+    ]);
+  });
+
+  it.each([comment, edit, activate])(
+    "没有本次创建凭据时不能探查 $action",
+    async (input) => {
+      const { client, requests } = mockProbeClient();
+      await expect(
+        sendAuthenticatedProbeWrite(options(client, input), input),
+      ).rejects.toHaveProperty("code", "PERMISSION_DENIED");
+      expect(
+        requests().filter(
+          (route) => !route.endsWith("/tokens") && !route.startsWith("GET"),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("仅允许同一客户端修改本次创建回读到的需求", async () => {
+    const { client, requests } = mockProbeClient();
+    const created = await sendAuthenticatedProbeWrite(
+      options(client, candidate),
+      candidate,
+    );
+    expect(created).toBeInstanceOf(Response);
+    if (!(created instanceof Response)) throw new Error("创建需要返回响应");
+    await expect(readProbeWriteResponse(created)).resolves.toMatchObject({
+      createdStoryId: 11,
+    });
+    for (const input of [comment, edit, activate]) {
+      await expect(
+        sendAuthenticatedProbeWrite(options(client, input), input),
+      ).resolves.toHaveProperty("status", 201);
+    }
+    expect(requests()).toEqual([
+      "POST /zentao/api.php/v1/tokens",
+      "POST /zentao/api.php/v2/stories?productID=29",
+      "GET /zentao/api.php/v1/stories/11",
+      "POST /zentao/api.php/v1/stories/11/comment",
+      "GET /zentao/api.php/v1/stories/11",
+      "PUT /zentao/api.php/v1/stories/11",
+      "GET /zentao/api.php/v1/stories/11",
+      "POST /zentao/api.php/v1/stories/11/activate",
+    ]);
+    const { client: second, requests: secondRequests } = mockProbeClient();
+    await expect(
+      sendAuthenticatedProbeWrite(options(second, comment), comment),
+    ).rejects.toHaveProperty("code", "PERMISSION_DENIED");
+    expect(
+      secondRequests().filter(
+        (route) => !route.endsWith("/tokens") && !route.startsWith("GET"),
+      ),
+    ).toEqual([]);
+  });
+
+  it.each([
+    { title: "另一个已经存在的 #29 需求" },
+    { openedBy: "acct_b" },
+    { openedBy: "" },
+  ])("产品正确但需求身份不符时阻断候选写入 %#", async (readback) => {
+    const { client, requests } = mockProbeClient(readback);
+    const response = await sendAuthenticatedProbeWrite(
+      options(client, candidate),
+      candidate,
+    );
+    if (!(response instanceof Response)) throw new Error("创建需要返回响应");
+    await expect(readProbeWriteResponse(response)).resolves.toMatchObject({
+      createdStoryId: 11,
+    });
+    await expect(
+      sendAuthenticatedProbeWrite(options(client, comment), comment),
+    ).rejects.toHaveProperty("code", "PERMISSION_DENIED");
+    expect(requests()).toEqual([
+      "POST /zentao/api.php/v1/tokens",
+      "POST /zentao/api.php/v2/stories?productID=29",
+      "GET /zentao/api.php/v1/stories/11",
+    ]);
+  });
+
+  it.each([
+    [{ status: "success", id: "11", message: "已创建" }, 201, 11, false],
+    [{ status: "success", id: 11, error: "夹具业务失败" }, 201, 11, true],
+    [{ status: "error", id: 11 }, 400, 11, true],
+    [{ result: "success", id: 11, story: { id: 42 } }, 201, undefined, false],
+  ] as const)(
+    "保留创建 ID、HTTP 状态及业务失败边界 %#",
+    async (body, status, createdStoryId, recognizedFailure) => {
+      const { client, requests } = mockProbeClient({
+        writeResponse: () => Response.json(body, { status }),
+      });
+      const response = await sendAuthenticatedProbeWrite(
+        options(client, candidate),
+        candidate,
+      );
+      expect(response).toHaveProperty("status", status);
+      if (!(response instanceof Response)) throw new Error("创建需要返回响应");
+      await expect(readProbeWriteResponse(response)).resolves.toMatchObject({
+        createdStoryId,
+        recognizedFailure,
+        sessionToken: "fixture-probe-secret",
+      });
+      if (createdStoryId === undefined || recognizedFailure) {
+        await expect(
+          sendAuthenticatedProbeWrite(options(client, comment), comment),
+        ).rejects.toHaveProperty("code", "PERMISSION_DENIED");
+        expect(requests()).toEqual([
+          "POST /zentao/api.php/v1/tokens",
+          "POST /zentao/api.php/v2/stories?productID=29",
+        ]);
+      }
+    },
+  );
+
+  it("响应头成功但正文读取超时，回执为 unknown 且只写一次", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, requests } = mockProbeClient({
+        writeResponse: () =>
+          new Response(new ReadableStream(), { status: 201 }),
+      });
+      const approved = {
+        ...options(client, close),
+        env: { ZENTAO_TIMEOUT_MS: "20" },
+      };
+      const pending = sendAuthenticatedProbeWrite(approved, close);
+      await vi.advanceTimersByTimeAsync(20);
+      await expect(pending).resolves.toMatchObject({
+        status: "unknown",
+        retryable: false,
+      });
+      await expect(
+        sendAuthenticatedProbeWrite(approved, close),
+      ).rejects.toHaveProperty("code", "PERMISSION_DENIED");
+      expect(requests()).toEqual([
+        "POST /zentao/api.php/v1/tokens",
+        "GET /zentao/api.php/v1/stories/11",
+        "POST /zentao/api.php/v1/stories/11/close",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

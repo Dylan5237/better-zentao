@@ -17,7 +17,8 @@
     "build": "tsc -p tsconfig.build.json",
     "lint": "eslint src scripts test && prettier --check --end-of-line auto src scripts test eslint.config.mjs vitest.config.ts package.json tsconfig*.json config/*.json",
     "typecheck": "tsc --noEmit",
-    "test": "pnpm run build && vitest run --coverage"
+    "test": "pnpm run build && vitest run --coverage",
+    "test:smoke": "vitest run --mode smoke"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { z } from "zod";
 import {
+  getProbeOwnershipOptions,
   hasProbeOwnership,
   readProbeOwnership,
 } from "../../src/api/internal/probe-scope.ts";
@@ -20,9 +21,11 @@ function plansForProbe(rows: unknown[], childProduct: number): unknown[] {
       ...row,
       product: 29,
       ...(row.children && {
-        children: row.children.map((child) => ({
+        children: row.children.map((child, index) => ({
           ...z.looseObject({}).parse(child),
           product: childProduct,
+          ...(index === 1 && { status: "closed" }),
+          ...(index === 2 && { deleted: true }),
         })),
       }),
     };
@@ -77,6 +80,12 @@ it("WP-05 归属证据由只读模块和计划端点签发，并保留子计划�
   expect(
     hasProbeOwnership(evidence, new URL("https://other.test/"), 546, 707),
   ).toBe(false);
+  const scope = getProbeOwnershipOptions(evidence);
+  expect(scope.modules).toContain(546);
+  expect(scope.modules).not.toContain(0);
+  expect(scope.openPlans).toContain(707);
+  expect(scope.openPlans).not.toContain(669);
+  expect(scope.openPlans).not.toContain(682);
 });
 
 it.each([

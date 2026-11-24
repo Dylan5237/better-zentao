@@ -197,6 +197,18 @@ export function isFixtureEndpoint(value: string): boolean {
   )
     return true;
   if (endpointSlugs.has(value)) return true;
+  if (
+    value === "POST /api.php/v2/stories?productID=29" ||
+    /^POST \/api\.php\/v1\/stories\/[1-9]\d*\/(?:assign|comment|activate|close)$/u.test(
+      value,
+    ) ||
+    /^PUT \/api\.php\/v1\/stories\/[1-9]\d*$/u.test(value) ||
+    /^POST \/api\.php\/v2\/action\/comment\?objectType=story&objectID=[1-9]\d*$/u.test(
+      value,
+    )
+  ) {
+    return true;
+  }
   const [path, query, extra] = value.replace(/^GET /u, "").split("?");
   return (
     extra === undefined &&

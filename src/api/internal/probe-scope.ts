@@ -7,6 +7,7 @@ import { listProductPlans } from "../plan.ts";
 import { getProductModules } from "../product.ts";
 import { normalizeZentaoBaseUrl } from "./base-url.ts";
 import { getReadClient } from "./read-client.ts";
+import { readStoryDetail } from "./story-response.ts";
 
 export function probeDenied(): BztError {
   return new BztError("PERMISSION_DENIED", "探查请求超出已确认的 #29 范围。");
@@ -20,7 +21,14 @@ export function parseProbeBaseUrl(input: string): URL {
 
 const id = z.int().positive();
 const ownedItems = z
-  .array(z.object({ id, product: id }))
+  .array(
+    z.object({
+      id,
+      product: id,
+      status: z.string().optional(),
+      deleted: z.boolean().optional(),
+    }),
+  )
   .refine(
     (items) => new Set(items.map((item) => item.id)).size === items.length,
   );
@@ -80,19 +88,42 @@ export async function readProbeOwnership(
     modules: modules
       .filter(({ id }) => id > 0)
       .map(({ id, productId }) => ({ id, product: productId })),
-    plans: Array.from(walkProductPlans(plans.items), ({ id, product }) => ({
-      id,
-      product,
-    })),
+    plans: Array.from(
+      walkProductPlans(plans.items),
+      ({ id, product, status, deleted }) => ({ id, product, status, deleted }),
+    ),
   });
 }
 
+export function getProbeOwnershipOptions(evidence: VerifiedOwnership): {
+  modules: number[];
+  openPlans: number[];
+} {
+  const scope = verified.get(evidence);
+  if (!scope) throw invalidOwnership();
+  return {
+    modules: scope.data.modules
+      .filter(({ product }) => product === PROBE_PRODUCT_ID)
+      .map(({ id }) => id),
+    openPlans: scope.data.plans
+      .filter(
+        ({ product, status, deleted }) =>
+          product === PROBE_PRODUCT_ID &&
+          status !== undefined &&
+          status !== "closed" &&
+          deleted === false,
+      )
+      .map(({ id }) => id),
+  };
+}
+
 export function hasProbeOwnership(
-  evidence: VerifiedOwnership,
+  evidence: VerifiedOwnership | undefined,
   baseUrl: URL,
   module: number,
   plan: number | undefined,
 ): boolean {
+  if (!evidence) return false;
   const scope = verified.get(evidence);
   if (scope?.baseUrl !== baseUrl.href) return false;
   const matches = (id: number) => (row: { id: number; product: number }) =>
@@ -101,4 +132,42 @@ export function hasProbeOwnership(
     scope.data.modules.some(matches(module)) &&
     (plan === undefined || scope.data.plans.some(matches(plan)))
   );
+}
+
+export function hasOpenProbePlan(
+  evidence: VerifiedOwnership | undefined,
+  baseUrl: URL,
+  planId: number,
+): boolean {
+  return (
+    evidence !== undefined &&
+    verified.get(evidence)?.baseUrl === baseUrl.href &&
+    getProbeOwnershipOptions(evidence).openPlans.includes(planId)
+  );
+}
+
+export interface ProbeStoryIdentity {
+  readonly title: string;
+  readonly openedBy: string;
+}
+
+export async function assertProbeStoryOwnership(
+  client: ZentaoReadClient | undefined,
+  baseUrl: URL,
+  id: number,
+  expected?: ProbeStoryIdentity,
+): Promise<void> {
+  if (!client || getReadClient(client).baseUrl !== baseUrl.href) {
+    throw probeDenied();
+  }
+  const story = await readStoryDetail(client, id);
+  if (
+    story.id !== id ||
+    story.product !== PROBE_PRODUCT_ID ||
+    story.deleted ||
+    (expected &&
+      (story.title !== expected.title || story.openedBy !== expected.openedBy))
+  ) {
+    throw probeDenied();
+  }
 }

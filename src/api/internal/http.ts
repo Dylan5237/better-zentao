@@ -234,11 +234,38 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     options.sleep ??
     ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
+  function logResult(
+    request: Pick<
+      PreparedRequest,
+      "method" | "pathTemplate" | "opId" | "objectId"
+    >,
+    status: number,
+    started: number,
+  ): void {
+    const { method, pathTemplate, opId, objectId } = request;
+    try {
+      writeHttpLog(
+        {
+          method,
+          pathTemplate,
+          status,
+          durationMs: Math.max(0, clock() - started),
+          opId,
+          objectId,
+        },
+        logSink,
+        env,
+      );
+    } catch {
+      // 日志输出失败时仍须保留已经取得的传输回执。
+    }
+  }
+
   async function send(
     request: PreparedRequest,
     token?: string,
   ): Promise<Attempt> {
-    const { url, method, pathTemplate, body, opId, objectId } = request;
+    const { url, method, body } = request;
     const headers: Record<string, string> = {};
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (token !== undefined) headers.Token = token;
@@ -277,22 +304,7 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     const result = await Promise.race([exchange(), expired.promise]).finally(
       () => clearTimeout(timer),
     );
-    try {
-      writeHttpLog(
-        {
-          method,
-          pathTemplate,
-          status: "status" in result ? result.status : 0,
-          durationMs: Math.max(0, clock() - started),
-          opId,
-          objectId,
-        },
-        logSink,
-        env,
-      );
-    } catch {
-      // 日志输出失败时仍须保留已经取得的传输回执。
-    }
+    logResult(request, "status" in result ? result.status : 0, started);
     return result;
   }
 
@@ -313,6 +325,41 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       throw authFailed();
     throw requestError(result);
   });
+
+  async function getProbeSender(
+    request: Pick<PreparedRequest, "method" | "pathTemplate" | "objectId">,
+  ): Promise<{ send: typeof fetch; sessionToken: string }> {
+    const session = await auth.getSession();
+    const send: typeof fetch = async (input, init) => {
+      if (
+        !(input instanceof URL) ||
+        !input.href.startsWith(baseUrl) ||
+        init?.redirect !== "error" ||
+        init.method !== request.method
+      ) {
+        throw new BztError("PERMISSION_DENIED", "探查发送地址或方法不合法。");
+      }
+      const started = clock();
+      let status = 0;
+      try {
+        const response = await fetcher(input, {
+          method: request.method,
+          redirect: "error",
+          headers: { "Content-Type": "application/json", Token: session.token },
+          body: init.body,
+          signal: init.signal,
+        });
+        status = response.status;
+        if (status === 401) auth.invalidate(session);
+        // 发送层的中止信号覆盖响应正文。保留服务器的状态码供探查判定。
+        const body = await response.text();
+        return new Response(body === "" ? null : body, { status });
+      } finally {
+        logResult(request, status, started);
+      }
+    };
+    return { send, sessionToken: session.token };
+  }
 
   function read<T>(request: ReadRequest, schema: z.ZodType<T>): Promise<T>;
   function read<T>(
@@ -389,5 +436,5 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     });
   }
 
-  return { read, write };
+  return { read, write, getProbeSender };
 }
