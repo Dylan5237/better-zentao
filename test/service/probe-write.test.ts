@@ -66,6 +66,7 @@ function fakeZentao(
     badFirstDetail?: boolean;
     commentUnsupported?: boolean;
     activateUnsupported?: boolean;
+    closeUnsupported?: boolean;
     includeOtherStory?: boolean;
     fixtureSecret?: boolean;
     unrelatedReceiptId?: boolean;
@@ -201,6 +202,7 @@ function fakeZentao(
     }
     expect(story.product).toBe(29);
     if (action === "assign") story.assignedTo = String(body?.assignedTo);
+    if (action === "close" && options.closeUnsupported) return respond({}, 404);
     if (action === "close") story.status = "closed";
     if (action === "activate" && options.activateUnsupported)
       return respond({}, 405);
@@ -448,6 +450,20 @@ describe("WP-05 #29 探查闭环", () => {
     });
     expect(zen.stories.get(90)?.status).toBe("draft");
     expect(zen.stories.get(102)?.status).toBe("closed");
+    expect(zen.sends("/close")).toHaveLength(1);
+  });
+
+  it("当前测试需求无法确认关闭时，不继续创建其他变体", async () => {
+    const zen = fakeZentao({ closeUnsupported: true });
+    const result = await runProbeWrite({
+      ...runtime,
+      cli: { action: "write", product: "29", all: true, assignee: alternate },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.cleanup).toEqual([
+      expect.objectContaining({ status: "failed", httpStatus: 404 }),
+    ]);
+    expect(zen.sends("/v2/stories")).toHaveLength(1);
     expect(zen.sends("/close")).toHaveLength(1);
   });
 

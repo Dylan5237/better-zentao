@@ -265,6 +265,7 @@ interface ProbeRun {
   readonly session: Session;
   readonly startedAt: number;
   readonly created: Map<number, ProbeDraft | undefined>;
+  readonly cleanup: Attempt[];
   readonly recordFixture: (
     capability: Probe,
     id: number,
@@ -358,6 +359,14 @@ async function closeStory(
     undefined,
     expectedDraft,
   );
+}
+
+async function cleanupDraft(state: ProbeRun, id: number): Promise<boolean> {
+  const draft = state.created.get(id);
+  state.created.delete(id);
+  const receipts = await closeStory(state, id, draft);
+  state.cleanup.push(...receipts);
+  return receipts.every(({ status }) => status === "confirmed");
 }
 
 async function probeAction(
@@ -599,6 +608,7 @@ async function probeDrafts(
     if (results.at(-1)?.status === "unknown") return;
   }
   if (!cli.all) return;
+  if (!(await cleanupDraft(state, created.storyId))) return;
 
   for (const variant of variants) {
     if (
@@ -621,6 +631,11 @@ async function probeDrafts(
     );
     attempts.push(result);
     if (result.status === "unknown") return;
+    if (
+      result.storyId !== undefined &&
+      !(await cleanupDraft(state, result.storyId))
+    )
+      return;
   }
   attempts.push(
     ...executionProbes.map((action) => executionUnavailable(action, scope)),
@@ -706,6 +721,7 @@ export async function runProbeWrite({
       session,
       startedAt: clock(),
       created: new Map(),
+      cleanup,
       recordFixture(action, id, response) {
         fixtureFailed ||= response.fixtureFailed === true;
         if (!response.fixture) return;
@@ -735,8 +751,7 @@ export async function runProbeWrite({
         reason: errorCode(error),
       });
     } finally {
-      for (const [id, draft] of run.created)
-        cleanup.push(...(await closeStory(run, id, draft)));
+      for (const id of run.created.keys()) await cleanupDraft(run, id);
     }
     if (out !== undefined && outputFiles.length > 0) {
       try {
