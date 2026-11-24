@@ -13,6 +13,7 @@ const retryableByCode = {
   PLAN_STALE: false,
   CAPABILITY_UNVERIFIED: false,
   CAPABILITY_DISABLED: false,
+  CAPABILITY_CLI_ONLY: false,
   PERMISSION_DENIED: false,
   AUTH_FAILED: false,
   ZENTAO_UNAVAILABLE: true,
