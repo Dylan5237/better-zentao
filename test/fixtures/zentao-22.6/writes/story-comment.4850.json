@@ -1,0 +1,13 @@
+{
+  "endpoint": "POST /api.php/v2/action/comment?objectType=story&objectID=4850",
+  "status": 200,
+  "body": {
+    "request": {
+      "comment": "示例文本"
+    },
+    "response": {
+      "status": "示例文本",
+      "data": 115916
+    }
+  }
+}

@@ -240,7 +240,10 @@ function dtoValues(result: object): readonly object[] {
 
 const fixtureNames = readdirSync(
   new URL("../fixtures/zentao-22.6/", import.meta.url),
-);
+  { withFileTypes: true },
+)
+  .filter((entry) => entry.isFile())
+  .map((entry) => entry.name);
 const idEndpoints = Object.entries(endpoints).filter(
   ([, endpoint]) => endpoint.objectId !== undefined,
 );

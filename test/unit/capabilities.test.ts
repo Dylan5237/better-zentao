@@ -15,14 +15,14 @@ describe("WP-05 能力注册表（06 §7）", () => {
     ).toEqual({
       "story.create": "verified",
       "story.create.plan": "unverified",
-      "story.create.feedbackBy": "unverified",
-      "story.create.design": "unverified",
+      "story.create.feedbackBy": "verified",
+      "story.create.design": "verified",
       "story.assign": "verified",
-      "story.edit": "unverified",
-      "story.activate": "unverified",
+      "story.edit": "verified",
+      "story.activate": "verified",
       "story.linkExecution": "unverified",
-      "story.close": "unverified",
-      "story.comment": "unverified",
+      "story.close": "verified",
+      "story.comment": "verified",
       "requirement.linkStory": "unverified",
       "story.linkStory": "unverified",
       "task.create": "unverified",
@@ -32,8 +32,12 @@ describe("WP-05 能力注册表（06 §7）", () => {
       "bug.create": "disabled",
       "story.delete": "cli-only",
     });
-    expect(getCapability("story.create").verifiedOn).toBe("22.6");
-    expect(getCapability("story.assign").verifiedOn).toBe("22.6");
+    const verified = listCapabilities().filter(
+      ({ state }) => state === "verified",
+    );
+    expect(verified).toHaveLength(8);
+    for (const capability of verified)
+      expect(capability.verifiedOn).toBe("22.6");
   });
 
   it("拒绝未验证和已禁用能力，CLI 专用能力只有显式 CLI 才允许", () => {
@@ -59,24 +63,24 @@ describe("WP-05 能力注册表（06 §7）", () => {
   it("实例版本变化仅降级有旧版本验证依据的写能力", () => {
     expect(resolveCapabilitiesForVersion("22.6")).toEqual(listCapabilities());
     const drift = resolveCapabilitiesForVersion("22.7");
-    expect(
-      drift.filter((capability) => capability.needsReverification),
-    ).toEqual([
-      expect.objectContaining({
-        id: "story.create",
+    const drifted = drift.filter(
+      ({ needsReverification }) => needsReverification,
+    );
+    expect(drifted.map(({ id }) => id)).toEqual(
+      listCapabilities()
+        .filter(({ state }) => state === "verified")
+        .map(({ id }) => id),
+    );
+    for (const capability of drifted) {
+      expect(capability).toMatchObject({
         state: "unverified",
         verifiedOn: "22.6",
         note: expect.stringContaining("需要重新验证"),
-      }),
-      expect.objectContaining({
-        id: "story.assign",
-        state: "unverified",
-        verifiedOn: "22.6",
-      }),
-    ]);
+      });
+    }
     for (const id of [
       "release.read",
-      "story.edit",
+      "story.create.plan",
       "task.finish",
       "story.delete",
     ]) {

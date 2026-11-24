@@ -1,0 +1,29 @@
+{
+  "endpoint": "POST /api.php/v2/stories?productID=29",
+  "status": 200,
+  "body": {
+    "request": {
+      "product": 29,
+      "type": "story",
+      "module": 564,
+      "modules": [
+        564
+      ],
+      "category": "feature",
+      "feedbackBy": "人员001",
+      "source": "user",
+      "title": "示例文本",
+      "pri": 3,
+      "assignedTo": "acct_001",
+      "reviewer": [],
+      "status": "draft",
+      "verify": "<p>示例文本</p>",
+      "spec": "<h3>示例文本</h3>\n<p>示例文本</p>\n<p>示例文本</p>\n<h3>示例文本</h3>\n<ul>\n<li>示例文本</li>\n<li>示例文本</li>\n</ul>\n<p>[bzt:v1 maintainer=acct_001;receiver=acct_001;intake=intake_001]</p>"
+    },
+    "response": {
+      "message": "示例文本",
+      "id": 4852,
+      "status": "示例文本"
+    }
+  }
+}
