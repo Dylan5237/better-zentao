@@ -28,7 +28,7 @@ import {
 import type { Clock } from "../core/clock.ts";
 import type { TeamConfig } from "../core/config.ts";
 import { dateTimeSchema } from "../core/dto/common.ts";
-import { BztError } from "../core/errors.ts";
+import { BztError, type ErrorCode } from "../core/errors.ts";
 import type {
   IntakeRecord,
   LocalStore,
@@ -87,10 +87,30 @@ const createActions = new Set([
   "story.create.design",
   "story.create.feedbackBy",
 ]);
-const storedPlan = z.object({ plan: operationPlanSchema });
+const storedPlan = z.object({
+  instanceHash: z.string(),
+  plan: operationPlanSchema,
+});
+const rowErrorCodes = new Set<ErrorCode>([
+  "INVALID_INPUT",
+  "MISSING_REQUIRED",
+  "NOT_FOUND",
+  "AMBIGUOUS_ENTITY",
+  "CONFIG_MISSING",
+  "RULE_VIOLATION",
+]);
 const inputRecord = z.record(z.string(), z.unknown());
 const maxFileBytes = 2 * 1024 * 1024;
 const maxXmlBytes = 4 * 1024 * 1024;
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+
+function decodeUtf8(bytes: Buffer, onError: () => BztError): string {
+  try {
+    return utf8Decoder.decode(bytes);
+  } catch {
+    throw onError();
+  }
+}
 
 function missing(fields: string[]): never {
   throw new BztError("MISSING_REQUIRED", "请补充提需所需的信息。", {
@@ -174,7 +194,8 @@ export class IntakeService {
             message: `${label}：${warning.message}`,
           });
       } catch (error) {
-        if (!(error instanceof BztError)) throw error;
+        if (!(error instanceof BztError) || !rowErrorCodes.has(error.code))
+          throw error;
         warnings.push({
           code: "skipped",
           message: `${label} skipped：${warningText(error)}`,
@@ -211,7 +232,7 @@ export class IntakeService {
         kind,
         level: "W2",
         requiresPreviewAck: true,
-        dryRun: true,
+        ...(dryRun ? { dryRun: true } : {}),
         intakes: [],
         warnings,
         preview: {
@@ -353,7 +374,10 @@ export class IntakeService {
         message: "请补充反馈者及来源渠道，便于后续反馈处理进度。",
       });
     const target = { product, module };
-    const drafts = [await this.draft(input, target, me, intake, warnings)];
+    const category = this.category(input, warnings);
+    const drafts = [
+      await this.draft(input, target, me, intake, category, warnings),
+    ];
     if (input.pair) {
       const other = await this.context({
         product: input.pair.product,
@@ -375,6 +399,7 @@ export class IntakeService {
           { product: other.product, module: other.module },
           me,
           intake,
+          category,
           warnings,
         ),
       );
@@ -448,11 +473,11 @@ export class IntakeService {
     { product, module }: Target,
     me: Context["me"],
     intake: IntakeRecord,
+    category: Field,
     warnings: Warning[],
   ): Promise<Draft> {
     const { client, instanceVersion } = this.options;
     const plan = await this.resolvePlan(input, { product, module }, warnings);
-    const category = this.category(input, warnings);
     const actorDesign =
       me.roles.includes("DM") ||
       me.roles.includes("po") ||
@@ -628,18 +653,11 @@ export class IntakeService {
       crossProduct: !!input.pair,
       crossModule: input.crossModule,
     });
-    // N10 的跨模块依赖和 §1.2 的跨产品同步配对都是明确要实现的研发需求。
-    const value =
-      input.crossModule || input.pair ? "feature" : recommendation.value;
-    const reason =
-      input.crossModule || input.pair
-        ? "按目标模块或产品分别记录已明确的实现范围"
-        : recommendation.reason;
     warnings.push({
       code: "N02",
-      message: `建议类别为${value === "design" ? "设计类" : "研发类"}，${reason}。`,
+      message: `建议类别为${recommendation.value === "design" ? "设计类" : "研发类"}，${recommendation.reason}。`,
     });
-    return { value, origin: recommendation.origin };
+    return { value: recommendation.value, origin: recommendation.origin };
   }
 
   private async resolvePlan(
@@ -694,9 +712,19 @@ export class IntakeService {
       throw new BztError("INVALID_INPUT", "操作回执编号不一致。");
     const { store, clock } = this.options;
     const record = store.operations.get(opId);
+    if (record.actor !== store.location.account)
+      throw new BztError("NOT_FOUND", "未找到操作回执。", { opId });
     if (record.kind !== "create_story" && record.kind !== "import_stories")
       return;
-    const { plan } = storedPlan.parse(JSON.parse(record.planJson));
+    let stored: z.infer<typeof storedPlan>;
+    try {
+      stored = storedPlan.parse(JSON.parse(record.planJson));
+    } catch {
+      throw new BztError("INVALID_INPUT", "本地操作记录格式不合法。");
+    }
+    if (stored.instanceHash !== store.location.instanceHash)
+      throw new BztError("NOT_FOUND", "未找到操作回执。", { opId });
+    const { plan } = stored;
     const done = store.operationSteps
       .list(opId)
       .filter(({ state }) => state === "done");
@@ -828,12 +856,17 @@ async function readImport({ path, format }: FileSource): Promise<unknown[]> {
     throw new BztError("INVALID_INPUT", "无法读取导入文件。");
   }
 
+  const text = () =>
+    decodeUtf8(
+      file,
+      () => new BztError("INVALID_INPUT", "导入文件必须是有效的 UTF-8 编码。"),
+    );
   const table =
     format === "xlsx"
       ? readWorkbook(file)
       : format === "csv"
-        ? parseCsv(file.toString("utf8"))
-        : parseMarkdownTable(file.toString("utf8"));
+        ? parseCsv(text())
+        : parseMarkdownTable(text());
   const [header, ...rows] = table;
   if (!header?.length || !rows.length)
     throw new BztError("INVALID_INPUT", "导入文件需要表头及至少一行数据。");
@@ -895,6 +928,23 @@ function workbookError(): BztError {
     "INVALID_INPUT",
     "XLSX 工作簿不合法、格式不支持或超过安全上限。",
   );
+}
+
+function stripXmlComments(xml: string): string {
+  let cursor = 0;
+  let result = "";
+  while (cursor < xml.length) {
+    const start = xml.indexOf("<!--", cursor);
+    if (start === -1) {
+      result += xml.slice(cursor);
+      break;
+    }
+    const end = xml.indexOf("-->", start + 4);
+    if (end === -1) throw workbookError();
+    result += xml.slice(cursor, start);
+    cursor = end + 3;
+  }
+  return result;
 }
 
 // 只从 ZIP 中读取需要的 XML 部件，不解包到磁盘；同时限制声明和实际解压体积。
@@ -980,9 +1030,9 @@ function workbookParts(zip: Buffer): (name: string) => string | undefined {
         : inflateRawSync(data, { maxOutputLength: Math.max(1, size) });
     if (content.length !== size || crc32(content) !== crc)
       throw workbookError();
-    const xml = content.toString("utf8");
+    const xml = decodeUtf8(content, workbookError);
     if (/<!\s*(?:DOCTYPE|ENTITY)\b/iu.test(xml)) throw workbookError();
-    return xml.replace(/<!--[^]*?-->/gu, "");
+    return stripXmlComments(xml);
   };
 }
 
@@ -1006,15 +1056,53 @@ function xmlText(text: string): string {
   });
 }
 
-function xmlAttributes(text: string): Map<string, string> {
-  return new Map(
-    [...text.matchAll(/([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/gu)].map(
-      ([, name = "", quoted, single]) => [
-        name,
-        xmlText(quoted ?? single ?? ""),
-      ],
-    ),
+function isXmlWhitespace(code: number): boolean {
+  return code === 32 || code === 9 || code === 10 || code === 13;
+}
+
+function isXmlNameChar(code: number): boolean {
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    code === 95 ||
+    code === 58 ||
+    code === 46 ||
+    code === 45
   );
+}
+
+function xmlAttributes(text: string): Map<string, string> {
+  const attributes = new Map<string, string>();
+  let index = 0;
+  const skipWhitespace = () => {
+    while (index < text.length && isXmlWhitespace(text.charCodeAt(index)))
+      index++;
+  };
+  skipWhitespace();
+  while (index < text.length) {
+    const nameStart = index;
+    while (index < text.length && isXmlNameChar(text.charCodeAt(index)))
+      index++;
+    if (index === nameStart) throw workbookError();
+    const name = text.slice(nameStart, index);
+    skipWhitespace();
+    if (text.charAt(index) !== "=") throw workbookError();
+    index++;
+    skipWhitespace();
+    const quote = text.charAt(index);
+    if (quote !== '"' && quote !== "'") throw workbookError();
+    const valueStart = index + 1;
+    const valueEnd = text.indexOf(quote, valueStart);
+    if (valueEnd === -1) throw workbookError();
+    attributes.set(name, xmlText(text.slice(valueStart, valueEnd)));
+    index = valueEnd + 1;
+    if (index < text.length) {
+      if (!isXmlWhitespace(text.charCodeAt(index))) throw workbookError();
+      skipWhitespace();
+    }
+  }
+  return attributes;
 }
 
 // 按标签边界扫描，避免同名开始标签未闭合时反复遍历剩余 XML。
@@ -1096,8 +1184,6 @@ function readWorkbook(file: Buffer): string[][] {
     );
     const rows: string[][] = [];
     for (const { body } of xmlElements(sheetData.body, "row")) {
-      if (rows.length >= maxImportRows + 1)
-        throw new BztError("INVALID_INPUT", "每次最多导入 50 行。");
       const cells: string[] = [];
       for (const { attributes: attrs, body: cell } of xmlElements(body, "c")) {
         const attributes = xmlAttributes(attrs);
@@ -1122,6 +1208,9 @@ function readWorkbook(file: Buffer): string[][] {
         else if (type === "b") cells[index] = value === "1" ? "true" : "false";
         else cells[index] = xmlText(value);
       }
+      if (cells.every((cell) => !cell?.trim())) continue;
+      if (rows.length >= maxImportRows + 1)
+        throw new BztError("INVALID_INPUT", "每次最多导入 50 行。");
       rows.push(Array.from(cells, (cell) => cell ?? ""));
     }
     return rows;

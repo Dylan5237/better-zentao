@@ -47,6 +47,7 @@ afterEach(async () => {
 function setup(
   options: {
     noPlan?: boolean;
+    failPlansAfter?: number;
     ambiguous?: boolean;
     account?: string;
     required?: string;
@@ -54,6 +55,7 @@ function setup(
   } = {},
 ) {
   let now = Date.UTC(2026, 10, 24);
+  let planCalls = 0;
   const clock = () => now;
   const account = options.account ?? "alice";
   const config = teamConfigSchema.parse({
@@ -106,6 +108,12 @@ function setup(
         moduleOptionMenu: [{ id: 3, name: "权限" }],
       });
     if (path.endsWith("/plans")) {
+      planCalls++;
+      if (
+        options.failPlansAfter !== undefined &&
+        planCalls > options.failPlansAfter
+      )
+        return new Response("upstream error", { status: 500 });
       const product = Number(path.split("/").at(-2));
       const plans = options.noPlan ? [] : [planFor(product)];
       return Response.json({ plans, total: plans.length });
@@ -599,7 +607,13 @@ it("拒绝损坏的 XLSX、超限工作表及过大的文件", async () => {
   const { service, fetch } = setup();
   for (const { format, data } of [
     { format: "xlsx", data: Buffer.from("bad ZIP") },
-    { format: "xlsx", data: workbook(sheetHeader + "<row/>".repeat(51)) },
+    {
+      format: "xlsx",
+      data: workbook(
+        sheetHeader +
+          '<row><c t="inlineStr"><is><t>t</t></is></c></row>'.repeat(51),
+      ),
+    },
     { format: "csv", data: Buffer.alloc(2 * 1024 * 1024 + 1) },
   ]) {
     if (format !== "xlsx" && format !== "csv") throw new Error("未知格式");
@@ -609,4 +623,221 @@ it("拒绝损坏的 XLSX、超限工作表及过大的文件", async () => {
     });
   }
   expect(fetch).not.toHaveBeenCalled();
+});
+
+it("B1 线性扫描拒绝超长属性及未闭合 XML 注释的 XLSX 且不阻塞", async () => {
+  const { service, fetch } = setup();
+  const longInvalidAttr = workbook(
+    `${sheetHeader}<row r="2"><c ${"a".repeat(128_000)} t="inlineStr"><is><t>t</t></is></c></row>`,
+  );
+  const unclosedComment = workbook(`${sheetHeader}<!--${"x".repeat(128_000)}`);
+  const start = Date.now();
+  for (const data of [longInvalidAttr, unclosedComment]) {
+    const source = await importFile("xlsx", data);
+    await expect(service.importStories({ source })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+  }
+  expect(fetch).not.toHaveBeenCalled();
+
+  const longValidAttr = workbook(
+    `${sheetHeader}<row r="2"><c r="A2" data-extra="${"x".repeat(128_000)}" t="s"><v>0</v></c><c r="B2" t="inlineStr"><is><t>按部门筛选</t></is></c></row>`,
+  );
+  const validRes = await service.importStories({
+    source: await importFile("xlsx", longValidAttr),
+    dryRun: true,
+    defaults: {
+      product: 29,
+      module: 3,
+      verify: input.verify,
+      spec: { background: "默认背景" },
+    },
+  });
+  expect(validRes.preview.steps).toHaveLength(1);
+  expect(Date.now() - start).toBeLessThan(1500);
+});
+
+it("B2 批量导入遇到上游读取失败时直接抛出且保留可重试与缺口信息", async () => {
+  const { service } = setup({ failPlansAfter: 1 });
+  await expect(
+    service.importStories({
+      source: {
+        kind: "table",
+        rows: [
+          input,
+          { ...input, title: "第二条" },
+          { ...input, title: "第三条" },
+        ],
+      },
+    }),
+  ).rejects.toMatchObject({
+    code: "ZENTAO_UNAVAILABLE",
+    retryable: true,
+    details: {
+      completeness: "partial",
+      gaps: expect.arrayContaining([
+        expect.objectContaining({ source: "plans:29" }),
+      ]),
+    },
+  });
+});
+
+it("B3 拒绝非 UTF-8 编码的 CSV 导入", async () => {
+  const { service, fetch } = setup();
+  const gbkCsv = Buffer.from([
+    ...Buffer.from("title,spec.scope\n", "ascii"),
+    0xd0,
+    0xe8,
+    0xc7,
+    0xf3,
+    0x2c,
+    0xb7,
+    0xb6,
+    0xce,
+    0xa7,
+    0x0a,
+  ]);
+  const source = await importFile("csv", gbkCsv);
+  await expect(service.importStories({ source })).rejects.toMatchObject({
+    code: "INVALID_INPUT",
+  });
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("B4/N11 pair 未指定类别时按 N02 推导为设计类且仅推送一条 N02 警告，crossModule 推导为研发类", async () => {
+  const { service } = setup();
+  const paired = await service.createStory({
+    ...input,
+    pair: { product: "产品乙", module: "权限" },
+  });
+  expect(
+    paired.preview.steps.map(({ action, fields }) => ({
+      action,
+      category: fields.category,
+    })),
+  ).toEqual([
+    {
+      action: "story.create.design",
+      category: { value: "design", origin: "derived" },
+    },
+    {
+      action: "story.create.design",
+      category: { value: "design", origin: "derived" },
+    },
+  ]);
+  expect(paired.warnings.filter(({ code }) => code === "N02")).toHaveLength(1);
+
+  const cross = await service.createStory({ ...input, crossModule: true });
+  expect(cross.preview.steps[0]?.fields.category).toEqual({
+    value: "feature",
+    origin: "derived",
+  });
+});
+
+it("N7/N14/N4 XLSX 忽略空行、全跳过时不报告 dryRun、recordConfirmed 校验身份与数据", async () => {
+  const { service, store, confirm } = setup();
+  const padded = workbook(
+    `${sheetHeader}<row r="2"><c r="A2" t="s"><v>0</v></c><c r="B2" t="inlineStr"><is><t>按部门筛选</t></is></c><c r="C2"><v>2</v></c></row>${"<row/>".repeat(60)}`,
+  );
+  const fromXlsx = await service.importStories({
+    source: await importFile("xlsx", padded),
+    defaults: {
+      product: 29,
+      module: 3,
+      verify: input.verify,
+      spec: { background: "默认背景" },
+    },
+  });
+  expect(fromXlsx.preview.steps).toHaveLength(1);
+  expect(fromXlsx.warnings.filter(({ code }) => code === "skipped")).toEqual(
+    [],
+  );
+
+  const allSkipped = await service.importStories({
+    source: {
+      kind: "table",
+      rows: [{ ...input, spec: { background: "缺范围" } }],
+    },
+  });
+  expect(allSkipped.opId).toBe("");
+  expect(allSkipped.dryRun).toBeUndefined();
+  expect("dryRun" in allSkipped).toBe(false);
+
+  const prepared = await service.createStory(input);
+  const result = await confirm(prepared.opId);
+  const validPlan = JSON.stringify({
+    instanceHash: store.location.instanceHash,
+    plan: {
+      kind: "create_story",
+      summary: "s",
+      steps: [
+        { action: "story.create", type: "story", product: 29, fields: {} },
+      ],
+    },
+  });
+  store.operations.insert({
+    opId: "op_other_actor",
+    kind: "create_story",
+    actor: "bob",
+    level: "W1",
+    inputHash: "h1",
+    planJson: validPlan,
+    status: "confirmed",
+    createdAt: 0,
+    expiresAt: 1000,
+    executedAt: 100,
+  });
+  expect(() =>
+    service.recordConfirmed("op_other_actor", {
+      ...result,
+      opId: "op_other_actor",
+    }),
+  ).toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+
+  store.operations.insert({
+    opId: "op_other_inst",
+    kind: "create_story",
+    actor: "alice",
+    level: "W1",
+    inputHash: "h2",
+    planJson: JSON.stringify({
+      instanceHash: "other-instance",
+      plan: {
+        kind: "create_story",
+        summary: "s",
+        steps: [
+          { action: "story.create", type: "story", product: 29, fields: {} },
+        ],
+      },
+    }),
+    status: "confirmed",
+    createdAt: 0,
+    expiresAt: 1000,
+    executedAt: 100,
+  });
+  expect(() =>
+    service.recordConfirmed("op_other_inst", {
+      ...result,
+      opId: "op_other_inst",
+    }),
+  ).toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+
+  store.operations.insert({
+    opId: "op_broken_json",
+    kind: "create_story",
+    actor: "alice",
+    level: "W1",
+    inputHash: "h3",
+    planJson: "{broken",
+    status: "confirmed",
+    createdAt: 0,
+    expiresAt: 1000,
+    executedAt: 100,
+  });
+  expect(() =>
+    service.recordConfirmed("op_broken_json", {
+      ...result,
+      opId: "op_broken_json",
+    }),
+  ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
 });

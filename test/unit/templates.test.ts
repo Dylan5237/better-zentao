@@ -16,7 +16,8 @@ describe("N02 类别推荐", () => {
     [{ title: "新页面" }, "design"],
     [{ title: "修改文案", body: "需要评审" }, "design"],
     [{ title: "修改文案", crossProduct: true }, "design"],
-    [{ title: "修改文案", crossModule: true }, "design"],
+    [{ title: "修改文案", crossModule: true }, "feature"],
+    [{ title: "涉及多个模块的权限联动" }, "design"],
   ])("给出可解释的推导 %j", (input, category) => {
     expect(recommendStoryCategory(input)).toEqual({
       value: category,

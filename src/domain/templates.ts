@@ -30,17 +30,22 @@ interface IntakeSource {
   derivesFrom?: number | undefined;
 }
 
-// docs/03 N02。类别是基于已提供信息的建议，用户可以明确覆盖。
+// docs/03 N02、N10。跨模块依赖提研发类，跨产品与设计型变更建议设计类。
 export function recommendStoryCategory(input: CategoryInput): {
   value: "feature" | "design";
   origin: "derived";
   reason: string;
 } {
+  if (input.crossModule) {
+    return {
+      value: "feature",
+      origin: "derived",
+      reason: "跨模块依赖按 N10 提研发类需求",
+    };
+  }
   const text = [input.title, input.body].join("\n");
   const reason =
-    input.crossProduct ||
-    input.crossModule ||
-    /跨(?:产品|模块)|多个(?:产品|模块)/u.test(text)
+    input.crossProduct || /跨(?:产品|模块)|多个(?:产品|模块)/u.test(text)
       ? "涉及多个产品或模块"
       : /新(?:增)?(?:功能|页面)|交互(?:流程|调整|变更)|流程(?:调整|变更)|(?:需要|待)评审|方案待定/u.test(
             text,
