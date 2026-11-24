@@ -1,0 +1,10 @@
+{
+  "endpoint": "project-bugs",
+  "status": 200,
+  "body": {
+    "page": 3,
+    "total": 127,
+    "limit": 100,
+    "bugs": []
+  }
+}

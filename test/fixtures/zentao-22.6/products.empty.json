@@ -1,0 +1,10 @@
+{
+  "endpoint": "products",
+  "status": 200,
+  "body": {
+    "page": 2,
+    "total": 11,
+    "limit": 100,
+    "products": []
+  }
+}

@@ -1,0 +1,162 @@
+{
+  "endpoint": "product-modules",
+  "status": 200,
+  "body": {
+    "id": 42,
+    "program": 177,
+    "name": "示例文本",
+    "code": "",
+    "field_033": 0,
+    "field_034": 0,
+    "line": 0,
+    "type": "normal",
+    "status": "normal",
+    "field_035": "",
+    "desc": "",
+    "PO": {
+      "id": 796,
+      "account": "acct_006",
+      "realname": "人员003"
+    },
+    "QD": null,
+    "RD": null,
+    "field_020": null,
+    "field_036": "",
+    "field_037": 0,
+    "field_038": "示例文本",
+    "groups": "",
+    "whitelist": [],
+    "reviewer": "",
+    "field_039": "",
+    "field_040": 0,
+    "field_041": 0,
+    "field_042": 0,
+    "field_043": 0,
+    "field_044": 0,
+    "field_045": 0,
+    "field_046": 0,
+    "field_047": 0,
+    "field_048": 1,
+    "field_049": 0,
+    "field_050": 60,
+    "field_051": 0,
+    "field_052": 2,
+    "field_053": 63,
+    "field_054": 0,
+    "field_055": 160,
+    "field_056": 0,
+    "field_057": 3,
+    "field_058": 7,
+    "field_059": 12,
+    "field_060": 175,
+    "field_061": 5,
+    "field_062": 9,
+    "field_063": 7,
+    "field_064": 30,
+    "plans": 33,
+    "releases": 0,
+    "createdBy": {
+      "id": 1,
+      "account": "acct_002",
+      "realname": "人员002"
+    },
+    "createdDate": "2026-10-24T04:05:31Z",
+    "field_065": "22.6",
+    "closedDate": "",
+    "order": 210,
+    "field_066": "示例文本",
+    "deleted": 0,
+    "stories": {
+      "active": 164,
+      "field_204": 18,
+      "field_205": 3,
+      "field_206": 0,
+      "field_207": 0,
+      "field_208": 0
+    },
+    "builds": 0,
+    "field_209": 0,
+    "bugs": 36,
+    "field_190": 0,
+    "projects": 2,
+    "executions": 7,
+    "progress": 7.6,
+    "field_210": 6.859999999999999,
+    "field_068": "示例文本",
+    "field_211": false,
+    "moduleOptionMenu": [
+      {
+        "id": 0,
+        "name": "示例文本"
+      },
+      {
+        "id": 542,
+        "name": "示例文本"
+      },
+      {
+        "id": 543,
+        "name": "示例文本"
+      },
+      {
+        "id": 544,
+        "name": "示例文本"
+      },
+      {
+        "id": 545,
+        "name": "示例文本"
+      },
+      {
+        "id": 546,
+        "name": "示例文本"
+      },
+      {
+        "id": 547,
+        "name": "示例文本"
+      },
+      {
+        "id": 719,
+        "name": "示例文本"
+      },
+      {
+        "id": 720,
+        "name": "示例文本"
+      },
+      {
+        "id": 721,
+        "name": "示例文本"
+      },
+      {
+        "id": 722,
+        "name": "示例文本"
+      },
+      {
+        "id": 723,
+        "name": "示例文本"
+      },
+      {
+        "id": 548,
+        "name": "示例文本"
+      },
+      {
+        "id": 549,
+        "name": "示例文本"
+      },
+      {
+        "id": 550,
+        "name": "示例文本"
+      },
+      {
+        "id": 563,
+        "name": "示例文本"
+      },
+      {
+        "id": 717,
+        "name": "示例文本"
+      },
+      {
+        "id": 718,
+        "name": "示例文本"
+      }
+    ]
+  }
+}

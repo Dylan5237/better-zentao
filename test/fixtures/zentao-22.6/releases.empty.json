@@ -1,0 +1,10 @@
+{
+  "endpoint": "releases",
+  "status": 200,
+  "body": {
+    "page": 1,
+    "total": 0,
+    "limit": 20,
+    "releases": []
+  }
+}

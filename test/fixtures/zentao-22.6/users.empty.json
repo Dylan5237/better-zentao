@@ -1,0 +1,18 @@
+{
+  "endpoint": "users",
+  "status": 200,
+  "body": {
+    "status": "示例文本",
+    "users": [],
+    "pager": {
+      "recTotal": 2086,
+      "recPerPage": 3000,
+      "pageTotal": 1,
+      "pageID": 2,
+      "moduleName": "示例文本",
+      "field_129": "示例文本",
+      "field_130": null,
+      "offset": 0
+    }
+  }
+}

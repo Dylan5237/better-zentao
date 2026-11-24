@@ -1,0 +1,52 @@
+{
+  "endpoint": "current-user",
+  "status": 200,
+  "body": {
+    "profile": {
+      "id": 426,
+      "company": 0,
+      "type": "示例文本",
+      "dept": 11111311,
+      "account": "acct_001",
+      "role": {
+        "code": "po",
+        "name": "示例文本"
+      },
+      "realname": "人员001",
+      "field_009": "",
+      "pinyin": "示例文本",
+      "nickname": "示例文本",
+      "field_010": "",
+      "field_011": "",
+      "field_012": "",
+      "field_013": "",
+      "field_014": null,
+      "field_015": 333,
+      "field_016": "示例文本",
+      "field_017": "2000-01-01T00:00:00Z",
+      "field_018": 0,
+      "field_019": null,
+      "field_020": 0,
+      "field_021": "",
+      "field_022": "",
+      "field_023": 0,
+      "field_024": 0,
+      "field_025": 0,
+      "deleted": 0,
+      "field_026": "示例文本",
+      "field_027": "示例文本",
+      "field_028": 0,
+      "field_029": "",
+      "admin": false,
+      "field_030": false,
+      "view": {
+        "id": 172,
+        "account": "acct_001",
+        "field_031": "示例文本",
+        "products": "示例文本",
+        "projects": "示例文本",
+        "field_032": "示例文本"
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "endpoint": "projects",
+  "status": 200,
+  "body": {
+    "page": 2,
+    "total": 13,
+    "limit": 100,
+    "projects": []
+  }
+}

@@ -1,0 +1,218 @@
+{
+  "endpoint": "users-by-department",
+  "status": 200,
+  "body": {
+    "title": "示例文本",
+    "users": [],
+    "deptTree": [
+      {
+        "id": 11111424,
+        "parent": 11111422,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111429,
+        "parent": 41,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111430,
+        "parent": 11111322,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111175,
+        "parent": 11111174,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111176,
+        "parent": 11111174,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111194,
+        "parent": 11111193,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111195,
+        "parent": 11111193,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111196,
+        "parent": 11111193,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111197,
+        "parent": 11111193,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111198,
+        "parent": 11111193,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 39,
+        "parent": 67,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 48,
+        "parent": 41,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 55,
+        "parent": 41,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 62,
+        "parent": 67,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 68,
+        "parent": 67,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111239,
+        "parent": 41,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111240,
+        "parent": 41,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 73,
+        "parent": 41,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111241,
+        "parent": 41,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111255,
+        "parent": 11111254,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111256,
+        "parent": 11111254,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111258,
+        "parent": 11111257,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111259,
+        "parent": 11111257,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111262,
+        "parent": 11111260,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111263,
+        "parent": 11111260,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 98,
+        "parent": 93,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111267,
+        "parent": 11111266,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111268,
+        "parent": 11111266,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 103,
+        "parent": 93,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 104,
+        "parent": 93,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 11111277,
+        "parent": 11111276,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      },
+      {
+        "id": 2,
+        "parent": 0,
+        "name": "示例文本",
+        "url": "https://fixture.example.test"
+      }
+    ],
+    "orderBy": "示例文本",
+    "deptID": 11111311,
+    "pager": {
+      "recTotal": 76,
+      "recPerPage": 200,
+      "pageTotal": 1,
+      "pageID": 2,
+      "moduleName": "示例文本",
+      "field_129": "示例文本",
+      "field_130": null,
+      "offset": 0
+    },
+    "field_152": "11111311",
+    "type": "示例文本",
+    "browseType": "示例文本",
+    "status": "示例文本"
+  }
+}

@@ -1,0 +1,568 @@
+{
+  "endpoint": "required-fields",
+  "status": 200,
+  "body": {
+    "product": {
+      "create": {
+        "method": "create",
+        "fields": [
+          "name"
+        ],
+        "field_131": "name"
+      },
+      "edit": {
+        "method": "edit",
+        "fields": [
+          "name"
+        ],
+        "field_131": "name"
+      }
+    },
+    "epic": {
+      "create": {
+        "method": "create",
+        "fields": [
+          "title"
+        ],
+        "field_131": "title"
+      },
+      "edit": {
+        "method": "edit",
+        "fields": [
+          "title"
+        ],
+        "field_131": "title"
+      },
+      "change": {
+        "method": "change",
+        "fields": [
+          "title"
+        ],
+        "field_131": "title"
+      },
+      "close": {
+        "method": "close",
+        "fields": [
+          "closedReason"
+        ],
+        "field_131": "closedReason"
+      },
+      "field_132": {
+        "method": "示例文本",
+        "fields": [
+          ""
+        ],
+        "field_131": ""
+      }
+    },
+    "requirement": {
+      "create": {
+        "method": "create",
+        "fields": [
+          "title"
+        ],
+        "field_131": "title"
+      },
+      "edit": {
+        "method": "edit",
+        "fields": [
+          "title"
+        ],
+        "field_131": "title"
+      },
+      "change": {
+        "method": "change",
+        "fields": [
+          "title"
+        ],
+        "field_131": "title"
+      },
+      "close": {
+        "method": "close",
+        "fields": [
+          "closedReason"
+        ],
+        "field_131": "closedReason"
+      },
+      "field_132": {
+        "method": "示例文本",
+        "fields": [
+          ""
+        ],
+        "field_131": ""
+      }
+    },
+    "story": {
+      "create": {
+        "method": "create",
+        "fields": [
+          "title",
+          "module",
+          "assignedTo",
+          "verify",
+          "spec"
+        ],
+        "field_131": "title,module,assignedTo,verify,spec"
+      },
+      "edit": {
+        "method": "edit",
+        "fields": [
+          "title"
+        ],
+        "field_131": "title"
+      },
+      "change": {
+        "method": "change",
+        "fields": [
+          "title",
+          "verify",
+          "spec"
+        ],
+        "field_131": "title,verify,spec"
+      },
+      "close": {
+        "method": "close",
+        "fields": [
+          "closedReason"
+        ],
+        "field_131": "closedReason"
+      },
+      "field_132": {
+        "method": "示例文本",
+        "fields": [
+          ""
+        ],
+        "field_131": ""
+      }
+    },
+    "productplan": {
+      "create": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "edit": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    },
+    "project": {
+      "create": {
+        "method": "create",
+        "fields": [
+          "name",
+          "begin",
+          "end",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "edit": {
+        "method": "edit",
+        "fields": [
+          "name",
+          "begin",
+          "end",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "field_133": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "close": {
+        "method": "close",
+        "fields": [
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    },
+    "execution": {
+      "create": {
+        "method": "create",
+        "fields": [
+          "name",
+          "begin",
+          "end",
+          "QD",
+          "PO",
+          "desc",
+          "products"
+        ],
+        "field_131": "name,begin,end,QD,PO,desc,products"
+      },
+      "edit": {
+        "method": "edit",
+        "fields": [
+          "name",
+          "begin",
+          "end",
+          "products",
+          "desc",
+          "PO",
+          "QD"
+        ],
+        "field_131": "name,begin,end,products,desc,PO,QD"
+      },
+      "field_133": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "close": {
+        "method": "close",
+        "fields": [
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "field_134": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    },
+    "task": {
+      "create": {
+        "method": "create",
+        "fields": [
+          "execution",
+          "name",
+          "type",
+          "module",
+          "assignedTo",
+          "estStarted",
+          "deadline",
+          "desc",
+          "pri"
+        ],
+        "field_131": "execution,name,type,module,assignedTo,estStarted,deadline,desc,pri"
+      },
+      "edit": {
+        "method": "edit",
+        "fields": [
+          "execution",
+          "name",
+          "type",
+          "module",
+          "assignedTo",
+          "pri",
+          "estStarted",
+          "deadline"
+        ],
+        "field_131": "execution,name,type,module,assignedTo,pri,estStarted,deadline"
+      },
+      "finish": {
+        "method": "finish",
+        "fields": [
+          "realStarted",
+          "finishedDate",
+          "currentConsumed"
+        ],
+        "field_131": "realStarted,finishedDate,currentConsumed"
+      },
+      "field_135": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "batchcreate": {
+        "method": "batchcreate",
+        "fields": [
+          "name",
+          "type"
+        ],
+        "field_131": "name,type"
+      },
+      "field_136": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    },
+    "build": {
+      "create": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "edit": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    },
+    "bug": {
+      "create": {
+        "method": "create",
+        "fields": [
+          "title",
+          "openedBuild",
+          "module",
+          "assignedTo",
+          "type",
+          "severity",
+          "steps",
+          "pri"
+        ],
+        "field_131": "title,openedBuild,module,assignedTo,type,severity,steps,pri"
+      },
+      "edit": {
+        "method": "edit",
+        "fields": [
+          "title",
+          "openedBuild",
+          "module",
+          "assignedTo",
+          "type",
+          "severity",
+          "pri",
+          "steps"
+        ],
+        "field_131": "title,openedBuild,module,assignedTo,type,severity,pri,steps"
+      },
+      "field_137": {
+        "method": "示例文本",
+        "fields": [
+          ""
+        ],
+        "field_131": ""
+      },
+      "field_138": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "batchcreate": {
+        "method": "batchcreate",
+        "fields": [
+          "title",
+          "openedBuild"
+        ],
+        "field_131": "title,openedBuild"
+      }
+    },
+    "field_139": {
+      "create": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "edit": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "field_140": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "field_141": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    },
+    "field_142": {
+      "create": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "edit": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    },
+    "field_143": {
+      "create": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "edit": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    },
+    "field_144": {
+      "create": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "edit": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "field_145": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    },
+    "field_146": {
+      "create": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "edit": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "field_147": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    },
+    "field_148": {
+      "create": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "field_149": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "edit": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "field_150": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    },
+    "user": {
+      "create": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本",
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      },
+      "edit": {
+        "method": "示例文本",
+        "fields": [
+          "示例文本",
+          "示例文本",
+          "示例文本"
+        ],
+        "field_131": "示例文本"
+      }
+    }
+  }
+}

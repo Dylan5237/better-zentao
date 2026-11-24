@@ -1,0 +1,10 @@
+{
+  "endpoint": "product-bugs",
+  "status": 200,
+  "body": {
+    "page": 2,
+    "total": 14,
+    "limit": 100,
+    "bugs": []
+  }
+}

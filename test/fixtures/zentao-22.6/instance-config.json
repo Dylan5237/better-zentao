@@ -1,0 +1,22 @@
+{
+  "endpoint": "instance-config",
+  "status": 200,
+  "body": {
+    "version": "22.6",
+    "requestType": "GET",
+    "requestFix": "示例文本",
+    "moduleVar": "示例文本",
+    "methodVar": "示例文本",
+    "viewVar": "示例文本",
+    "field_001": "示例文本",
+    "field_002": "示例文本",
+    "field_003": "0",
+    "URAndSR": "1",
+    "field_004": "示例文本",
+    "sessionName": "zentaosid",
+    "field_005": 4529,
+    "field_006": "2592000",
+    "field_007": 1795483894,
+    "field_008": 4529
+  }
+}

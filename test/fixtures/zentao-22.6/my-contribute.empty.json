@@ -1,0 +1,73 @@
+{
+  "endpoint": "my-contribute",
+  "status": 200,
+  "body": {
+    "title": "示例文本",
+    "field_153": 0,
+    "field_154": 0,
+    "field_155": 0,
+    "todoCount": {
+      "task": 0,
+      "field_156": 0,
+      "story": 0,
+      "bug": 0,
+      "field_157": 0,
+      "field_146": 0,
+      "requirement": 0,
+      "field_158": 0,
+      "field_159": 0,
+      "field_160": 0,
+      "field_161": 0,
+      "field_162": 0,
+      "field_036": 0,
+      "field_020": 0,
+      "epic": 0
+    },
+    "field_163": 1,
+    "stories": [],
+    "browseType": "openedBy",
+    "field_152": "0",
+    "mode": "story",
+    "pager": {
+      "recTotal": 14,
+      "recPerPage": 100,
+      "pageTotal": 1,
+      "pageID": 2,
+      "moduleName": "示例文本",
+      "field_129": "示例文本",
+      "field_130": null,
+      "offset": 0
+    },
+    "orderBy": "示例文本",
+    "field_202": {
+      "epic": {
+        "1": {
+          "type": "epic",
+          "grade": 1,
+          "name": "示例文本"
+        }
+      },
+      "requirement": {
+        "1": {
+          "type": "requirement",
+          "grade": 1,
+          "name": "示例文本"
+        }
+      },
+      "story": {
+        "1": {
+          "type": "story",
+          "grade": 1,
+          "name": "示例文本"
+        },
+        "2": {
+          "type": "story",
+          "grade": 2,
+          "name": "示例文本"
+        }
+      }
+    },
+    "field_203": false,
+    "status": "示例文本"
+  }
+}
