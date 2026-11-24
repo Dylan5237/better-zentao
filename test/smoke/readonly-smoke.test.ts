@@ -29,7 +29,8 @@ import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 
 describe("P0 禅道只读冒烟（09 §7 / S01）", () => {
   let client: ZentaoReadClient;
-  const secrets = new Set<string>();
+  let deploymentUrl: string | undefined;
+  const credentials = new Set<string>();
   const logs: string[] = [];
 
   beforeAll(() => {
@@ -49,8 +50,8 @@ describe("P0 禅道只读冒烟（09 §7 / S01）", () => {
     const password = env.ZENTAO_PASSWORD;
     if (!baseUrl || !account || !password)
       throw new Error("只读冒烟配置不完整。");
-    secrets.add(baseUrl);
-    secrets.add(password);
+    deploymentUrl = baseUrl;
+    credentials.add(password);
 
     const login = new URL("api.php/v1/tokens", baseUrl).href;
     const send = globalThis.fetch;
@@ -65,7 +66,7 @@ describe("P0 禅道只读冒烟（09 §7 / S01）", () => {
         throw new Error("只读冒烟已拦截超出范围的请求。");
       }
       const token = new Headers(init?.headers).get("Token");
-      if (token) secrets.add(token);
+      if (token) credentials.add(token);
       return send(input, init);
     };
     vi.stubGlobal("fetch", readOnlyFetch);
@@ -81,7 +82,7 @@ describe("P0 禅道只读冒烟（09 §7 / S01）", () => {
 
   afterAll(() => {
     vi.unstubAllGlobals();
-    assertNoSensitiveData(logs, [...secrets]);
+    assertNoSensitiveData(logs, [...credentials, deploymentUrl ?? ""]);
   });
 
   async function checkedRead<T>(
@@ -96,7 +97,8 @@ describe("P0 禅道只读冒烟（09 §7 / S01）", () => {
       throw new Error(`${endpoint} ${reason}`);
     }
     try {
-      assertNoSensitiveData(result, [...secrets]);
+      // 投影正文可包含实例内链接。冒烟保留链接并且始终不输出正文。
+      assertNoSensitiveData(result, [...credentials]);
     } catch {
       throw new Error(`${endpoint} 未通过 S01 复扫。`);
     }

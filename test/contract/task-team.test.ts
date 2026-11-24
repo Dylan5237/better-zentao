@@ -82,6 +82,26 @@ it("任务详情允许省略优先级和完成人", async () => {
   expect(detail).not.toHaveProperty("finishedBy");
 });
 
+it("Q6 已关闭任务的 team=false 表示无多人团队，true 仍拒绝", async () => {
+  const response = (team: boolean) =>
+    mockReadFixture("task-detail", {
+      transform: (body) => ({
+        ...z.looseObject({}).parse(body),
+        status: "closed",
+        team,
+      }),
+    });
+  await expect(
+    getTaskDetail(response(false).client, 4324),
+  ).resolves.toMatchObject({ status: "closed", team: [] });
+  await expect(
+    getTaskDetail(response(true).client, 4324),
+  ).rejects.toMatchObject({
+    code: "ZENTAO_SCHEMA_MISMATCH",
+    details: { fields: ["team"] },
+  });
+});
+
 it("任务详情逐层投影团队、动作和子任务", async () => {
   const row = z.looseObject({});
   const taskFixture = z.object({ tasks: z.array(row).nonempty() });

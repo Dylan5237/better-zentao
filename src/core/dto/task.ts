@@ -87,7 +87,13 @@ const taskTeamMemberDto = z
 export function taskDetailDtoFor(timezone: string) {
   return taskFieldsFor(timezone)
     .extend({
-      team: zCollection(taskTeamMemberDto).default([]),
+      // 22.6 已关闭任务用 false 表示没有多人团队（docs/06 Q6）。
+      team: z
+        .union([
+          zCollection(taskTeamMemberDto),
+          z.literal(false).transform(() => []),
+        ])
+        .default([]),
       children: zCollection(taskDtoFor(timezone)).default([]),
       actions: zCollection(actionDtoFor(timezone)).default([]),
     })
