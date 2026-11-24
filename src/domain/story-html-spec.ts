@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BztError } from "../core/errors.ts";
+import { htmlFragments } from "./html-fragments.ts";
 
 const roleValue = z.string().regex(/^[\p{L}\p{M}\p{N}_.@+-]+$/u);
 const storyRoleTagSchema = z
@@ -21,17 +22,6 @@ export interface StorySpecTemplate {
 }
 
 // 只识别 HTML 注释或独立的微标签文本，跳过属性、代码示例和非正文元素。
-const attributes = String.raw`(?:[^"'<>]|"[^"]*"|'[^']*')*`;
-const htmlFragments = new RegExp(
-  [
-    String.raw`<!--[\s\S]*?(?:-->|$)`,
-    String.raw`<(script|style|textarea|title|template|pre|code)(?=[\s/>])${attributes}>[\s\S]*?(?:</\1\s*>|$)`,
-    String.raw`<p(?=[\s>])${attributes}>\s*(?<footer>\[bzt:v1\s+[^[\]\r\n<>]*\])\s*</p\s*>`,
-    String.raw`</?[a-z][a-z\d:-]*${attributes}(?:>|"[^"]*$|'[^']*$)`,
-    String.raw`[^<]+|<`,
-  ].join("|"),
-  "giu",
-);
 const commentRoleTag = /^<!--\s*bzt:v1\s+([\s\S]*?)\s*-->$/u;
 const visibleRoleTag = /^\s*\[bzt:v1\s+([^[\]\r\n<>]*)\]\s*$/u;
 
