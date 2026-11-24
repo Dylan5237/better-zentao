@@ -1,7 +1,169 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  ToolSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { randomUUID } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { z } from "zod";
+import { p1Tools } from "../../contracts/tools/index.ts";
+import { createWorkbench, projectToolError } from "../../services/workbench.ts";
+import type { Workbench, WorkbenchRuntime } from "../../services/workbench.ts";
+import { renderScheduleHtml } from "../cli/render/schedule-html.ts";
 
-export async function startMcpServer(): Promise<void> {
-  const server = new McpServer({ name: "better-zentao", version: "0.0.0" });
-  await server.connect(new StdioServerTransport());
+function jsonResult(payload: unknown, isError = false): CallToolResult {
+  return {
+    ...(isError ? { isError: true } : {}),
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+  };
+}
+
+function register<Input extends z.ZodType>(
+  contract: { input: Input; output: z.ZodType; description: string },
+  run: (services: Workbench, input: z.output<Input>, raw: unknown) => unknown,
+) {
+  const inputSchema = ToolSchema.shape.inputSchema.parse(
+    z.toJSONSchema(contract.input, {
+      io: "input",
+      target: "draft-07",
+      unrepresentable: "any",
+    }),
+  );
+  return {
+    description: contract.description,
+    inputSchema,
+    async call(workbench: ReturnType<typeof createWorkbench>, raw: unknown) {
+      const input = contract.input.safeParse(raw);
+      if (!input.success)
+        return jsonResult(
+          {
+            ok: false,
+            code: "INVALID_INPUT",
+            message: "工具参数不合法，请检查输入字段。",
+            retryable: false,
+          },
+          true,
+        );
+      return jsonResult(
+        contract.output.parse(
+          await run(await workbench.get(), input.data, raw),
+        ),
+      );
+    },
+  };
+}
+
+const tools = {
+  resolve_context: register(
+    p1Tools.resolve_context,
+    ({ directory }, _input, raw) => directory.resolveContext(raw),
+  ),
+  get_my_work: register(p1Tools.get_my_work, ({ tracking }, _input, raw) =>
+    tracking.getMyWork(raw),
+  ),
+  get_team_work: register(p1Tools.get_team_work, ({ tracking }, _input, raw) =>
+    tracking.getTeamWork(raw),
+  ),
+  get_member_schedule: register(
+    p1Tools.get_member_schedule,
+    async ({ schedule, reportDir }, input, raw) => {
+      const result = p1Tools.get_member_schedule.output.parse(
+        await schedule.getMemberSchedule(raw),
+      );
+      if (input.format !== "html") return result;
+      await mkdir(reportDir, { recursive: true, mode: 0o700 });
+      const stamp = result.scope.asOf.replaceAll(/[^\d]/gu, "");
+      const file = join(reportDir, `schedule-${stamp}-${randomUUID()}.html`);
+      await writeFile(file, renderScheduleHtml(result), {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+      return {
+        ...result,
+        links: [
+          ...(result.links ?? []),
+          { label: "本地成员排期报告", url: pathToFileURL(file).href },
+        ],
+        hints: [...(result.hints ?? []), "可打开本地成员排期报告查看 HTML。"],
+      };
+    },
+  ),
+  query_stories: register(p1Tools.query_stories, ({ tracking }, _input, raw) =>
+    tracking.queryStories(raw),
+  ),
+  get_story_progress: register(
+    p1Tools.get_story_progress,
+    ({ tracking }, _input, raw) => tracking.getStoryProgress(raw),
+  ),
+  create_story: register(p1Tools.create_story, (services, _input, raw) =>
+    services.createStory(raw),
+  ),
+  import_stories: register(p1Tools.import_stories, (services, _input, raw) =>
+    services.importStories(raw),
+  ),
+  assign_story: register(p1Tools.assign_story, (services, _input, raw) =>
+    services.assignStory(raw),
+  ),
+  scan_workflow_risks: register(
+    p1Tools.scan_workflow_risks,
+    ({ risk }, _input, raw) => risk.scanWorkflowRisks(raw),
+  ),
+  confirm_operation: register(p1Tools.confirm_operation, (services, input) =>
+    services.confirmOperation(input),
+  ),
+  get_operation: register(p1Tools.get_operation, (services, input) =>
+    services.getOperation(input),
+  ),
+} satisfies Record<keyof typeof p1Tools, unknown>;
+
+function isToolName(name: string): name is keyof typeof tools {
+  return Object.hasOwn(tools, name);
+}
+
+export function createMcpServer(runtime?: WorkbenchRuntime): Server {
+  const workbench = createWorkbench(runtime);
+  const server = new Server(
+    { name: "better-zentao", version: "0.0.0" },
+    { capabilities: { tools: {} } },
+  );
+  server.onclose = () => workbench.close();
+  server.setRequestHandler(ListToolsRequestSchema, () => ({
+    tools: Object.entries(tools).map(
+      ([name, { description, inputSchema }]) => ({
+        name,
+        description,
+        inputSchema,
+      }),
+    ),
+  }));
+  server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+    try {
+      if (!isToolName(params.name))
+        return jsonResult(
+          {
+            ok: false,
+            code: "INVALID_INPUT",
+            message: "当前没有此 MCP 工具。",
+            retryable: false,
+          },
+          true,
+        );
+      return await tools[params.name].call(workbench, params.arguments ?? {});
+    } catch (error) {
+      return jsonResult(projectToolError(error, runtime?.env), true);
+    }
+  });
+  return server;
+}
+
+export async function startMcpServer(
+  runtime?: WorkbenchRuntime,
+): Promise<void> {
+  await createMcpServer(runtime).connect(new StdioServerTransport());
 }

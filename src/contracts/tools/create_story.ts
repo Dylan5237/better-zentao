@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { preparedOperationSchema } from "../operation.ts";
 
 const text = z.string().trim().min(1);
 const entity = z.union([text, z.int().positive()]).transform(String);
@@ -59,3 +60,8 @@ export const createStoryInputSchema = z
   .strict();
 
 export type CreateStoryInput = z.output<typeof createStoryInputSchema>;
+
+export const createStoryOutputSchema = preparedOperationSchema.extend({
+  intakes: z.array(z.strictObject({ intakeId: text, message: z.string() })),
+  dryRun: z.literal(true).optional(),
+});

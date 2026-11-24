@@ -14,7 +14,14 @@ interface ReadClientState {
   >["getProbeSender"];
 }
 
-const readClients = new WeakMap<ZentaoReadClient, ReadClientState>();
+interface WriteClientState {
+  readonly http: Pick<ReturnType<typeof createZentaoHttp>, "write">;
+}
+
+const readClients = new WeakMap<
+  ZentaoReadClient,
+  { read: ReadClientState; write: WriteClientState }
+>();
 
 export function registerReadClient(
   client: ZentaoReadClient,
@@ -25,21 +32,32 @@ export function registerReadClient(
   if (!baseUrl || !isIanaTimezone(timezone)) {
     throw new BztError("INVALID_INPUT", "禅道读取地址或时区不合法。");
   }
-  const { read, getProbeSender } = createZentaoHttp({
+  const { read, write, getProbeSender } = createZentaoHttp({
     ...config,
     baseUrl: baseUrl.href,
   });
   readClients.set(client, {
-    baseUrl: baseUrl.href,
-    account: config.account,
-    timezone,
-    http: { read },
-    getProbeSender,
+    read: {
+      baseUrl: baseUrl.href,
+      account: config.account,
+      timezone,
+      http: { read },
+      getProbeSender,
+    },
+    write: { http: { write } },
   });
 }
 
-export function getReadClient(client: ZentaoReadClient): ReadClientState {
+export function getReadClient(client: ZentaoReadClient): ReadClientState;
+export function getReadClient(
+  client: ZentaoReadClient,
+  mode: "write",
+): WriteClientState;
+export function getReadClient(
+  client: ZentaoReadClient,
+  mode: "read" | "write" = "read",
+) {
   const state = readClients.get(client);
   if (!state) throw new BztError("INVALID_INPUT", "禅道只读客户端未初始化。");
-  return state;
+  return state[mode];
 }

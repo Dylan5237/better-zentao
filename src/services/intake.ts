@@ -515,14 +515,23 @@ export class IntakeService {
         : input.feedbackBy
           ? "story.create.feedbackBy"
           : "story.create";
-    assertCapabilityExecutable(
-      action,
-      instanceVersion ? { instanceVersion } : {},
-    );
-    if (!this.verified(action))
-      throw new BztError("CAPABILITY_DISABLED", "当前团队禁用了该创建能力。", {
-        capability: action,
-      });
+    const actions = [action];
+    if (action === "story.create.design" && input.feedbackBy)
+      actions.push("story.create.feedbackBy");
+    for (const capability of actions) {
+      assertCapabilityExecutable(
+        capability,
+        instanceVersion ? { instanceVersion } : {},
+      );
+      if (!this.verified(capability))
+        throw new BztError(
+          "CAPABILITY_DISABLED",
+          "当前团队禁用了该创建能力。",
+          {
+            capability,
+          },
+        );
+    }
     const source = input.source ?? (intake.channel ? "user" : undefined);
     const fields: OperationStep["fields"] = {
       product: { value: product.id, origin: "derived" },

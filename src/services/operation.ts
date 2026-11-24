@@ -77,7 +77,10 @@ const lookupResult = z.object({
     }),
   ),
 });
-const writeReceipt = z.object({ id: idSchema.optional() });
+const writeReceipt = z.object({
+  id: idSchema.optional(),
+  actionId: idSchema.optional(),
+});
 const readbackReceipt = z.object({
   verified: z.boolean(),
   snapshot: targetSnapshot.optional(),
@@ -88,7 +91,11 @@ export interface OperationGateway {
   readTarget(target: Target): Promise<OperationTargetSnapshot>;
   write(request: StepRequest): Promise<z.infer<typeof writeReceipt>>;
   readback(
-    request: StepRequest & { zentaoId?: number },
+    request: StepRequest & {
+      zentaoId?: number;
+      actionId?: number;
+      attemptedAt?: number;
+    },
   ): Promise<z.infer<typeof readbackReceipt>>;
   reverseLookup(query: ReverseQuery): Promise<z.infer<typeof lookupResult>>;
 }
@@ -115,6 +122,7 @@ const storedPlanSchema = z.strictObject({
 const checkpointSchema = z.strictObject({
   attemptedAt: z.int(),
   fingerprint: fingerprintSchema.optional(),
+  actionId: idSchema.optional(),
 });
 
 const isoFormatter = new Intl.DateTimeFormat("sv-SE", {
@@ -394,16 +402,25 @@ export class OperationExecutor {
     const { channel, instanceVersion, config } = this.options;
     for (const [index, step] of plan.steps.entries()) {
       if (step.action !== "read") {
-        assertCapabilityExecutable(step.action, {
-          channel: channel ?? "mcp",
-          ...(instanceVersion === undefined ? {} : { instanceVersion }),
-        });
-        if (config.write.disableCapabilities.includes(step.action))
-          throw new BztError(
-            "CAPABILITY_DISABLED",
-            "该能力已被团队配置禁用。",
-            { capability: step.action },
-          );
+        const capabilities = new Set([step.action]);
+        if (createsObject.has(step.action) && step.type === "story") {
+          if (step.fields.category?.value === "design")
+            capabilities.add("story.create.design");
+          if (step.fields.feedbackBy?.value !== undefined)
+            capabilities.add("story.create.feedbackBy");
+        }
+        for (const capability of capabilities) {
+          assertCapabilityExecutable(capability, {
+            channel: channel ?? "mcp",
+            instanceVersion,
+          });
+          if (config.write.disableCapabilities.includes(capability))
+            throw new BztError(
+              "CAPABILITY_DISABLED",
+              "该能力已被团队配置禁用。",
+              { capability },
+            );
+        }
       }
       if (createsObject.has(step.action)) {
         if (Object.hasOwn(step.fields, "plan"))
@@ -495,7 +512,7 @@ export class OperationExecutor {
   getOperation(input: GetOperation): OperationResult | OperationResult[];
   getOperation(input: GetOperation = {}): OperationResult | OperationResult[] {
     const query = parseInput(getOperationSchema, input);
-    if ("opId" in query) {
+    if (query.opId !== undefined) {
       const { record, plan } = this.load(query.opId);
       return this.result(record, plan);
     }
@@ -774,9 +791,16 @@ export class OperationExecutor {
       this.store.operationSteps.update(opId, seq, {
         state: "unknown",
         zentaoId,
+        readbackJson: JSON.stringify({
+          attemptedAt,
+          actionId: result.actionId,
+        }),
       });
     this.invalidate(step);
-    if (await this.verifyReadback(request, attemptedAt, zentaoId)) return true;
+    if (
+      await this.verifyReadback(request, attemptedAt, zentaoId, result.actionId)
+    )
+      return true;
     return this.reconcile(request, this.store.operationSteps.get(opId, seq));
   }
 
@@ -785,7 +809,7 @@ export class OperationExecutor {
     row: OperationStepRecord,
   ): Promise<boolean> {
     const { opId, seq, step } = request;
-    const { attemptedAt } = parseStored(
+    const { attemptedAt, actionId } = parseStored(
       checkpointSchema,
       row.readbackJson ?? "{}",
     );
@@ -795,6 +819,7 @@ export class OperationExecutor {
         request,
         attemptedAt,
         row.zentaoId ?? request.id,
+        actionId,
       );
     const title = step.fields.title?.value;
     if (typeof title !== "string") return false;
@@ -842,13 +867,19 @@ export class OperationExecutor {
     request: StepRequest,
     attemptedAt: number,
     zentaoId?: number,
+    actionId?: number,
   ): Promise<boolean> {
     const { step, opId, seq } = request;
     if (zentaoId === undefined) return false;
     let receipt: z.infer<typeof readbackReceipt>;
     try {
       receipt = readbackReceipt.parse(
-        await this.options.gateway.readback({ ...request, zentaoId }),
+        await this.options.gateway.readback({
+          ...request,
+          zentaoId,
+          attemptedAt,
+          ...(actionId === undefined ? {} : { actionId }),
+        }),
       );
     } catch {
       return false;
