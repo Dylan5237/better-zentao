@@ -135,3 +135,37 @@ it.each([
   );
   expect(sink).toHaveBeenCalledTimes(visible ? 1 : 0);
 });
+
+it("S01 日志 opId 兼容 op_ + ULID 并拒绝非法格式或含凭据文本", () => {
+  const sink = vi.fn<(line: string) => void>();
+  const opId = "op_01J9Z000000000000000000000";
+  writeHttpLog(
+    { ...baseEvent, method: "POST", pathTemplate: "/api.php/v2/stories", opId },
+    sink,
+  );
+  expect(sink).toHaveBeenCalledExactlyOnceWith(
+    `{"method":"POST","pathTemplate":"/api.php/v2/stories","status":200,"durationMs":1,"opId":"${opId}"}\n`,
+  );
+
+  for (const invalid of [
+    "op_short",
+    "op_01J9Z00000000000000000000I",
+    "op_01J9Z00000000000000000000L",
+    "op_01J9Z00000000000000000000O",
+    "op_01J9Z00000000000000000000U",
+    "op_01j9z000000000000000000000",
+    "op_password00000000000000000",
+  ]) {
+    expect(() =>
+      writeHttpLog(
+        {
+          ...baseEvent,
+          method: "POST",
+          pathTemplate: "/api.php/v2/stories",
+          opId: invalid,
+        },
+        sink,
+      ),
+    ).toThrow("日志字段不合法");
+  }
+});

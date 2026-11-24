@@ -59,6 +59,7 @@ interface ReadResponse<T> {
 interface WriteRequest extends ReadRequest {
   readonly method: z.infer<typeof writeMethod>;
   readonly body?: Readonly<Record<string, unknown>>;
+  readonly allowReceiptMessage?: boolean;
 }
 
 interface PreparedRequest extends HttpLogIds {
@@ -174,6 +175,7 @@ function decodeJson<T>(
   text: string,
   schema: z.ZodType<T>,
   schemaFields?: readonly string[],
+  allowReceiptMessage = false,
 ): T {
   let payload: unknown;
   let decoded: z.ZodSafeParseResult<T> | undefined;
@@ -184,7 +186,11 @@ function decodeJson<T>(
     if (error instanceof BztError) throw error;
   }
   // 即使端点解码异常，响应中明确的业务失败仍可安全识别。
-  assertNoBusinessError(payload, decoded?.success === true);
+  assertNoBusinessError(
+    payload,
+    decoded?.success === true,
+    allowReceiptMessage,
+  );
   if (decoded?.success) return decoded.data;
   const fields = new Set<string>();
   for (const issue of decoded?.error?.issues ?? []) {
@@ -413,7 +419,15 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       const result = await send(prepared, session.token);
       if (result.kind === "success") {
         try {
-          return { status: "accepted", data: decodeJson(result.text, schema) };
+          return {
+            status: "accepted",
+            data: decodeJson(
+              result.text,
+              schema,
+              undefined,
+              request.allowReceiptMessage,
+            ),
+          };
         } catch (error) {
           if (
             error instanceof BztError &&

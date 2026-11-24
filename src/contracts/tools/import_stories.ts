@@ -41,3 +41,5 @@ export const importStoriesInputSchema = z
   .strict();
 
 export type ImportStoriesInput = z.output<typeof importStoriesInputSchema>;
+
+export { createStoryOutputSchema as importStoriesOutputSchema } from "./create_story.ts";

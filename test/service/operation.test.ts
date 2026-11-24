@@ -157,7 +157,7 @@ describe("WP-16 / OperationExecutor", () => {
         title: "需求",
         createdBy: "alice",
         product: 29,
-        since: start,
+        since: start - 60_000,
       });
       return {
         complete: true,
@@ -623,8 +623,8 @@ describe("操作边界与恢复", () => {
       matches: [
         { ...candidate, title: "其他" },
         { ...candidate, product: 30 },
-        { ...candidate, createdAt: start - 1 },
-        { ...candidate, createdAt: start + 1 },
+        { ...candidate, createdAt: start - 60_001 },
+        { ...candidate, createdAt: start + 60_001 },
       ],
     },
   ])("反查需要完整、唯一且特征匹配的结果", async (lookup) => {
@@ -756,4 +756,52 @@ it("预检途中到期也禁止发送写请求", async () => {
     executor.confirm({ opId, previewAck: true }),
   ).rejects.toMatchObject({ code: "PLAN_EXPIRED" });
   expect(gateway.write).not.toHaveBeenCalled();
+});
+
+it("SV-02 反查容忍本地毫秒截断与 ±60 秒时钟偏差，超窗保持 unknown", async () => {
+  for (const [offsetMs, expectedStatus] of [
+    [0, "confirmed"],
+    [-2_000, "confirmed"],
+    [2_000, "confirmed"],
+    [-61_000, "unknown"],
+  ] as const) {
+    let now = start + 350;
+    const localClock = () => now;
+    const localStore = openLocalStore({
+      baseUrl,
+      account: "alice",
+      dbPath: ":memory:",
+      clock: localClock,
+    });
+    cleanups.push(() => localStore.close());
+    const reverseLookup = vi.fn<OperationGateway["reverseLookup"]>(
+      async (query) => {
+        expect(query.since).toBe(start - 60_000);
+        return {
+          complete: true,
+          matches: [{ ...candidate, createdAt: start + offsetMs }],
+        };
+      },
+    );
+    const localExecutor = new OperationExecutor({
+      baseUrl,
+      store: localStore,
+      config: teamConfigSchema.parse({}),
+      clock: localClock,
+      gateway: {
+        readTarget: vi.fn<OperationGateway["readTarget"]>(),
+        write: vi
+          .fn<OperationGateway["write"]>()
+          .mockRejectedValueOnce(timeout()),
+        readback: vi
+          .fn<OperationGateway["readback"]>()
+          .mockResolvedValue({ verified: true }),
+        reverseLookup,
+      },
+    });
+    const { opId } = await localExecutor.prepare(plan(createStep));
+    now += 100;
+    const result = await localExecutor.confirm({ opId });
+    expect(result.status).toBe(expectedStatus);
+  }
 });

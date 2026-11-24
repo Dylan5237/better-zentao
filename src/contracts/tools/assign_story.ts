@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export { preparedOperationSchema as assignStoryOutputSchema } from "../operation.ts";
+
 // docs/07 §2.1、§3.9。
 export const assignStoryInputSchema = z
   .object({

@@ -48,10 +48,64 @@ export const confirmOperationSchema = z.strictObject({
   excludeSteps: z.array(seq).optional(),
 });
 
-export const getOperationSchema = z.union([
-  z.strictObject({ opId: nonempty }),
-  z.strictObject({ recent: seq.optional() }),
-]);
+export const getOperationSchema = z
+  .strictObject({ opId: nonempty.optional(), recent: seq.max(100).optional() })
+  .refine(({ opId, recent }) => opId === undefined || recent === undefined);
+
+export const preparedOperationSchema = z.strictObject({
+  ok: z.literal(true),
+  opId: z.string(),
+  kind: nonempty,
+  level: z.enum(["W0", "W1", "W2", "W3"]),
+  expiresAt: z.union([z.literal(""), z.iso.datetime()]),
+  preview: z.strictObject({
+    summary: z.string(),
+    steps: z.array(
+      z.strictObject({
+        seq,
+        action: z.string(),
+        target: z.string(),
+        fields,
+      }),
+    ),
+    affects: z.array(z.string()),
+  }),
+  warnings: z.array(z.strictObject({ code: z.string(), message: z.string() })),
+  requiresPreviewAck: z.boolean(),
+});
+
+export const operationResultSchema = z.strictObject({
+  ok: z.boolean(),
+  opId: nonempty,
+  status: z.enum(["confirmed", "partial", "unknown", "not_executed", "failed"]),
+  steps: z.array(
+    z.strictObject({
+      seq,
+      action: z.string(),
+      state: z.enum(["done", "skipped", "failed", "unknown", "pending"]),
+      zentaoId: seq.optional(),
+      url: z.url().optional(),
+      error: z.string().optional(),
+    }),
+  ),
+  created: z.array(
+    z.strictObject({
+      type: operationStepSchema.shape.type,
+      id: seq,
+      url: z.url(),
+    }),
+  ),
+  nextActions: z.array(z.string()).optional(),
+  notified: z
+    .array(
+      z.strictObject({
+        target: z.string(),
+        channel: z.literal("wecom"),
+        state: z.enum(["sent", "queued", "failed"]),
+      }),
+    )
+    .optional(),
+});
 
 export type OperationPlan = z.infer<typeof operationPlanSchema>;
 export type OperationStep = z.infer<typeof operationStepSchema>;

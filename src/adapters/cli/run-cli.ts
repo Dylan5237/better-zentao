@@ -144,7 +144,12 @@ export async function runCli(
     values.config === undefined &&
     values.product === undefined
   ) {
-    await startMcpServer();
+    await startMcpServer({
+      env: runtime.env,
+      homeDir: runtime.homeDir,
+      clock: runtime.clock,
+      logSink: runtime.stderr,
+    });
     return 0;
   }
   return invalidArgs(runtime);

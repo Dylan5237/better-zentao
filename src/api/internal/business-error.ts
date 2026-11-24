@@ -3,6 +3,7 @@ import { BztError } from "../../core/errors.ts";
 
 const failureEnvelope = z.object({
   result: z.unknown().optional(),
+  status: z.unknown().optional(),
   error: z.unknown().optional(),
   message: z.unknown().optional(),
 });
@@ -52,20 +53,31 @@ function summarizeBusinessMessage(message: unknown, error: unknown): string {
 export function assertNoBusinessError(
   payload: unknown,
   hasValidBody: boolean,
+  allowReceiptMessage = false,
 ): void {
   const envelope = failureEnvelope.safeParse(payload);
   if (!envelope.success) return;
-  const { result, message, error } = envelope.data;
+  const { result, status, message, error } = envelope.data;
+  const receiptDiagnostic = allowReceiptMessage
+    ? summarizeBusinessMessage(message, error)
+    : undefined;
   // docs/06 §2.2 合法主体可以附带结构化元数据。
+  // v2 创建的成功回执也有 message；缺少 ID 时普通提示不能证明写入失败。
   if (
     result === "fail" ||
     isNonEmptyText(error) ||
-    (result !== "success" && isNonEmptyText(message)) ||
-    (!hasValidBody && (hasBusinessError(message) || hasBusinessError(error)))
+    (!hasValidBody && hasBusinessError(error)) ||
+    (allowReceiptMessage
+      ? status === "fail" ||
+        status === "failed" ||
+        status === "error" ||
+        receiptDiagnostic !== "禅道返回业务错误。"
+      : (result !== "success" && isNonEmptyText(message)) ||
+        (!hasValidBody && hasBusinessError(message)))
   ) {
     throw new BztError(
       "ZENTAO_BUSINESS_ERROR",
-      summarizeBusinessMessage(message, error),
+      receiptDiagnostic ?? summarizeBusinessMessage(message, error),
     );
   }
 }
