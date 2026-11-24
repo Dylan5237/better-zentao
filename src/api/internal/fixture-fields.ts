@@ -5,7 +5,7 @@ function words(text: string): Set<string> {
 }
 
 export const accountFields = words(
-  "account accounts username usernames loginname actor actors assignee assignees assignedto openedby opener finishedby closedby canceledby cancelledby createdby reviewedby reviewby reviewedlist reviewers resolvedby activatedby editedby lasteditedby changedby updatedby deletedby approvedby acceptedby verifiedby feedbackbyaccount feedbackbyaccounts maintainer receiver manager owner mailto whitelist po qd rd pm",
+  "account accounts username usernames loginname actor actors assignee assignees assignedto openedby opener finishedby closedby canceledby cancelledby createdby reviewedby reviewby reviewedlist reviewer reviewers resolvedby activatedby editedby lasteditedby changedby updatedby deletedby approvedby acceptedby verifiedby feedbackbyaccount feedbackbyaccounts maintainer receiver manager owner mailto whitelist po qd rd pm",
 );
 
 export const nameFields = words(
@@ -98,6 +98,9 @@ const enumMapFields = new Map([
   ["prilist", "pri"],
 ]);
 const enumMapRoleKeys = words("po pm rd qd");
+const formEnumFields = words("source category pri stage status");
+const fixtureDate =
+  /^\d{4}-\d{2}-\d{2}(?:([ Tt])\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:?\d{2})?)?$/u;
 const formEntities = words(
   "story requirement epic task bug product project execution release",
 );
@@ -129,6 +132,50 @@ export const isIdString = (value: string): boolean => /^-?\d+$/u.test(value);
 
 export function fixtureKey(key: string): string {
   return key.toLowerCase().replace(/[^a-z\d]/gu, "");
+}
+
+export interface FixtureFieldContext {
+  readonly key: string;
+  readonly field: string;
+  readonly parentField: string;
+  readonly inRequiredFields: boolean;
+}
+
+export const rootFixtureContext: FixtureFieldContext = {
+  key: "",
+  field: "",
+  parentField: "",
+  inRequiredFields: false,
+};
+
+export function fixtureChildContext(
+  parent: FixtureFieldContext,
+  key: string,
+): FixtureFieldContext {
+  const field = fixtureKey(key);
+  return {
+    key,
+    field,
+    parentField: parent.field,
+    inRequiredFields:
+      parent.inRequiredFields || isFixtureFormDefinition(parent.field, field),
+  };
+}
+
+export function fixtureArrayItemContext(
+  context: FixtureFieldContext,
+  item: unknown,
+): FixtureFieldContext {
+  // A record inside an array is not the direct role object.
+  if (
+    context.field === "role" &&
+    item !== null &&
+    typeof item === "object" &&
+    !Array.isArray(item)
+  ) {
+    return { ...context, field: "" };
+  }
+  return context;
 }
 
 export function isSchemaFixtureKey(key: string): boolean {
@@ -175,17 +222,53 @@ export function isFixtureEnum(field: string, value: string): boolean {
   return fieldEnums.get(field)?.has(value.toLowerCase()) === true;
 }
 
-export function isFixtureEnumMap(field: string): boolean {
-  return enumMapFields.has(field);
+export function isFixtureRoleCode(
+  context: FixtureFieldContext,
+  value: string,
+): boolean {
+  return (
+    context.field === "code" &&
+    context.parentField === "role" &&
+    isFixtureEnum("role", value)
+  );
 }
 
-export function isFixtureEnumMapKey(field: string, key: string): boolean {
-  const enumField = enumMapFields.get(field);
-  if (enumField === undefined) return false;
+export type FixtureOptionMap =
+  | { readonly kind: "account" }
+  | { readonly kind: "enum"; readonly field: string; readonly nested: boolean };
+
+export function fixtureOptionMap(
+  { field, parentField }: FixtureFieldContext,
+  entries: readonly (readonly [string, unknown])[],
+): FixtureOptionMap | undefined {
+  const nested = field === "options";
+  if (nested && accountFields.has(parentField)) {
+    return { kind: "account" };
+  }
+  // A form definition under fields may consist entirely of string properties.
+  const enumField = nested
+    ? formEnumFields.has(parentField)
+      ? parentField
+      : undefined
+    : parentField === "fields"
+      ? undefined
+      : enumMapFields.get(field);
+  if (
+    enumField !== undefined &&
+    entries.every(([, label]) => typeof label === "string")
+  ) {
+    return { kind: "enum", field: enumField, nested };
+  }
+}
+
+export function isFixtureEnumMapKey(
+  map: Extract<FixtureOptionMap, { kind: "enum" }>,
+  key: string,
+): boolean {
   return (
-    enumMapRoleKeys.has(key.toLowerCase()) ||
-    isFixtureEnum(enumField, key) ||
-    (enumField === "pri" && /^[1-4]$/u.test(key))
+    (!map.nested && enumMapRoleKeys.has(key.toLowerCase())) ||
+    isFixtureEnum(map.field, key) ||
+    (map.field === "pri" && /^[1-4]$/u.test(key))
   );
 }
 
@@ -220,6 +303,21 @@ export function isFixtureModulePath(value: string): boolean {
   );
 }
 
+export function maskUnknownFixtureDate(value: string): string | undefined {
+  const parts = fixtureDate.exec(value);
+  if (parts === null) return;
+  if (value.startsWith("0000-00-00")) return value;
+  const [, separator, fraction, zone] = parts;
+  if (separator === undefined) return "2000-01-01";
+  return (
+    "2000-01-01" +
+    separator +
+    "00:00:00" +
+    (fraction?.replace(/\d/gu, "0") ?? "") +
+    (zone?.replace(/\d/gu, "0") ?? "")
+  );
+}
+
 export function preserveFixtureString(
   field: string,
   value: string,
@@ -233,9 +331,7 @@ export function preserveFixtureString(
   }
   return (
     /^[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/iu.test(value) ||
-    /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})?)?$/u.test(
-      value,
-    ) ||
+    fixtureDate.test(value) ||
     (/^(?:plan|path|ids|planids|storyids|executionids|productids)$/u.test(
       field,
     ) &&

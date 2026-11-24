@@ -1,25 +1,37 @@
 import { BztError } from "../../core/errors.ts";
 import {
   accountFields,
+  fixtureArrayItemContext,
+  fixtureChildContext,
   fixtureKey,
+  fixtureOptionMap,
   freeTextFields,
   isFixtureEndpoint,
   isFixtureEnum,
-  isFixtureEnumMap,
   isFixtureEnumMapKey,
-  isFixtureFormDefinition,
   isFixtureModuleMenu,
   isFixtureModulePath,
   isFixtureRequiredFieldList,
+  isFixtureRoleCode,
   isIdString,
   isSchemaFixtureKey,
   nameFields,
+  rootFixtureContext,
+  type FixtureFieldContext,
+  type FixtureOptionMap,
 } from "./fixture-fields.ts";
 import { FIXTURE_TEXT, fixtureTextIdentityContent } from "./fixture-text.ts";
 
 export const FIXTURE_URL = "https://fixture.example.test";
 export const FIXTURE_CLOSED_ACCOUNT = "closed";
 export const fixtureIdentityParts = /(\s*[,;、，；|]\s*)/u;
+
+export function isFixtureClosedAccountOption(
+  key: string,
+  label: unknown,
+): boolean {
+  return key === FIXTURE_CLOSED_ACCOUNT && label === "Closed";
+}
 
 const credentialField =
   /password|passwd|passphrase|pwd|zentaoaccount|token|authorization|bearer|secret|apikey|credential|cookie|zentaosid|phpsessid|sessionid|webhook|privatekey|salt/u;
@@ -172,16 +184,16 @@ function readEmbeddedJson(text: string): unknown {
   }
 }
 
-interface ScanContext {
-  field: string;
-  inRequiredFields?: boolean;
-  enumLabel?: boolean;
-  modulePath?: boolean;
+interface ScanContext extends FixtureFieldContext {
+  readonly optionLabel?: boolean;
+  readonly closedAccountOption?: boolean;
+  readonly modulePath?: boolean;
 }
 
 function identityContent(value: string, context: ScanContext): string {
   const { field } = context;
-  if (context.enumLabel) return value === FIXTURE_TEXT ? "" : value;
+  if (context.closedAccountOption) return "";
+  if (context.optionLabel) return value === FIXTURE_TEXT ? "" : value;
   if (accountFields.has(field)) {
     return value
       .split(fixtureIdentityParts)
@@ -203,6 +215,7 @@ function identityContent(value: string, context: ScanContext): string {
   }
   if (
     isFixtureEnum(field, value) ||
+    isFixtureRoleCode(context, value) ||
     (context.inRequiredFields &&
       !freeTextFields.has(field) &&
       isFixtureRequiredFieldList(value)) ||
@@ -212,6 +225,21 @@ function identityContent(value: string, context: ScanContext): string {
     return "";
   }
   return fixtureTextIdentityContent(value);
+}
+
+function isFixedKey(
+  key: string,
+  context: FixtureFieldContext,
+  optionMap: FixtureOptionMap | undefined,
+  closedAccountOption: boolean,
+): boolean {
+  if (optionMap?.kind === "account") return closedAccountOption;
+  const enumKey =
+    optionMap?.kind === "enum" && isFixtureEnumMapKey(optionMap, key);
+  if (optionMap?.kind === "enum" && optionMap.nested) return enumKey;
+  return (
+    enumKey || isSchemaFixtureKey(key) || isFixtureEnum(context.field, key)
+  );
 }
 
 // This pass reads the emitted tree independently. It never transforms a hit or reports its value.
@@ -226,7 +254,10 @@ export function assertSanitizedJson(
     .map((identity) => identity.trim().normalize("NFC"))
     .filter((identity) => identity !== "");
 
-  function scan(value: unknown, context: ScanContext = { field: "" }): void {
+  function scan(
+    value: unknown,
+    context: ScanContext = rootFixtureContext,
+  ): void {
     if (typeof value === "string") {
       checkText(
         value,
@@ -250,10 +281,11 @@ export function assertSanitizedJson(
 
     visiting.add(value);
     if (Array.isArray(value)) {
-      for (const child of value) scan(child, context);
+      for (const child of value)
+        scan(child, fixtureArrayItemContext(context, child));
     } else {
       if (!isPlainRecord(value)) throw residual();
-      for (const key of Reflect.ownKeys(value)) {
+      const entries = Reflect.ownKeys(value).map((key): [string, unknown] => {
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
         if (
           typeof key !== "string" ||
@@ -262,29 +294,32 @@ export function assertSanitizedJson(
         ) {
           throw residual();
         }
-        const child: unknown = descriptor.value;
+        return [key, descriptor.value];
+      });
+      const optionMap = fixtureOptionMap(context, entries);
+      for (const [key, child] of entries) {
         if (isSensitiveFixtureField(key, child)) throw residual();
-        const { field } = context;
-        const childField = fixtureKey(key);
+        const closedAccountOption =
+          optionMap?.kind === "account" &&
+          isFixtureClosedAccountOption(key, child);
+        if (optionMap?.kind === "account" && !closedAccountOption) {
+          if (key !== "" && !/^acct_\d{3,}$/u.test(key)) throw residual();
+          if (child !== FIXTURE_TEXT && !(key === "" && child === ""))
+            throw residual();
+        }
         checkText(
           key,
           secrets,
           identities,
-          isSchemaFixtureKey(key) ||
-            isFixtureEnum(field, key) ||
-            isFixtureEnumMapKey(field, key)
-            ? ""
-            : key,
+          isFixedKey(key, context, optionMap, closedAccountOption) ? "" : key,
         );
         scan(child, {
-          field: childField,
-          inRequiredFields:
-            context.inRequiredFields === true ||
-            isFixtureFormDefinition(field, childField),
-          enumLabel: typeof child === "string" && isFixtureEnumMap(field),
+          ...fixtureChildContext(context, key),
+          closedAccountOption,
+          optionLabel: optionMap !== undefined,
           modulePath:
             typeof child === "string" &&
-            isFixtureModuleMenu(field) &&
+            isFixtureModuleMenu(context.field) &&
             isIdString(key),
         });
       }

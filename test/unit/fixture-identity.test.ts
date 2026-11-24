@@ -263,3 +263,129 @@ describe("WP-03 P0-2 人员记录与原始 users 字典", () => {
     expect(() => assertNoSensitiveData(payload)).toThrow("S01");
   });
 });
+
+describe("WP-03 P1-2 表单人员映射", () => {
+  it("联系人、评审人和被裁剪的选项共享匿名账号，哨兵含在上限内", () => {
+    const [form, related] = createFixtureSanitizer({
+      configuredAccount: "admin",
+      listLimit: 4,
+    }).sanitizeBatch([
+      {
+        fields: {
+          reviewer: {
+            required: false,
+            options: {
+              81203: "合成数字账号",
+              "": "",
+              closed: "Closed",
+              admin: "合成管理员姓名",
+              "offline-omitted": "合成裁剪项",
+            },
+          },
+        },
+      },
+      {
+        reviewer: "admin",
+        assignedTo: "offline-omitted",
+        openedBy: "81203",
+      },
+    ]);
+
+    expect(form).toEqual({
+      fields: {
+        reviewer: {
+          required: false,
+          options: {
+            "": "",
+            closed: "Closed",
+            acct_001: "示例文本",
+            acct_002: "示例文本",
+          },
+        },
+      },
+    });
+    expect(related).toEqual({
+      reviewer: "acct_002",
+      assignedTo: "acct_003",
+      openedBy: "acct_001",
+    });
+  });
+
+  it("closed 标签不等于 Closed 时仍匿名化键并遮盖标签", () => {
+    expect(
+      createFixtureSanitizer().sanitize({
+        fields: { assignedTo: { options: { closed: "合成账号名称" } } },
+      }),
+    ).toEqual({
+      fields: { assignedTo: { options: { acct_001: "示例文本" } } },
+    });
+  });
+
+  it("被裁掉的选项显示名先登记，避免占位姓名与原姓名相同", () => {
+    const [form, person] = createFixtureSanitizer({
+      listLimit: 1,
+    }).sanitizeBatch([
+      {
+        fields: {
+          reviewer: { options: { "": "", "fixture-trimmed": "人员001" } },
+        },
+      },
+      { realname: "合成核对人" },
+    ]);
+    expect(form).toEqual({ fields: { reviewer: { options: { "": "" } } } });
+    expect(person).toEqual({ realname: "人员002" });
+  });
+
+  it("仅含数字的人员选项和像敏感字段的账号仍匿名化，普通优先级键保留", () => {
+    const raw = {
+      fields: {
+        reviewer: { options: { 12734: "合成数字账号" } },
+        assignedTo: { options: { "synthetic.email": "合成姓名" } },
+        pri: { options: { 1: "合成紧急", 4: "合成一般" } },
+      },
+      openedBy: "12734",
+    };
+    expect(createFixtureSanitizer().sanitize(raw)).toEqual({
+      fields: {
+        reviewer: { options: { acct_001: "示例文本" } },
+        assignedTo: { options: { acct_002: "示例文本" } },
+        pri: { options: { 1: "示例文本", 4: "示例文本" } },
+      },
+      openedBy: "acct_001",
+    });
+  });
+
+  it("独立复扫阻止结构同名的原始账号键，并仅认可准确的 closed 哨兵", () => {
+    const form = (options: Readonly<Record<string, string>>) => ({
+      fields: { reviewer: { options } },
+    });
+    expect(() =>
+      assertSanitizedJson(form({ admin: "示例文本" }), [], ["admin"]),
+    ).toThrow(invalidFixture);
+    expect(() =>
+      assertSanitizedJson(form({ closed: "Closed" }), [], ["closed", "Closed"]),
+    ).not.toThrow();
+    expect(() =>
+      assertSanitizedJson(form({ closed: "示例文本" }), [], ["closed"]),
+    ).toThrow(invalidFixture);
+    expect(() =>
+      assertSanitizedJson(form({ closed: "Closed" }), ["Closed"]),
+    ).toThrow(invalidFixture);
+  });
+});
+
+describe("WP-03 P2-1 角色编码复扫", () => {
+  it("允许角色编码与身份碰撞，普通 code 和同值凭据仍会被发现", () => {
+    const role = { user: { role: { code: "admin" } } };
+    expect(() => assertSanitizedJson(role, [], ["admin"])).not.toThrow();
+    expect(() => assertSanitizedJson({ code: "admin" }, [], ["admin"])).toThrow(
+      invalidFixture,
+    );
+    expect(() =>
+      assertSanitizedJson({ role: [{ code: "admin" }] }, [], ["admin"]),
+    ).toThrow(invalidFixture);
+    expect(() => assertSanitizedJson(role, ["admin"], ["admin"])).toThrow(
+      invalidFixture,
+    );
+  });
+});

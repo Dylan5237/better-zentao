@@ -131,6 +131,114 @@ describe("WP-03 夹具接口形态（06 §3、§6；09 §1.1）", () => {
     });
   });
 
+  it("P1-2 逐层保留创建表单的枚举选项和 required 类型", () => {
+    const fields = {
+      source: {
+        required: "",
+        name: "合成来源字段",
+        options: { dev: "开发来源", forum: "论坛来源", admin: "自定义选项" },
+      },
+      category: { required: true, options: { feature: "合成类型" } },
+      pri: { required: false, options: { 1: "紧急", 4: "低" } },
+      stage: { required: "1", options: { design: "合成设计", closed: "关闭" } },
+      status: { required: false, options: { active: "启用", closed: "关闭" } },
+    };
+
+    expect(createFixtureSanitizer().sanitize({ fields })).toEqual({
+      fields: {
+        source: {
+          required: "",
+          name: example,
+          options: { dev: example, forum: example, field_001: example },
+        },
+        category: { required: true, options: { feature: example } },
+        pri: { required: false, options: { 1: example, 4: example } },
+        stage: { required: "1", options: { design: example, closed: example } },
+        status: {
+          required: false,
+          options: { active: example, closed: example },
+        },
+      },
+    });
+  });
+
+  it("P1-2 只有全字符串值的扁平枚举字典统一遮盖标签", () => {
+    const raw = {
+      sourceList: {
+        active: "合成来源",
+        required: false,
+        owner: { account: "fixture-member" },
+      },
+    };
+    expect(createFixtureSanitizer().sanitize(raw)).toEqual({
+      sourceList: {
+        active: example,
+        required: false,
+        owner: { account: "acct_001" },
+      },
+    });
+  });
+
+  it("P1-3 跨层遮盖未知日期并保留日期时间型态、技术哨兵和已知业务日期", () => {
+    const raw = {
+      unpublishedDate: "2026-11-23",
+      profile: {
+        privateActivity: [
+          "2026-11-23 15:45:30.123",
+          "2026-11-23T15:45:30+08:00",
+          "2026-11-23T15:45:30.7Z",
+          "2026-11-23T15:45:30.789012-0530",
+          "2026-11-23T15:45:30-05:30",
+          "1970-01-01 00:00:00",
+        ],
+        privateBegin: [
+          "0000-00-00",
+          "0000-00-00 00:00:00",
+          "0000-00-00T00:00:00.000000-0530",
+        ],
+        reviewedDate: "2026-11-23T15:45:30.7Z",
+        title: "1970-01-01 00:00:00",
+      },
+    };
+    expect(createFixtureSanitizer().sanitize(raw)).toEqual({
+      field_001: "2000-01-01",
+      profile: {
+        field_002: [
+          "2000-01-01 00:00:00.000",
+          "2000-01-01T00:00:00+00:00",
+          "2000-01-01T00:00:00.0Z",
+          "2000-01-01T00:00:00.000000-0000",
+          "2000-01-01T00:00:00-00:00",
+          "2000-01-01 00:00:00",
+        ],
+        field_003: raw.profile.privateBegin,
+        reviewedDate: raw.profile.reviewedDate,
+        title: example,
+      },
+    });
+  });
+
+  it("P2-1 只在 role 的直接 code 层保留合法角色枚举", () => {
+    const raw = {
+      profile: {
+        role: { code: "admin", name: "合成标签", detail: { code: "admin" } },
+        code: "admin",
+      },
+      user: { role: { code: "fixture-custom-role" } },
+      row: { role: [{ code: "admin" }, "admin"] },
+    };
+    expect(
+      createFixtureSanitizer({ configuredAccount: "admin" }).sanitize(raw),
+    ).toEqual({
+      profile: {
+        role: { code: "admin", name: example, detail: { code: example } },
+        code: example,
+      },
+      user: { role: { code: example } },
+      row: { role: [{ code: example }, "admin"] },
+    });
+  });
+
   it("裁剪模块字典时保留键 0 根路径以及代表性模块路径深度", () => {
     const raw = {
       0: "/",
