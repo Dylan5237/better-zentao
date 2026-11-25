@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
-import { getStoryDetail } from "../../src/api/story.ts";
+import { getStoryDetail, getStoryDetailV2 } from "../../src/api/story.ts";
+import { requirementDetailDtoFor } from "../../src/core/dto/story.ts";
 import type { StoryDetail } from "../../src/core/dto/story.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 import { mockReadFixture } from "./read-fixture.ts";
@@ -264,4 +265,69 @@ it("Q1 等待夹具确认前拒绝推测的 v2 status/data 包装", async () => 
       Response.json({ status: "success", data: expected }),
     ),
   ).rejects.toHaveProperty("code", "ZENTAO_SCHEMA_MISMATCH");
+});
+
+it("22.6 详情 requirements 空对象占位被过滤，非空非法项仍报结构不匹配", async () => {
+  await expect(
+    readStoryDetailWithResponse(
+      Response.json({ ...expected, requirements: [{}] }),
+    ),
+  ).resolves.toMatchObject({ requirements: [] });
+
+  await expect(
+    readStoryDetailWithResponse(
+      Response.json({ ...expected, requirements: [{ foo: 1 }] }),
+    ),
+  ).rejects.toMatchObject({
+    code: "ZENTAO_SCHEMA_MISMATCH",
+    details: { fields: ["requirements"] },
+  });
+});
+
+it("22.6 v2 需求详情兼容按类型分组的 relations 字典并补齐类型", async () => {
+  const { client } = mockReadFixture("story-detail-v2", {
+    path: "/api.php/v2/story/view",
+  });
+  const detail = await getStoryDetailV2(client, 4876);
+  expect(detail.relations).toEqual([]);
+
+  const groupedPayload = {
+    story: {
+      id: 4876,
+      type: "requirement",
+      product: 29,
+      title: "用户需求",
+      status: "active",
+    },
+    relations: {
+      story: {
+        "4877": { id: 4877, title: "显式类型", type: "story" },
+        "4878": { id: 4878, title: "缺省类型" },
+      },
+    },
+  };
+  const parsedReq =
+    requirementDetailDtoFor("Asia/Shanghai").parse(groupedPayload);
+  expect(parsedReq.relations).toEqual([
+    { id: 4877, title: "显式类型", type: "story" },
+    { id: 4878, title: "缺省类型", type: "story" },
+  ]);
+
+  const { client: mockV2Client, fetch } = mockReadFixture("story-detail-v2", {
+    path: "/api.php/v2/story/view",
+  });
+  fetch.mockResolvedValueOnce(
+    Response.json({ token: "fixture-session" }, { status: 201 }),
+  );
+  fetch.mockResolvedValueOnce(
+    Response.json({
+      ...groupedPayload,
+      story: { ...groupedPayload.story, type: "story" },
+    }),
+  );
+  const v2Detail = await getStoryDetailV2(mockV2Client, 4876);
+  expect(v2Detail.relations).toEqual([
+    { id: 4877, title: "显式类型", type: "story" },
+    { id: 4878, title: "缺省类型", type: "story" },
+  ]);
 });

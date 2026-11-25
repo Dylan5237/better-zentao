@@ -5,6 +5,7 @@ import {
   hasProbeOwnership,
   readProbeExecutions,
   readProbeOwnership,
+  readProbeStoryLinks,
 } from "../../src/api/internal/probe-scope.ts";
 import { mockReadClient, readFixture } from "./read-fixture.ts";
 
@@ -272,3 +273,29 @@ it.each([
     expect(fetch).toHaveBeenCalledTimes(3);
   },
 );
+
+it("WP-30 readProbeStoryLinks 从 v2 relations.story 字典提取关联故事编号", async () => {
+  const { client } = mockReadClient((url) => {
+    expect(url.pathname).toBe("/zentao/api.php/v2/story/view");
+    expect(url.searchParams.get("storyID")).toBe("4876");
+    return Response.json({
+      story: {
+        id: 4876,
+        type: "story",
+        product: 29,
+        title: "需求A",
+        status: "draft",
+        deleted: 0,
+        linkStories: "",
+      },
+      relations: {
+        story: {
+          "4877": { id: 4877, title: "需求B" },
+        },
+      },
+    });
+  });
+  await expect(readProbeStoryLinks(client, 4876, "story")).resolves.toEqual([
+    4877,
+  ]);
+});

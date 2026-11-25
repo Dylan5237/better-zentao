@@ -294,12 +294,12 @@ export async function readProbeExecutionStories(
   return stories;
 }
 
-export async function readProbeRequirement(
+export async function readProbeRequirementDetail(
   client: ZentaoReadClient,
   id: number,
 ) {
   const { http, timezone } = getReadClient(client);
-  const { story } = await http.read(
+  const detail = await http.read(
     {
       pathTemplate: "/api.php/v2/requirement/view",
       query: { storyID: id },
@@ -307,6 +307,7 @@ export async function readProbeRequirement(
     },
     requirementDetailDtoFor(timezone),
   );
+  const { story } = detail;
   if (
     story.id !== id ||
     story.product !== PROBE_PRODUCT_ID ||
@@ -314,7 +315,14 @@ export async function readProbeRequirement(
     story.status === "closed"
   )
     throw probeDenied();
-  return story;
+  return detail;
+}
+
+export async function readProbeRequirement(
+  client: ZentaoReadClient,
+  id: number,
+) {
+  return (await readProbeRequirementDetail(client, id)).story;
 }
 
 export async function findProbeRequirement(client: ZentaoReadClient) {
@@ -343,12 +351,21 @@ export async function readProbeStoryLinks(
   id: number,
   type: "story" | "requirement",
 ) {
-  if (type === "requirement")
-    return (await readProbeRequirement(client, id)).linkStories;
-  const { story } = await getStoryDetailV2(client, id);
+  const detail =
+    type === "requirement"
+      ? await readProbeRequirementDetail(client, id)
+      : await getStoryDetailV2(client, id);
+  const { story, relations } = detail;
   if (story.id !== id || story.product !== PROBE_PRODUCT_ID || story.deleted)
     throw probeDenied();
-  return story.linkStories;
+  return [
+    ...new Set([
+      ...(story.linkStories ?? []),
+      ...relations
+        .filter((ref) => ref.type === undefined || ref.type === "story")
+        .map((ref) => ref.id),
+    ]),
+  ];
 }
 
 export async function readProbeTask(client: ZentaoReadClient, id: number) {

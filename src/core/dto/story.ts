@@ -129,6 +129,34 @@ const storyReferenceDto = z
     status: z.string().optional(),
   })
   .transform((ref) => brandDto(ref, storyReferenceBrand));
+const emptyStoryReference = z.strictObject({}).transform(() => null);
+const storyRequirements = zCollection(
+  z.union([storyReferenceDto, emptyStoryReference]),
+  true,
+).transform((items) =>
+  items.filter(
+    (item): item is z.output<typeof storyReferenceDto> => item !== null,
+  ),
+);
+const relationGroup = zCollection(storyReferenceDto, true).optional();
+const groupedRelations = z
+  .object({
+    story: relationGroup,
+    requirement: relationGroup,
+    epic: relationGroup,
+  })
+  .transform((groups) =>
+    (["story", "requirement", "epic"] as const).flatMap((groupType) =>
+      (groups[groupType] ?? []).map((item) =>
+        item.type !== undefined
+          ? item
+          : brandDto({ ...item, type: groupType }, storyReferenceBrand),
+      ),
+    ),
+  );
+const storyRelations = z
+  .union([zCollection(storyReferenceDto, true), groupedRelations])
+  .default([]);
 
 function storyDetailShape(timezone?: string) {
   return storyShape(timezone).extend({
@@ -145,7 +173,7 @@ function storyDetailV1Shape(timezone?: string) {
     tasks: zCollection(storyTaskDto, true).optional(),
     bugs: zCollection(storyBugDto, true).optional(),
     actions: zCollection(actionDtoFor(timezone), true).optional(),
-    requirements: zCollection(storyReferenceDto, true).optional(),
+    requirements: storyRequirements.optional(),
   });
 }
 
@@ -179,7 +207,7 @@ function storyDetailV2Shape<T extends "story" | "requirement">(
       }),
       actions: zCollection(actionDtoFor(timezone), true).default([]),
       bugs: zCollection(storyBugDto, true).default([]),
-      relations: zCollection(storyReferenceDto, true).default([]),
+      relations: storyRelations,
     })
     .transform(({ story: { reviewer, ...story }, ...detail }) => ({
       ...detail,
