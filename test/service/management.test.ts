@@ -598,3 +598,32 @@ it("AC-54 测试任务完成后，未关闭的严重 Bug 仍需要继续测试",
     (await service.getMonthlyDevQueue({})).data.buckets.inDev,
   ).toMatchObject([{ id: 31, progress: { value: "测试中" } }]);
 });
+
+it("WP-38 父子需求均有直属任务时，计划和发布分母只计算子需求", async () => {
+  const parentStory = { ...story, id: 34, isParent: true };
+  const childStory = { ...story, id: 31, parent: 34, isParent: false };
+  const { service } = setup({
+    stories: [parentStory, childStory],
+    tasks: [testTask, { ...testTask, id: 12, story: 34, status: "done" }],
+    bugs: [],
+  });
+  const plan = await service.getPlanProgress({
+    view: "plan",
+    product: "29",
+    plan: "22",
+  });
+  expect(plan.data).toMatchObject({
+    total: 1,
+    taskCompletionRate: { numerator: 0, denominator: 1 },
+  });
+  const release = await service.getPlanProgress({
+    view: "release",
+    product: "29",
+    version: "V7.0.3",
+  });
+  expect(release.data).toMatchObject({
+    storyIds: [31],
+    testIncompleteStoryIds: [31],
+  });
+  expect(release.hints?.join()).toContain("父需求及其直属任务不计入");
+});

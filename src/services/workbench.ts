@@ -1,6 +1,11 @@
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { createZentaoReadClient } from "../api/client.ts";
+import { getStoryDetail } from "../api/story.ts";
+import {
+  operationPlanSchema,
+  type OperationResult,
+} from "../contracts/operation.ts";
 import { getInstanceConfig } from "../api/org.ts";
 import { toolErrorMessages, toolErrorSchema } from "../contracts/error.ts";
 import type { ToolError } from "../contracts/error.ts";
@@ -10,6 +15,7 @@ import {
   findMissingEnv,
   loadConfig,
 } from "../core/config.ts";
+import { normalizeZentaoBaseUrl } from "../core/base-url.ts";
 import type { ConfigEnv } from "../core/config.ts";
 import { BztError } from "../core/errors.ts";
 import {
@@ -17,6 +23,9 @@ import {
   openLocalStore,
   sanitizeAccount,
 } from "../core/store/index.ts";
+import { DecomposeService } from "./decompose.ts";
+import { ManagementService } from "./management.ts";
+import { NotifyService } from "./notify.ts";
 import { DirectoryService } from "./directory.ts";
 import { FlowService } from "./flow.ts";
 import { IntakeService } from "./intake.ts";
@@ -88,6 +97,8 @@ async function assemble(runtime: WorkbenchRuntime | undefined) {
   const tracking = new TrackingService(common);
   const risk = new RiskService(common);
   const schedule = new ScheduleService(common);
+  const management = new ManagementService({ ...common, directory });
+  const notify = new NotifyService({ config, env, clock, store, logSink });
   const createExecutor = (instanceVersion?: string) =>
     new OperationExecutor({
       ...common,
@@ -96,6 +107,7 @@ async function assemble(runtime: WorkbenchRuntime | undefined) {
         account: store.location.account,
         instanceVersion,
         storyRoles: store.storyRoles,
+        readStepId: (opId, seq) => store.operationSteps.get(opId, seq).zentaoId,
       }),
       channel: "mcp",
       instanceVersion,
@@ -112,8 +124,94 @@ async function assemble(runtime: WorkbenchRuntime | undefined) {
     return { ...common, directory, executor, instanceVersion };
   }
 
+  const flow = async () =>
+    new FlowService({
+      ...(await forWrite()),
+      storyRoles: store.storyRoles,
+    });
+
+  async function notifyConfirmed(result: OperationResult) {
+    const { kind, planJson } = store.operations.get(result.opId);
+    const event = new Map([
+      ["assign_story", "assign_other"],
+      ["decompose_stories", "decompose"],
+      ["handoff_story", "handoff"],
+    ]).get(kind);
+    if (!event || !["confirmed", "partial"].includes(result.status)) return;
+    const { plan } = z
+      .object({ plan: operationPlanSchema })
+      .parse(JSON.parse(planJson));
+    const isDesignHandoff =
+      event === "handoff" &&
+      plan.steps.some(({ action }) => action === "story.create");
+    if (isDesignHandoff && result.status === "confirmed") {
+      result.nextActions = [
+        ...(result.nextActions ?? []),
+        ...(plan.warnings ?? [])
+          .filter(({ code }) => code === "MANUAL_DESIGN_CLOSE")
+          .map(({ message }) => message),
+      ];
+    }
+
+    const receipts: NonNullable<OperationResult["notified"]> = [];
+    for (const row of result.steps) {
+      const step = plan.steps[row.seq - 1];
+      if (
+        !step ||
+        row.state !== "done" ||
+        row.zentaoId === undefined ||
+        step.fields.notify?.value !== true
+      )
+        continue;
+      const account = step.fields.assignedTo?.value;
+      const type = step.type;
+      if (
+        typeof account !== "string" ||
+        (type !== "story" && type !== "task") ||
+        (event === "assign_other" && account === store.location.account)
+      )
+        continue;
+      if (
+        !env.BZT_WECOM_WEBHOOK?.trim() ||
+        !config.notify.events.some((kind) => kind === event)
+      )
+        continue;
+      try {
+        const name =
+          plan.affects
+            ?.find((person) => person.startsWith(account + " "))
+            ?.slice(account.length + 1) ?? account;
+        const title =
+          type === "task"
+            ? step.fields.name?.value
+            : (await getStoryDetail(client, row.zentaoId)).title;
+        const outcome = await notify.notifyEvent({
+          event,
+          type,
+          id: row.zentaoId,
+          title,
+          status: type === "task" ? "已拆解" : "已指派",
+          deadline: step.fields.deadline?.value,
+          targets: [{ account, realname: name }],
+        });
+        receipts.push(...outcome.notified);
+      } catch {
+        receipts.push({ target: account, channel: "wecom", state: "failed" });
+      }
+    }
+    result.notified = receipts;
+  }
+
   return {
     directory,
+    management,
+    async decomposeStories(input: unknown) {
+      return new DecomposeService({
+        ...(await forWrite()),
+        stageRequirements: store.stageRequirements,
+        storyRoles: store.storyRoles,
+      }).decomposeStories(input);
+    },
     tracking,
     risk,
     schedule,
@@ -126,15 +224,29 @@ async function assemble(runtime: WorkbenchRuntime | undefined) {
       return new IntakeService(await forWrite()).importStories(input);
     },
     async assignStory(input: unknown) {
-      return new FlowService({
-        ...(await forWrite()),
-        storyRoles: store.storyRoles,
-      }).assignStory(input);
+      return (await flow()).assignStory(input);
+    },
+    async handoffStory(input: unknown) {
+      return (await flow()).handoffStory(input);
+    },
+    async rescheduleStory(input: unknown) {
+      return (await flow()).rescheduleStory(input);
+    },
+    async closeStories(input: unknown) {
+      return (await flow()).closeStories(input);
+    },
+    async setStoryMeta(input: unknown) {
+      return (await flow()).setStoryMeta(input);
     },
     async confirmOperation(input: ConfirmOperation) {
       const options = await forWrite();
       const result = await options.executor.confirm(input);
       new IntakeService(options).recordConfirmed(result.opId, result);
+      new FlowService({
+        ...options,
+        storyRoles: store.storyRoles,
+      }).recordConfirmed(result.opId, result);
+      await notifyConfirmed(result);
       return result;
     },
     getOperation(input: GetOperation) {
@@ -193,6 +305,12 @@ const detailSchema = z.object({
   missing: z.array(z.string()).optional(),
   candidates: z.array(candidateSchema).optional(),
   capability: z.string().optional(),
+  manual: z
+    .object({
+      kind: z.enum(["subtasks", "story_spec"]),
+      id: z.int().positive(),
+    })
+    .optional(),
 });
 const publicBusinessSentence =
   /^(?:(?:需求)?标题(?:已存在|不能为空|过长)|(?:该)?需求不存在|缺少必填(?:字段|项)|参数不合法|没有(?:创建|查看)需求的权限)$/u;
@@ -249,6 +367,32 @@ export function projectToolError(
             ),
       );
   }
+  const manual = parsed?.manual;
+  const root = normalizeZentaoBaseUrl(env.ZENTAO_BASE_URL ?? "");
+  let guidance: string | undefined;
+  if (
+    manual &&
+    root &&
+    (code === "CAPABILITY_UNVERIFIED" || code === "CAPABILITY_DISABLED")
+  ) {
+    const isTask = manual.kind === "subtasks";
+    const label = isTask ? "在禅道打开父任务" : "在禅道编辑需求正文";
+    const url = new URL(
+      isTask ? "index.php" : "story-edit-" + manual.id + ".html",
+      root,
+    );
+    if (isTask) {
+      url.searchParams.set("m", "task");
+      url.searchParams.set("f", "view");
+      url.searchParams.set("taskID", String(manual.id));
+    }
+    if (!secrets.some((secret) => secret && url.href.includes(secret))) {
+      details.links = [{ label, url: url.href }];
+      guidance = isTask
+        ? "L4 子任务创建尚未验证，请在禅道父任务中手工创建。"
+        : "禅道 22.6 正文编辑尚未验证，请在禅道手工编辑。";
+    }
+  }
   const diagnostic =
     code === "ZENTAO_BUSINESS_ERROR" &&
     error instanceof BztError &&
@@ -258,7 +402,7 @@ export function projectToolError(
   return toolErrorSchema.parse({
     ok: false,
     code,
-    message: diagnostic ?? toolErrorMessages[code],
+    message: guidance ?? diagnostic ?? toolErrorMessages[code],
     ...(Object.keys(details).length ? { details } : {}),
     retryable: code === "ZENTAO_UNAVAILABLE" || code === "ZENTAO_TIMEOUT",
   });

@@ -83,6 +83,14 @@ it.each([
   ).toBe(true);
 });
 
+it.each(["config-ui", "snapshot", "digest", "schedule-task"])(
+  "WP-38 编译后的帮助列出 %s",
+  (command) => {
+    const result = run(["--help"]);
+    expect(result.stdout).toContain("bzt " + command);
+  },
+);
+
 it("WP-21 编译入口拒绝同时传入两种 Agent 参数", () => {
   expect(run(["install-agent", "codex", "--agent", "gemini"]).status).toBe(2);
 });
@@ -350,3 +358,34 @@ it("WP-00 离线 MCP initialize 的 stdout 只有一条 JSON-RPC 响应", () => 
     },
   });
 });
+
+it("WP-38 编译后配置页、摘要、默认快照与任务计划均走各自入口", () => {
+  const team = join(homeDir, "team.json");
+  const env = { BZT_HOME: homeDir, ZENTAO_ACCOUNT: "collector" };
+  writeFileSync(
+    team,
+    JSON.stringify({
+      notify: { digest: { collector: "collector" } },
+      snapshot: { collector: "snapshot-collector", day: 3 },
+    }),
+  );
+  expect(run(["config-ui", "--config", team], undefined, env).status).toBe(0);
+  expect(existsSync(join(homeDir, "team-config-editor.html"))).toBe(true);
+  expect(
+    run(["digest", "--config", team, "--force"], undefined, env).status,
+  ).toBe(0);
+  expect(run(["snapshot", "--config", team], undefined, env).status).toBe(1);
+  const task = run(
+    ["schedule-task", "install", "snapshot", "--dry-run", "--config", team],
+    undefined,
+    { ...env, ZENTAO_ACCOUNT: "snapshot-collector" },
+  );
+  expect(task.status, task.stderr).toBe(0);
+  expect(task.stdout).toContain("bzt snapshot capture");
+  expect(task.stdout).toContain("<Day>3</Day>");
+  expect(existsSync(join(homeDir, "scheduler"))).toBe(false);
+  for (const cmd of ["config-ui", "snapshot", "digest", "schedule-task"])
+    expect(run([cmd, "--" + syntheticCredential], undefined, env).status).toBe(
+      2,
+    );
+}, 20_000);

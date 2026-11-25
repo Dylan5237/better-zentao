@@ -449,3 +449,22 @@ describe("WP-03 离线测试采集命令", () => {
     ]);
   });
 });
+
+it.each([
+  ["config-ui", "--product", "29"],
+  ["snapshot", "import", "--in", "--config"],
+  ["digest", "--dry-run", "--dry-run"],
+  ["schedule-task", "status", "snapshot", "--dry-run"],
+])("WP-38 %s 拒绝非法选项且不回显参数", async (...args) => {
+  const runtime = localRuntime();
+  await expect(
+    runCli([...args, "--synthetic-password-value"], runtime),
+  ).resolves.toBe(2);
+  expect(runtime.stdout).not.toHaveBeenCalled();
+  expect(runtime.stderr).toHaveBeenCalledWith(
+    expect.stringContaining("参数不合法"),
+  );
+  expect(JSON.stringify(runtime.stderr.mock.calls)).not.toContain(
+    "synthetic-password-value",
+  );
+});

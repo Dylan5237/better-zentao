@@ -34,7 +34,11 @@ import { walkProductPlans, type ProductPlan } from "../core/dto/plan.ts";
 import type { Story, StoryDetail } from "../core/dto/story.ts";
 import type { Task } from "../core/dto/task.ts";
 import { BztError } from "../core/errors.ts";
-import type { LocalStore, SnapshotWithItems } from "../core/store/index.ts";
+import type {
+  LocalStore,
+  SnapshotWithItems,
+  WaiverRecord,
+} from "../core/store/index.ts";
 import {
   isDevExecutionInMonth,
   isInLastWorkdaysOfMonth,
@@ -80,7 +84,8 @@ interface ManagementOptions {
     >
   >;
   calendar?: WorkCalendar;
-  directory?: Pick<DirectoryService, "resolveTeam">;
+  directory?: Pick<DirectoryService, "resolveTeam"> &
+    Partial<Pick<DirectoryService, "lookupAccounts">>;
 }
 
 type PlanData = GetPlanProgressOutput["data"];
@@ -248,6 +253,7 @@ class ManagementRead {
     number,
     Promise<{ items: Bug[]; truncated: boolean } | undefined>
   >();
+  private readonly people = new Map<string, string>();
   private readonly productsById = new Map<number, ProductScope>();
 
   constructor(readonly options: ManagementOptions) {
@@ -553,10 +559,36 @@ class ManagementRead {
     return url.href;
   }
 
+  async loadPeople(evidence: readonly StoryEvidence[]) {
+    const directory = this.options.directory;
+    if (!directory?.lookupAccounts) return;
+    const accounts = new Set(
+      evidence.flatMap(({ owner, roles }) =>
+        [owner, roles.maintainer, roles.receiver].filter(
+          (account): account is string => Boolean(account),
+        ),
+      ),
+    );
+    if (!accounts.size) return;
+    const result = await this.read("users", () =>
+      directory.lookupAccounts?.([...accounts]),
+    );
+    for (const { source, reason } of result?.gaps ?? [])
+      this.gap(source, reason);
+    for (const [account, realname] of result?.people ?? [])
+      this.people.set(account, realname);
+  }
+
   storyItem(evidence: StoryEvidence, plan?: ProductPlan): StoryItem {
     const { row, owner, progress, roles } = evidence;
     const person = (account: string | null): StoryItem["currentOwner"] =>
-      account ? { account, realname: account, untrusted: true } : undefined;
+      account
+        ? {
+            account,
+            realname: bounded(this.people.get(account) ?? ""),
+            untrusted: true,
+          }
+        : undefined;
     return {
       id: row.id,
       title: bounded(row.title),
@@ -913,6 +945,19 @@ async function monthlyPool(
   };
 }
 
+function leafStories(evidence: readonly StoryEvidence[]) {
+  const parents = new Set(
+    evidence.flatMap(({ row, detail }) => [row.parent, detail?.parent]),
+  );
+  return evidence.filter(
+    ({ row, detail }) =>
+      !parents.has(row.id) &&
+      !row.isParent &&
+      !detail?.isParent &&
+      !detail?.children?.length,
+  );
+}
+
 function normalizePlanStory(
   evidence: StoryEvidence,
   planKind?: PlanStory["planKind"],
@@ -939,18 +984,34 @@ async function releaseWaivers(
     `waivers:${story.row.id}`,
     () => store?.waivers?.listByObject("story", String(story.row.id)) ?? [],
   );
+  return resolveReleaseWaiver(
+    config,
+    story.row,
+    story.actions,
+    waivers ?? [],
+    version,
+  );
+}
+
+export function resolveReleaseWaiver(
+  config: Pick<TeamConfig, "versionTag" | "roles">,
+  row: Pick<StoryRow, "id" | "keywords" | "lastEditedDate">,
+  actions: NonNullable<StoryDetail["actions"]>,
+  waivers: readonly WaiverRecord[],
+  version: string,
+) {
   const prefix = config.versionTag.keywordPrefix;
   const versionTags =
-    story.row.keywords
+    row.keywords
       ?.split(/[\s,，、;；]+/u)
       .filter((tag) => tag.startsWith(prefix)) ?? [];
   const belongsToCurrentVersion = (at: number | null) =>
     versionTags.length === 1 &&
     versionTags[0] === `${prefix}${version}` &&
     at != null &&
-    story.row.lastEditedDate != null &&
-    at >= story.row.lastEditedDate;
-  const shared = story.actions
+    row.lastEditedDate != null &&
+    at >= row.lastEditedDate;
+  const shared = actions
     .flatMap(({ actor, action, comment, date }) => {
       if (
         !actor ||
@@ -976,7 +1037,7 @@ async function releaseWaivers(
     })
     .at(-1);
   // 本地表没有版本列。当前唯一标签与编辑时间必须同时支持例外归属。
-  const local = (waivers ?? []).find(
+  const local = waivers.find(
     ({ ruleId, approvedBy, reason, at }) =>
       ruleId === "R13" &&
       config.roles.PM?.includes(approvedBy) &&
@@ -987,7 +1048,7 @@ async function releaseWaivers(
   return waiver
     ? [
         {
-          storyId: story.row.id,
+          storyId: row.id,
           version,
           approvedBy: waiver.approvedBy,
           reason: bounded(waiver.reason, 500),
@@ -1082,13 +1143,12 @@ export class ManagementService {
       state.inferences.push({
         field: "storyDeliveryRate",
         level: "inferred",
-        basis:
-          "计划列表投影不含需求父子标记，已补读详情可识别父级需求，其余以计划列表为准。",
+        basis: "需求详情读取不完整，按计划列表中的父子标记排除父需求。",
       });
     return {
       view: "plan",
       ...summarizePlan(
-        evidence.map((item) => normalizePlanStory(item, "l3")),
+        leafStories(evidence).map((item) => normalizePlanStory(item, "l3")),
         state.asOf,
         groupBy,
       ),
@@ -1191,14 +1251,19 @@ export class ManagementService {
         const known = grouped.get(row.id) ?? [];
         const test = summarizeStages(stageInputs(known, config)).stages.test;
         return storyEvidence(state, row, known, complete, {
-          detail: test?.status !== "completed" || storyBugs.some(isSerious),
+          detail:
+            row.isParent !== false ||
+            test?.status !== "completed" ||
+            storyBugs.some(isSerious),
           bugs: storyBugs,
         });
       }),
     );
+    const releaseLeaves = leafStories(evidence);
+    state.hints.push("发布门禁按叶子需求计算，父需求及其直属任务不计入。");
     const waivers = (
       await Promise.all(
-        evidence
+        releaseLeaves
           .filter(({ progress }) => progress !== "已取消")
           .map((item) => releaseWaivers(state, item, version)),
       )
@@ -1207,21 +1272,19 @@ export class ManagementService {
       product: product?.id ?? 0,
       version,
       keywordPrefix: prefix,
-      stories: evidence
-        .filter(({ detail }) => !detail?.children?.length)
-        .map((item) => {
-          const original = selected.find(({ id }) => id === item.row.id);
-          return {
-            ...item.row,
-            plan: original?.plan,
-            keywords: original?.keywords,
-            tasks: item.progress === "已取消" ? [] : item.tasks,
-            progress: item.progress,
-            tasksComplete: item.tasksComplete,
-            stages: item.stages,
-            bugs: related.get(item.row.id) ?? [],
-          };
-        }),
+      stories: releaseLeaves.map((item) => {
+        const original = selected.find(({ id }) => id === item.row.id);
+        return {
+          ...item.row,
+          plan: original?.plan,
+          keywords: original?.keywords,
+          tasks: item.progress === "已取消" ? [] : item.tasks,
+          progress: item.progress,
+          tasksComplete: item.tasksComplete,
+          stages: item.stages,
+          bugs: related.get(item.row.id) ?? [],
+        };
+      }),
       legacyPlans: legacyPlans.map(({ id, end, product }) => ({
         id,
         end,
@@ -1502,9 +1565,8 @@ export class ManagementService {
       string | null,
       IterationData["complianceByOwner"][number]["counts"]
     >();
-    for (const item of evidence) {
+    for (const item of leafStories(evidence)) {
       const { row, actions, tasksComplete, progress } = item;
-      if (item.detail?.children?.length) continue;
       const linked = (grouped.get(row.id) ?? []).filter((task) =>
         leafIds.has(task.id),
       );
@@ -1561,7 +1623,26 @@ export class ManagementService {
       const planComplete = !state.gaps.some(
         ({ source }) => source === `plans:${row.product}`,
       );
+      const waivers = await state.read(
+        "waivers:" + row.id,
+        () =>
+          this.options.store?.waivers?.listByObject("story", String(row.id)) ??
+          [],
+      );
       const ruleInput: RuleInput = {
+        waivers: (waivers ?? []).flatMap(({ ruleId, approvedBy, reason }) =>
+          ruleId === "R05" || ruleId === "R06"
+            ? [
+                {
+                  ruleId,
+                  by: approvedBy,
+                  reason,
+                  objectType: "story",
+                  objectId: row.id,
+                },
+              ]
+            : [],
+        ),
         story: item.detail,
         tasksComplete,
         required: item.required,
@@ -1637,6 +1718,7 @@ export class ManagementService {
     const byStory = new Map(evidence.map((item) => [item.row.id, item]));
     const groups: IterationData["crossProduct"] = [];
     const seen = new Set<string>();
+    await state.loadPeople(evidence);
     const project = (item: StoryEvidence) => ({
       ...state.storyItem(item),
       stages: Object.entries(item.stages).map(([stage, { status }]) => ({
@@ -1687,6 +1769,7 @@ export class ManagementService {
               detail: true,
             });
             byStory.set(id, peer);
+            await state.loadPeople([peer]);
           }
         }
         if (!peer || peer.row.product === row.product) continue;
@@ -1840,17 +1923,20 @@ export class ManagementService {
       }),
     );
     const teamFilter = teamIds.length > 0;
-    const items = scoped.filter(({ row, owner, roles, tasks, detail }) => {
-      if (detail?.children?.length) return false;
-      if (!teamFilter) return true;
-      const module = config.modules[`${row.product}/${row.module}`];
-      if (module?.team) return teamIds.includes(module.team);
-      return [
-        owner,
-        roles.receiver,
-        ...tasks.map(({ assignedTo }) => assignedTo),
-      ].some((account) => account != null && accounts.has(account));
-    });
+    const items = leafStories(scoped).filter(
+      ({ row, owner, roles, tasks, detail }) => {
+        if (detail?.children?.length) return false;
+        if (!teamFilter) return true;
+        const module = config.modules[`${row.product}/${row.module}`];
+        if (module?.team) return teamIds.includes(module.team);
+        return [
+          owner,
+          roles.receiver,
+          ...tasks.map(({ assignedTo }) => assignedTo),
+        ].some((account) => account != null && accounts.has(account));
+      },
+    );
+    await state.loadPeople(items);
     const byId = new Map(items.map((item) => [item.row.id, item]));
     const previousIds = [...snapshotIds, ...(historyIds ?? [])].filter(
       (id) => byId.has(id) || !rows.has(id),
@@ -1933,7 +2019,7 @@ export class ManagementService {
             ? fallbackProducts.length > 0
               ? "mixed"
               : "snapshot"
-            : historyIds
+            : historyIds?.length
               ? "history"
               : null,
       },

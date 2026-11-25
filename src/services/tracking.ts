@@ -1383,7 +1383,9 @@ async function storyEvidence(
         R03: { after: threshold(config.rules.R03.after, 3) },
       },
       disabledRules: new Set(
-        rules.filter(({ id }) => !config.rules[id].enabled).map(({ id }) => id),
+        rules
+          .filter(({ id }) => id > "R05" || !config.rules[id].enabled)
+          .map(({ id }) => id),
       ),
     },
   );

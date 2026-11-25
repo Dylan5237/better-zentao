@@ -48,6 +48,19 @@ function storySummaryShape(timezone?: string) {
     title: z.string(),
     status: z.string(),
     module: zNullableId.optional(),
+    parent: z
+      .union([
+        zNullableId,
+        z.literal(-1),
+        z.literal("-1"),
+        z.tuple([]),
+        z.tuple([zId]).transform(([parent]) => parent),
+      ])
+      .transform((parent) =>
+        typeof parent === "number" && parent > 0 ? parent : null,
+      )
+      .optional(),
+    isParent: zBool.optional(),
     moduleTitle: nullableText.optional(),
     plan: idList.optional(),
     category: nullableText.optional(),

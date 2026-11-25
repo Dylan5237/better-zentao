@@ -39,7 +39,7 @@ export async function runSnapshotSchedulerCli(
   const names = parsed.tokens.flatMap((token) =>
     token.kind === "option" ? [token.name] : [],
   );
-  if (parsed.positionals.length !== 1 || names.length !== new Set(names).size)
+  if (parsed.positionals.length > 1 || names.length !== new Set(names).size)
     return invalidArgs;
 
   const {
@@ -52,7 +52,7 @@ export async function runSnapshotSchedulerCli(
   } = parsed.values;
   if (product !== undefined && !/^[1-9]\d*$/u.test(product)) return invalidArgs;
   const command = snapshotCommandSchema.safeParse({
-    action: parsed.positionals[0],
+    action: parsed.positionals[0] ?? "capture",
     ...(month === undefined ? {} : { month }),
     ...(product === undefined ? {} : { product: Number(product) }),
     ...(out === undefined ? {} : { out }),

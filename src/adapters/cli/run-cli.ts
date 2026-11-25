@@ -1,4 +1,9 @@
 import { parseArgs } from "node:util";
+import { runConfigEditor } from "../../services/config-ui.ts";
+import { runSnapshotSchedulerCli } from "../scheduler/snapshot.ts";
+import { runScheduleTaskCommand } from "../scheduler/schedule-task.ts";
+import { runDigestCommand } from "../scheduler/digest.ts";
+import { renderTeamConfigEditorHtml } from "./render/config-editor-html.ts";
 import { runDeleteStory } from "../../services/delete-story.ts";
 import { getDoctorStatus } from "../../services/doctor.ts";
 import { installAgent } from "../../services/install-agent.ts";
@@ -25,6 +30,10 @@ const help = `用法
   bzt delete --story ID [--confirm] [--config 路径]    预览研发需求，添加 --confirm 删除并回读
   bzt install-agent <codex|claude|gemini> [--config 路径] [--project 目录] [--dry-run]
       也接受 --agent <codex|claude|gemini>，--project 仅用于 Claude Code
+  bzt config-ui [--config 路径] [--out HTML路径]    生成配置编辑页
+  bzt snapshot [capture|export|import] [选项]    采集或交换月初快照
+  bzt digest [--config 路径] [--force] [--dry-run]    生成每日摘要
+  bzt schedule-task <install|status|uninstall> <digest|snapshot> [--config 路径] [--dry-run]
   bzt mcp       启动 stdio 服务
 `;
 
@@ -37,6 +46,21 @@ export async function runCli(
   args: string[],
   runtime: CliRuntime,
 ): Promise<number> {
+  const [first, ...rest] = args;
+  if (!rest.includes("--help") && !rest.includes("-h")) {
+    if (first === "digest") return runDigestCommand(rest, runtime);
+    if (first === "schedule-task") return runScheduleTaskCommand(rest, runtime);
+    if (first === "snapshot") {
+      const result = await runSnapshotSchedulerCli(rest, runtime);
+      if ("output" in result)
+        runtime.stdout(JSON.stringify(result.output) + "\n");
+      else runtime.stderr(result.message + "\n");
+      return result.exitCode;
+    }
+  } else if (["digest", "schedule-task", "snapshot"].includes(first ?? "")) {
+    runtime.stdout(help);
+    return 0;
+  }
   let parsed;
   try {
     parsed = parseArgs({
@@ -72,17 +96,18 @@ export async function runCli(
   const probe = capture || write || cleanup;
   const install = command === "install-agent";
   const remove = command === "delete";
+  const configUi = command === "config-ui";
   if (
     positionals.length > (write ? 3 : probe || install ? 2 : 1) ||
     (!probe && command === "probe") ||
-    (!capture && !write && values.out !== undefined) ||
+    (!capture && !write && !configUi && values.out !== undefined) ||
     (!write &&
       (values.assignee !== undefined ||
         values.all !== undefined ||
         values["visible-tag"] !== undefined)) ||
     (!cleanup && !remove && values.story !== undefined) ||
     (!remove && values.confirm !== undefined) ||
-    (remove && values.product !== undefined) ||
+    ((remove || configUi) && values.product !== undefined) ||
     (command !== "doctor" && values.live !== undefined) ||
     (!install &&
       (values.agent !== undefined ||
@@ -94,7 +119,7 @@ export async function runCli(
   ) {
     return invalidArgs(runtime);
   }
-  if (write || cleanup || install || remove) {
+  if (write || cleanup || install || remove || configUi) {
     const names = tokens.flatMap((token) =>
       token.kind === "option" ? [token.name] : [],
     );
@@ -103,6 +128,24 @@ export async function runCli(
   if (values.help || args.length === 0) {
     runtime.stdout(help);
     return 0;
+  }
+
+  if (configUi) {
+    if (values.out?.trim() === "" || values.config?.trim() === "")
+      return invalidArgs(runtime);
+    try {
+      const { completeness, gaps } = await runConfigEditor({
+        ...runtime,
+        config: values.config,
+        out: values.out,
+        render: renderTeamConfigEditorHtml,
+      });
+      runtime.stdout(JSON.stringify({ ok: true, completeness, gaps }) + "\n");
+      return 0;
+    } catch {
+      runtime.stderr("无法生成配置编辑页，请检查配置与输出路径。\n");
+      return 1;
+    }
   }
 
   if (remove) {

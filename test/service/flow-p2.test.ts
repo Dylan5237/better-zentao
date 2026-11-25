@@ -66,19 +66,26 @@ function setup(
     pm?: boolean;
     onlyOrphan?: boolean;
     taskListTruncated?: boolean;
+    rollover?: boolean;
+    localAccount?: string;
+    disabledCapabilities?: string[];
   } = {},
 ) {
-  let now = Date.UTC(2026, 10, 25);
+  let now = Date.UTC(2026, options.rollover ? 11 : 10, 25);
   const clock = () => now;
   const config = teamConfigSchema.parse({
     roles: { RM: ["bob"], PM: options.pm ? ["alice"] : [] },
     products: { 29: { name: "产品", state: "runtime" } },
     modules: { "29:3": { name: "模块", designLead: "alice", devLead: "bob" } },
-    write: { disableCapabilities: options.disabled ? ["story.activate"] : [] },
+    write: {
+      disableCapabilities:
+        options.disabledCapabilities ??
+        (options.disabled ? ["story.activate"] : []),
+    },
   });
   const store = openLocalStore({
     baseUrl,
-    account: "alice",
+    account: options.localAccount ?? "alice",
     dbPath: ":memory:",
     clock,
   });
@@ -130,16 +137,18 @@ function setup(
               id: 20,
               parent: 10,
               title: "原计划",
-              begin: "2026-11-01",
-              end: "2026-11-30",
+              begin: options.rollover ? "2026-12-01" : "2026-11-01",
+              end: options.rollover ? "2026-12-31" : "2026-11-30",
             },
             {
               ...plan,
               id: 21,
               parent: 10,
-              title: "【alice】模块-2026年12月",
-              begin: "2026-12-01",
-              end: "2026-12-31",
+              title: options.rollover
+                ? "【alice】模块-2027年01月"
+                : "【alice】模块-2026年12月",
+              begin: options.rollover ? "2027-01-01" : "2026-12-01",
+              end: options.rollover ? "2027-01-31" : "2026-12-31",
             },
           ],
           total: 2,
@@ -189,6 +198,9 @@ function setup(
   const write = vi.fn<OperationGateway["write"]>(async ({ id }) => ({
     id: id ?? 99,
   }));
+  const readback = vi.fn<OperationGateway["readback"]>(async () => ({
+    verified: true,
+  }));
   const executor = new OperationExecutor({
     store,
     clock,
@@ -202,7 +214,7 @@ function setup(
         status,
         maintainer: "alice",
       }),
-      readback: async () => ({ verified: true }),
+      readback,
       reverseLookup: async () => ({ complete: true, matches: [] }),
     },
   });
@@ -224,7 +236,7 @@ function setup(
     service.recordConfirmed(opId, result);
     return result;
   };
-  return { service, confirm, store, write, executor };
+  return { service, confirm, store, write, executor, readback };
 }
 
 it("AC-47 从设计需求移交，保留范围和章节并提醒人工完成传递", async () => {
@@ -542,4 +554,61 @@ it("扩展需求写入配方并投影互链回执", async () => {
     ["POST", "/zentao/api.php/v1/stories/9/close", { closedReason: "done" }],
     ["POST", "/zentao/api.php/v2/story/linkStory?storyID=9", { stories: [10] }],
   ]);
+});
+
+it.each([{ version: "22.7" }, { disabledCapabilities: ["story.linkStory"] }])(
+  "WP-38 设计移交必需能力不可用时保留人工链接",
+  async (options) => {
+    const { service, write } = setup({ ...options, design: true });
+    const prepared = await service.handoffStory({
+      storyId: 9,
+      mode: "from_design",
+    });
+    expect(prepared).toMatchObject({
+      level: "W0",
+      opId: "",
+      preview: { steps: [] },
+    });
+    expect(prepared.warnings.map(({ message }) => message).join()).toMatch(
+      /task-view-12\.html.*story-view-9\.html/u,
+    );
+    expect(write).not.toHaveBeenCalled();
+  },
+);
+
+it("WP-38 下月挪期跨年并且另一个账号读取不到记录", async () => {
+  const { service, store, confirm, executor } = setup({ rollover: true });
+  const { opId } = await service.rescheduleStory({
+    storyIds: [9],
+    toMonth: "下月",
+    reason: "跨年排期",
+  });
+  const pending = executor.getOperation({ opId });
+  expect(pending.status).toBe("not_executed");
+  service.recordConfirmed(opId, pending);
+  expect(store.reschedules.listByStory(9)).toEqual([]);
+  const result = await confirm(opId);
+  expect(result.status).toBe("confirmed");
+  expect(store.reschedules.listByStory(9)[0]).toMatchObject({
+    fromMonth: "2026-12",
+    toMonth: "2027-01",
+  });
+  const other = setup({ localAccount: "bob" });
+  expect(() => other.service.recordConfirmed(opId, result)).toThrow(
+    expect.objectContaining({ code: "NOT_FOUND" }),
+  );
+  expect(other.store.reschedules.listByStory(9)).toEqual([]);
+});
+
+it("WP-38 未确认阶段备注不写本地阶段要求", async () => {
+  const { service, confirm, store, readback } = setup();
+  const { opId } = await service.setStoryMeta({
+    storyId: 9,
+    stageRequirements: {
+      test: { required: false, reason: "仅文案" },
+    },
+  });
+  readback.mockResolvedValue({ verified: false });
+  expect((await confirm(opId)).status).toBe("unknown");
+  expect(store.stageRequirements.listByStory(9)).toEqual([]);
 });

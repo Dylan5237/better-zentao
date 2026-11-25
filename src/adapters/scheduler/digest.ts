@@ -13,10 +13,11 @@ export async function runDigestCommand(
   runtime: DigestRuntime,
 ): Promise<number> {
   let force = false;
+  let dryRun = false;
   let config: string | undefined;
   const invalid = () => {
     runtime.stderr(
-      "参数不合法。用法为 bzt digest [--force] [--config 路径]。\n",
+      "参数不合法。用法为 bzt digest [--force] [--dry-run] [--config 路径]。\n",
     );
     return 2;
   };
@@ -24,6 +25,8 @@ export async function runDigestCommand(
     const arg = args[i];
     if (arg === "--force" && !force) {
       force = true;
+    } else if (arg === "--dry-run" && !dryRun) {
+      dryRun = true;
     } else if (arg === "--config" && config === undefined) {
       const value = args[++i];
       if (!value?.trim() || value.startsWith("--")) return invalid();
@@ -33,7 +36,7 @@ export async function runDigestCommand(
   try {
     const result = await runDailyDigest(
       { ...runtime, logSink: runtime.stderr },
-      { config, force },
+      { config, force, dryRun },
     );
     runtime.stdout(JSON.stringify(result) + "\n");
     return result.completeness === "partial" ||

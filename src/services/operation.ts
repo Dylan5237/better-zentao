@@ -60,6 +60,7 @@ interface ReverseQuery {
   type: OperationStep["type"];
   product: number;
   title: string;
+  execution?: number;
   createdBy: string;
   since: number;
   until: number;
@@ -838,6 +839,9 @@ export class OperationExecutor {
           type: step.type,
           product: step.product,
           title,
+          ...(typeof step.fields.execution?.value === "number"
+            ? { execution: step.fields.execution.value }
+            : {}),
           createdBy,
           since,
           until,

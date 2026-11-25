@@ -423,7 +423,6 @@ describe("WP-36 月度承诺快照", () => {
 
   it.each(
     [
-      [],
       ["collect"],
       ["capture", "--in", "private-value"],
       ["capture", "--month", "2026-13"],
@@ -441,4 +440,11 @@ describe("WP-36 月度承诺快照", () => {
     expect(result.exitCode).toBe(2);
     expect(JSON.stringify(result)).not.toContain("private-value");
   });
+});
+
+it("WP-38 无子命令与 capture 使用相同的采集入口", async () => {
+  const runtime = { env: {}, clock };
+  const result = await runSnapshotSchedulerCli([], runtime);
+  expect(result).toEqual(await runSnapshotSchedulerCli(["capture"], runtime));
+  expect(result.exitCode).toBe(1);
 });

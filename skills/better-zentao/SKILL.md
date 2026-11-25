@@ -1,11 +1,11 @@
 ---
 name: better-zentao
-description: 通过 better-zentao MCP 查询禅道 22.6 的个人工作、团队任务、排期、需求进度和流程风险，或拟稿、导入和指派需求。用户询问禅道工作、需求、逾期、排期或提需时使用。
+description: 通过 better-zentao MCP 查询禅道 22.6 的个人工作、团队任务、排期、需求进度和流程风险，或处理提需、拆解、移交、挪月、收尾及发布例外。用户询问禅道工作、需求、逾期、排期或发版时使用。
 ---
 
 # better-zentao 使用指南
 
-## P1 当前已开放工具（12 个）
+## 已开放工具（19 个）
 
 | 工具 | 什么时候用 | 参数 |
 | --- | --- | --- |
@@ -21,14 +21,23 @@ description: 通过 better-zentao MCP 查询禅道 22.6 的个人工作、团队
 | `scan_workflow_risks` | 扫描流程风险，例如研发完成后测试未接续 | `scope={product?,team?,module?,month?,mine?}`，可选 `rules`、`minSeverity=info/low/medium/high`、`groupBy=rule/owner/story` |
 | `confirm_operation` | 确认已准备的写入或续跑已有操作 | `opId`、可选 `previewAck`、`resume`、`excludeSteps` |
 | `get_operation` | 查回执或最近操作 | `opId` 或 `recent`（1–100），不得同时传 |
+| `get_plan_progress` | 计划交付、版本门禁、承诺兑现、迭代指标 | `view=plan/release/commitment/iteration`；按视图提供 `product/plan/month/version/execution/groupBy` |
+| `get_monthly_dev_queue` | 月度研发队列及五桶 | `month`，可按 `team` 筛选，`includeNotReady` 控制未就绪明细 |
+| `decompose_stories` | 预览按阶段建任务与补关联执行 | `template=feature/design/next_stage/subtasks`；按模板提供需求或父任务、执行、负责人及日期 |
+| `handoff_story` | 激活移交，或由已评审设计需求衍生研发需求 | `storyId`、`mode=activate/from_design`，可选 `receiver/feature/comment/notify` |
+| `reschedule_story` | 挪月、备注与顺延记录 | `storyIds/toMonth/reason`，可选 `moveTasks` |
+| `close_stories` | 关闭需求及已完成叶子任务，或按 A/B/C 清理 | `mode=story/cleanup`，按模式提供编号和关闭原因，或提供清理范围 |
+| `set_story_meta` | 改版本关键词、登记阶段要求或例外 | `storyId`，可用 `stageRequirements/waiver/roles/version`；`scope` 正文编辑走人工 |
 
 遇到人、产品、模块、计划不明时先解析。例如把「研发主管（前端）」或「设计主管（前端）」原样传给 `resolve_context`。收到 `AMBIGUOUS_ENTITY` 时列出候选并让用户选，严禁猜测。
 
-## P2 规划中工具（7 个，当前未开放）
+## 研发组织与管理
 
-`get_plan_progress`、`get_monthly_dev_queue`、`decompose_stories`、`handoff_story`、`reschedule_story`、`close_stories`、`set_story_meta`。
-
-不要调用这些工具。用户询问计划进展、发布就绪、本月研发队列、拆解、激活移交、挪月、关闭或登记例外时，说明当前只支持 P1，相关需求在禅道手工处理。草稿需求先交状态维护人，禁止以直接指派研发代替激活移交。多人协作按规范在禅道拆子任务。
+- `plan` 分开报告叶子需求交付率和叶子任务完成率；`release` 报告测试、严重 Bug、发布日期来源及门禁例外；`commitment` 报告兑现、插入、顺延，无快照就说明；`iteration` 说明分母和禅道可见投入。月度队列按五个互斥分桶展示，未就绪单列。
+- 拆解优先补齐阶段和执行关联。同一阶段任务给一名负责人；L4 子任务自动创建仍未开放，请给用户父任务链接，由本人在禅道手工处理。
+- 移交前核对本次实现范围。设计需求还需确认评审已完成。展示回执的 `nextActions`，提醒用户完成【传递】任务并关闭原设计需求。版本或能力受限时遵循人工指引。22.6 的 PUT 无法改写正文范围和角色标签，角色变更以结构化评论留痕，并更新本地状态。
+- 挪月缺原因时先补问。任务日期需要人工核对。清理默认只选 A 类，B 类须明确选择并给原因，C 类只列出。发布门禁例外由配置中的产品管理角色登记。
+- 企微状态按 `notified` 回执说明，禅道写入状态按 `status` 说明。
 
 ## 提需拟稿与补问（Draft-First）
 

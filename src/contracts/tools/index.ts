@@ -1,4 +1,32 @@
 import {
+  getPlanProgressInputSchema,
+  getPlanProgressOutputSchema,
+} from "./get_plan_progress.ts";
+import {
+  getMonthlyDevQueueInputSchema,
+  getMonthlyDevQueueOutputSchema,
+} from "./get_monthly_dev_queue.ts";
+import {
+  decomposeStoriesInputSchema,
+  decomposeStoriesOutputSchema,
+} from "./decompose_stories.ts";
+import {
+  handoffStoryInputSchema,
+  handoffStoryOutputSchema,
+} from "./handoff_story.ts";
+import {
+  rescheduleStoryInputSchema,
+  rescheduleStoryOutputSchema,
+} from "./reschedule_story.ts";
+import {
+  closeStoriesInputSchema,
+  closeStoriesOutputSchema,
+} from "./close_stories.ts";
+import {
+  setStoryMetaInputSchema,
+  setStoryMetaOutputSchema,
+} from "./set_story_meta.ts";
+import {
   assignStoryInputSchema,
   assignStoryOutputSchema,
 } from "./assign_story.ts";
@@ -135,13 +163,13 @@ export const p1Tools = {
     assignStoryOutputSchema,
     "准备指派已有需求，提示草稿未就绪等风险。",
     "用户明确指定一位需求处理人时。",
-    "正式移交研发请先在禅道核对就绪条件。",
+    "正式移交研发请用 handoff_story。",
     previewNote,
   ),
   scan_workflow_risks: describe(
     scanWorkflowRisksInputSchema,
     scanWorkflowRisksOutputSchema,
-    "按范围扫描当前启用的 R01–R05 风险。",
+    "按范围扫描当前启用的 R01–R14 风险。",
     "用户问有没有逾期、未就绪先指派或测试未接续等问题时。",
     "跟踪单条需求的完整阶段，请用 get_story_progress。",
     `区分已记录和推测。${queryNote}`,
@@ -161,5 +189,65 @@ export const p1Tools = {
     "用户问写入是否成功、有哪些步骤仍待确认时。",
     "确认执行或恢复，请用 confirm_operation。",
     `查询不会发起禅道写入。opId 和 recent 最多传一项。${queryNote}`,
+  ),
+};
+
+export const allTools = {
+  ...p1Tools,
+  get_plan_progress: describe(
+    getPlanProgressInputSchema,
+    getPlanProgressOutputSchema,
+    "查看计划交付、发布就绪、月初承诺或迭代指标。",
+    "用户要看计划、版本、兑现或迭代时，选对应 view。",
+    "查询单条需求请用 get_story_progress。",
+    queryNote,
+  ),
+  get_monthly_dev_queue: describe(
+    getMonthlyDevQueueInputSchema,
+    getMonthlyDevQueueOutputSchema,
+    "查看指定月研发队列及互斥的五个分桶。",
+    "用户问本月要做哪些需求、还有哪些未就绪时。",
+    "核对月初承诺请用 get_plan_progress 的 commitment 视图。",
+    queryNote,
+  ),
+  decompose_stories: describe(
+    decomposeStoriesInputSchema,
+    decomposeStoriesOutputSchema,
+    "按阶段预览需求拆解和执行关联。",
+    "需要为研发或设计需求补建阶段任务时。",
+    "填报实际工时、完成任务或创建未验证的子任务。",
+    previewNote,
+  ),
+  handoff_story: describe(
+    handoffStoryInputSchema,
+    handoffStoryOutputSchema,
+    "预览研发需求激活移交，或从已评审设计需求衍生研发需求。",
+    "用户要将就绪需求交给研发主管时。",
+    "日常改派请用 assign_story。",
+    previewNote,
+  ),
+  reschedule_story: describe(
+    rescheduleStoryInputSchema,
+    rescheduleStoryOutputSchema,
+    "预览需求改挂目标月计划并登记顺延原因。",
+    "用户要把需求移到另一个月份时。",
+    "改任务排期或填实际开始日。",
+    previewNote,
+  ),
+  close_stories: describe(
+    closeStoriesInputSchema,
+    closeStoriesOutputSchema,
+    "按编号或清理分类预览关闭需求及关联任务。",
+    "用户明确要关闭需求或检查待清理对象时。",
+    "删除对象、代填完成时间或擅自关闭未完成任务。",
+    previewNote,
+  ),
+  set_story_meta: describe(
+    setStoryMetaInputSchema,
+    setStoryMetaOutputSchema,
+    "预览登记阶段要求、规则豁免或可写的需求元数据。",
+    "用户明确要登记例外、调整必需阶段或版本时。",
+    "直接改写新版需求正文或代替产品管理批准豁免。",
+    previewNote,
   ),
 };

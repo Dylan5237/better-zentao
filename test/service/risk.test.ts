@@ -149,7 +149,7 @@ it("严格校验巡检参数和嵌套范围，接受未注册规则及相对月�
     data: { hits: [], summary: [] },
     scope: { filters: { month: "2026-11" } },
   });
-  expect(empty.hints?.join()).toContain("R06");
+  expect(empty.hints?.join()).toContain("配置中未启用：R06");
   expect(fetch).not.toHaveBeenCalled();
 });
 
@@ -332,5 +332,182 @@ it("任务读取失败或分页截断时标注缺口，保留独立规则结果"
       ]),
       data: { hits: [expect.objectContaining({ rule: "R05" })] },
     });
+  }
+});
+
+it("WP-38 巡检连接 R06–R14 的数据源、豁免与必需阶段", async () => {
+  const devTask = {
+    ...task,
+    realStarted: "2026-11-03 09:00:00",
+    finishedDate: "2026-11-05 10:00:00",
+  };
+  const testTask = {
+    ...devTask,
+    id: 13,
+    name: "【测试】查询",
+    type: "test",
+    realStarted: "2026-11-06 09:00:00",
+    finishedDate: "2026-11-10 10:00:00",
+  };
+  const rows = [
+    {
+      ...story,
+      openedDate: "2026-11-01 09:00:00",
+      plan: "",
+      keywords: "版本:V1.2.3",
+    },
+    { ...story, id: 33, plan: "22", executions: [] },
+    { ...story, id: 34, plan: "22" },
+    { ...story, id: 35, category: "design" },
+  ];
+  const tasks = [
+    devTask,
+    testTask,
+    overdue,
+    { ...devTask, id: 14, story: 34 },
+    { ...testTask, id: 15, story: 34 },
+    { ...testTask, id: 16, story: 34, name: "【验收】查询" },
+    { ...testTask, id: 17, story: 35, name: "【评审】查询" },
+    { ...testTask, id: 18, story: 35, name: "【传递】查询" },
+  ];
+  const requirements = {
+    ...story,
+    id: 41,
+    type: "requirement",
+    openedDate: "2026-11-02 09:00:00",
+  };
+  const bug = {
+    id: 81,
+    product: 29,
+    title: "示例问题",
+    status: "active",
+    severity: 2,
+    story: 31,
+    execution: 0,
+    openedDate: "2026-11-09 10:00:00",
+  };
+  const store = openLocalStore({
+    baseUrl,
+    account: "acct_fixture",
+    dbPath: ":memory:",
+    clock,
+  });
+  try {
+    store.waivers.upsert({
+      ruleId: "R06",
+      objectType: "story",
+      objectId: "31",
+      reason: "迁移例外",
+      approvedBy: "acct_lead",
+      at: clock(),
+    });
+    store.stageRequirements.upsert({
+      storyId: 31,
+      stage: "acceptance",
+      required: false,
+      waiverReason: "无需验收",
+      decidedBy: "acct_lead",
+      decidedAt: clock(),
+    });
+    store.stageRequirements.upsert({
+      storyId: 31,
+      stage: "delivery",
+      required: true,
+      waiverReason: null,
+      decidedBy: "acct_lead",
+      decidedAt: clock(),
+    });
+    const rules = [
+      "R06",
+      "R07",
+      "R08",
+      "R09",
+      "R10",
+      "R11",
+      "R12",
+      "R13",
+      "R14",
+    ];
+    const { service, fetch } = setup(
+      {
+        "/api.php/v1/products/29/stories": { stories: rows },
+        ...Object.fromEntries(
+          rows.map((row) => ["/api.php/v1/stories/" + row.id, row]),
+        ),
+        "/api.php/v1/products/29/plans": {
+          plans: [
+            {
+              id: 22,
+              product: 29,
+              parent: 21,
+              title: "查询计划",
+              status: "wait",
+              deleted: false,
+              begin: "2026-11-01",
+              end: "2026-11-30",
+            },
+          ],
+        },
+        "/api.php/v1/executions/7/tasks": { tasks },
+        "/api.php/v1/products/29/bugs": { bugs: [bug] },
+        "/api.php/v2/product/browse": { stories: [requirements] },
+        "/api.php/v2/requirement/view": { story: requirements, relations: [] },
+        "/api.php/v2/story/view": { story: rows[3], relations: [] },
+      },
+      {
+        store,
+        config: teamConfigSchema.parse({
+          ...config,
+          rules: {
+            ...Object.fromEntries(rules.map((id) => [id, { enabled: true }])),
+            R06: { enabled: true, systemStartDate: "2026-11-01" },
+            R14: { enabled: true, olderThanDays: 1 },
+          },
+          releaseCalendar: [
+            {
+              product: 29,
+              version: "V1.2.3",
+              date: "2026-11-25",
+              owner: "acct_lead",
+            },
+          ],
+        }),
+      },
+    );
+    const result = scanWorkflowRisksOutputSchema.parse(
+      await service.scanWorkflowRisks({
+        scope: { product: "29" },
+        rules: [...rules, "R15"],
+      }),
+    );
+    expect(result.completeness, JSON.stringify(result.gaps)).toBe("complete");
+    expect(result.hints?.join()).toContain("尚未注册");
+    expect(new Set(result.data.hits.map(({ rule }) => rule))).toEqual(
+      new Set(rules),
+    );
+    expect(result.data.hits).toContainEqual(
+      expect.objectContaining({
+        rule: "R06",
+        object: expect.objectContaining({ id: 31 }),
+        waived: expect.objectContaining({ by: "acct_lead" }),
+      }),
+    );
+    expect(result.data.hits).toContainEqual(
+      expect.objectContaining({
+        rule: "R11",
+        reason: expect.stringContaining("必需的交付任务"),
+      }),
+    );
+    expect(result.data.hits).toContainEqual(
+      expect.objectContaining({
+        rule: "R12",
+        reason: expect.stringContaining("测试期间创建"),
+      }),
+    );
+    expect(
+      fetch.mock.calls.some(([url]) => String(url).includes("/releases")),
+    ).toBe(false);
+  } finally {
+    store.close();
   }
 });

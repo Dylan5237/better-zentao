@@ -276,6 +276,7 @@ export class DecomposeService {
       );
       const details = {
         capability: "task.create",
+        manual: { kind: "subtasks", id: input.taskId },
         links: [{ label: "在禅道打开父任务", url: taskUrl.href }],
       };
       try {

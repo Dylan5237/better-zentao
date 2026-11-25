@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import { getStoryDetail, getStoryDetailV2 } from "../../src/api/story.ts";
-import { requirementDetailDtoFor } from "../../src/core/dto/story.ts";
+import {
+  requirementDetailDtoFor,
+  storyDtoFor,
+} from "../../src/core/dto/story.ts";
 import type { StoryDetail } from "../../src/core/dto/story.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 import { mockReadFixture } from "./read-fixture.ts";
@@ -330,4 +333,19 @@ it("22.6 v2 需求详情兼容按类型分组的 relations 字典并补齐类型
     { id: 4877, title: "显式类型", type: "story" },
     { id: 4878, title: "缺省类型", type: "story" },
   ]);
+});
+
+it.each([
+  [[], null],
+  [0, null],
+  ["-1", null],
+  ["33", 33],
+  [[33], 33],
+])("WP-38 需求列表投影父 ID %j", (parent, projected) => {
+  const parsed = storyDtoFor("Asia/Shanghai").parse({
+    ...expected,
+    parent,
+    isParent: 1,
+  });
+  expect(parsed).toMatchObject({ parent: projected, isParent: true });
 });
