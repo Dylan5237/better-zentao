@@ -1,4 +1,10 @@
-import { civilDate, deadlineEndOfDayMs } from "../core/calendar.ts";
+import {
+  civilDate,
+  countWorkdaysBetween,
+  deadlineEndOfDayMs,
+  isWorkday,
+  type WorkCalendar,
+} from "../core/calendar.ts";
 import type { Execution } from "../core/dto/execution.ts";
 import type { ProductPlan } from "../core/dto/plan.ts";
 
@@ -14,14 +20,18 @@ function isMonth(month: string): boolean {
   );
 }
 
+function lastDayOfMonth(month: string): string {
+  let day = 31;
+  while (!civilDate.safeParse(`${month}-${day}`).success) day--;
+  return `${month}-${day}`;
+}
+
 function overlap(range: DateRange, month: string): number {
   const begin = civilDate.safeParse(range.begin).data;
   const end = civilDate.safeParse(range.end).data;
   if (!begin || !end) return 0;
   const first = `${month}-01`;
-  let day = 31;
-  while (!civilDate.safeParse(`${month}-${day}`).success) day--;
-  const last = `${month}-${day}`;
+  const last = lastDayOfMonth(month);
   const from = begin > first ? begin : first;
   const to = end < last ? end : last;
   if (from > to) return 0;
@@ -81,4 +91,35 @@ export function isDevExecutionInMonth(
   if (!isDev) return false;
   const namedMonth = options.month ?? monthInName(execution);
   return namedMonth ? namedMonth === month : overlap(execution, month) > 0;
+}
+
+// docs/04 §4.6 窗口从倒数第 N 个工作日起持续至月底。
+export function isInLastWorkdaysOfMonth(
+  today: string,
+  calendar: WorkCalendar,
+  workdays = 7,
+): boolean {
+  if (
+    !civilDate.safeParse(today).success ||
+    !Number.isSafeInteger(workdays) ||
+    workdays <= 0
+  )
+    return false;
+  const month = today.slice(0, 7);
+  const first = `${month}-01`;
+  const last = lastDayOfMonth(month);
+  const total =
+    countWorkdaysBetween(first, last, calendar) +
+    Number(isWorkday(first, calendar));
+  return (
+    countWorkdaysBetween(today, last, calendar) < Math.min(workdays, total)
+  );
+}
+
+// docs/04 §4.6 同一需求同时属于计划和迭代时只计一次。
+export function monthlyDevPoolIds(
+  planStoryIds: readonly number[],
+  iterationStoryIds: readonly number[],
+): number[] {
+  return [...new Set([...planStoryIds, ...iterationStoryIds])];
 }

@@ -1,5 +1,6 @@
 import type { Task } from "../core/dto/task.ts";
 import { htmlFragments } from "./html-fragments.ts";
+import { isCancelledTask } from "./task.ts";
 
 const stageRules = {
   design: { prefix: "【设计】", keywords: /调研|概要|概设|原型|\bUI\b/iu },
@@ -108,15 +109,8 @@ type StageLeaf = StageTask &
     >
   > & { readonly evidence?: StageEvidence };
 
-function isCancelled(task: StageLeaf): boolean {
-  return (
-    task.status === "cancel" ||
-    (task.status === "closed" && task.closedReason === "cancel")
-  );
-}
-
 function summarizeStage(tasks: readonly StageLeaf[]): StageState {
-  if (tasks.every(isCancelled)) {
+  if (tasks.every(isCancelledTask)) {
     return {
       status: tasks.every((task) => task.closedReason?.trim())
         ? "cancelled"
@@ -126,7 +120,7 @@ function summarizeStage(tasks: readonly StageLeaf[]): StageState {
   if (
     tasks.some(
       (task) =>
-        isCancelled(task) ||
+        isCancelledTask(task) ||
         (task.status !== "closed" && task.status !== "done"),
     )
   ) {

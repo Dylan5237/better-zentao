@@ -16,8 +16,35 @@ interface TimeContext {
 type TaskTimeStatus =
   "completed" | "unscheduled" | "overdue" | "due_today" | "due_soon" | "normal";
 
-function isFinished(status: Task["status"]): boolean {
+// docs/04 §4.2、§4.8 终态任务不属于当前到期风险。
+export function isTaskFinished(status: Task["status"]): boolean {
   return status === "done" || status === "closed" || status === "cancel";
+}
+
+type TaskTreeNode = Pick<Task, "id" | "parent" | "isParent" | "deleted">;
+export type LeafCountTask = TaskTreeNode &
+  Pick<Task, "status" | "closedReason">;
+
+// docs/04 §4.3 同一个任务可从多个集合取到，已知父任务不进入叶子统计。
+export function selectLeafTasks<T extends TaskTreeNode>(
+  tasks: readonly T[],
+): T[] {
+  const active = tasks.filter((task) => !task.deleted);
+  const unique = new Map(active.map((task) => [task.id, task]));
+  const parentIds = new Set(active.map(({ parent }) => parent));
+  return [...unique.values()].filter(
+    (task) => !task.isParent && !parentIds.has(task.id),
+  );
+}
+
+// docs/04 §3.3 已关闭但原因是取消的任务也不进入有效完成率。
+export function isCancelledTask(
+  task: Pick<Task, "status" | "closedReason">,
+): boolean {
+  return (
+    task.status === "cancel" ||
+    (task.status === "closed" && task.closedReason === "cancel")
+  );
 }
 
 // docs/04 §4.2 终态仍须比较真实完成时间和业务时区的截止时刻。
@@ -27,7 +54,7 @@ export function taskTimeStatus(
 ): { readonly status: TaskTimeStatus; readonly historicallyLate: boolean } {
   const { today, calendar, timezone, dueSoonWorkdays = 3 } = context;
   const deadline = civilDate.safeParse(task.deadline).data;
-  if (isFinished(task.status)) {
+  if (isTaskFinished(task.status)) {
     const historicallyLate =
       deadline !== undefined &&
       task.finishedDate != null &&
@@ -89,7 +116,7 @@ function taskParticipants(
     name: directory?.get(account),
     active,
   });
-  const finished = isFinished(task.status);
+  const finished = isTaskFinished(task.status);
   if (task.mode !== "multi" || !task.team?.length) {
     if (!task.assignedTo) return [];
     return [
@@ -105,7 +132,7 @@ function taskParticipants(
   return [...members].map(([account, status]) =>
     participant(
       account,
-      finished ? false : status == null ? null : !isFinished(status),
+      finished ? false : status == null ? null : !isTaskFinished(status),
     ),
   );
 }
@@ -122,7 +149,7 @@ function childrenFinished(
     seen.add(task.id);
     const descendants = children.get(task.id);
     if (descendants) queue.push(...descendants);
-    else if (!isFinished(task.status)) return false;
+    else if (!isTaskFinished(task.status)) return false;
   }
   return true;
 }
@@ -159,7 +186,7 @@ export function summarizeLeafWork(
     const participants = taskParticipants(task, context.directory);
     if (
       task.mode === "multi" &&
-      !isFinished(task.status) &&
+      !isTaskFinished(task.status) &&
       (!task.team?.length || participants.some(({ active }) => active === null))
     )
       gaps.push({ kind: "team", taskId: task.id });
