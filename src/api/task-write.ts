@@ -146,18 +146,29 @@ export async function closeTask(
   }
 
   async function apply(pathTemplate: string) {
-    await http.write(
-      {
-        ...opLog,
-        method: "POST",
-        pathTemplate,
-        query: { taskID: objectId },
-        objectId,
-        body: {},
-        allowReceiptMessage: true,
-      },
-      taskActionReceiptDto,
-    );
+    try {
+      await http.write(
+        {
+          ...opLog,
+          method: "POST",
+          pathTemplate,
+          query: { taskID: objectId },
+          objectId,
+          body: {},
+          allowReceiptMessage: true,
+        },
+        taskActionReceiptDto,
+      );
+    } catch (error) {
+      // A 2xx business refusal can race with another change. Read the current
+      // state before deciding whether the next transition is applicable.
+      if (
+        !(error instanceof BztError) ||
+        error.code !== "ZENTAO_BUSINESS_ERROR" ||
+        error.details?.status !== undefined
+      )
+        throw error;
+    }
     try {
       // A missing receipt can still be resolved by reading the persisted state.
       return await readStatus();
@@ -169,12 +180,13 @@ export async function closeTask(
 
   let status: Awaited<ReturnType<typeof readStatus>> | undefined =
     await readStatus();
-  if (status !== "closed" && status !== "cancel") {
+  if (status !== "closed" && status !== "cancel" && status !== "done") {
     status = await apply("/api.php/v2/task/cancel");
     if (status !== "cancel" && status !== "closed")
       return { status: "unknown" };
   }
-  if (status === "cancel") status = await apply("/api.php/v2/task/close");
+  if (status === "cancel" || status === "done")
+    status = await apply("/api.php/v2/task/close");
   return status === "closed"
     ? { status: "accepted", data: { id: objectId } }
     : { status: "unknown" };

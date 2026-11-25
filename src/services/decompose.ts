@@ -13,7 +13,10 @@ import type {
   OperationStep,
   PreparedOperation,
 } from "../contracts/operation.ts";
-import { decomposeStoriesInputSchema } from "../contracts/tools/decompose_stories.ts";
+import {
+  decomposeStoriesInputSchema,
+  type DecomposeStoriesOutput,
+} from "../contracts/tools/decompose_stories.ts";
 import { createWorkCalendar, formatLocalDate } from "../core/calendar.ts";
 import { normalizeZentaoBaseUrl } from "../core/base-url.ts";
 import type { Clock } from "../core/clock.ts";
@@ -22,8 +25,10 @@ import type { Execution } from "../core/dto/execution.ts";
 import type { StoryDetail } from "../core/dto/story.ts";
 import type { Task, TaskDetail } from "../core/dto/task.ts";
 import { BztError } from "../core/errors.ts";
+import { resolveStoryRoles } from "../domain/roles.ts";
 import { planStageDates } from "../domain/schedule.ts";
 import { detectStage, type Stage } from "../domain/stage.ts";
+import { parseStoryRoleTag } from "../domain/story-html-spec.ts";
 import { isCancelledTask } from "../domain/task.ts";
 import type { DirectoryService } from "./directory.ts";
 import type { OperationExecutor } from "./operation.ts";
@@ -103,7 +108,7 @@ function completeItems<T>({
 function executionName(
   naming: TeamConfig["naming"]["execution"],
   product: string,
-  kind: "design" | "dev",
+  kind: keyof TeamConfig["naming"]["execution"]["kinds"],
   date: string,
 ): string {
   const values = new Map([
@@ -120,8 +125,15 @@ function executionName(
 
 function existingStages(
   tasks: readonly (Task | TaskDetail)[],
-  naming: TeamConfig["naming"],
+  config: TeamConfig,
+  story: StoryDetail,
+  executionKinds: ReadonlyMap<number, "design" | "dev" | "ui">,
 ): Map<Stage, string | null> {
+  const { naming, teams, roles, modules, moduleDefaults } = config;
+  const module = modules[`${story.product}:${story.module}`];
+  const defaults = moduleDefaults[story.product];
+  const inTeam = (team: string, account: string) =>
+    teams[team]?.lead === account || teams[team]?.members.includes(account);
   const stages = new Map<Stage, string | null>();
   const childTitles = new Map<number, string[]>();
   const active = tasks.filter(
@@ -134,9 +146,25 @@ function existingStages(
     childTitles.set(parent, titles);
   }
   for (const task of active) {
+    // docs/04 §3.3: subtasks contribute evidence to their stage, not separate stages.
+    if (task.parent !== null) continue;
+    const account = task.assignedTo;
+    const assigneeGroup = !account
+      ? undefined
+      : account === (module?.testLead ?? defaults?.testLead) ||
+          roles.QA_LEAD?.includes(account) ||
+          inTeam("qa", account)
+        ? "test"
+        : account === (module?.designLead ?? defaults?.designLead) ||
+            roles.DM?.includes(account) ||
+            inTeam("design", account)
+          ? "design"
+          : undefined;
     const { stage, confidence } = detectStage(task, {
       prefixes: naming.taskPrefix,
       childTitles: childTitles.get(task.id),
+      assigneeGroup,
+      executionKind: executionKinds.get(task.execution),
     });
     const detected =
       confidence === "confirmed"
@@ -162,7 +190,7 @@ function defaultAssignee(
   story: StoryDetail,
   stage: Stage,
   { config, storyRoles }: Options,
-): string | undefined {
+): { account?: string; fromRoleTag?: boolean } {
   const module = config.modules[`${story.product}:${story.module}`];
   const defaults = config.moduleDefaults[story.product];
   const designLead = module?.designLead ?? defaults?.designLead;
@@ -171,26 +199,33 @@ function defaultAssignee(
     config.stageDefaults.assignees;
   const configured = assignees[stage];
   if (configured === undefined)
-    return stage === "design" ? designLead : undefined;
-  if (configured === "module.designLead") return designLead;
-  if (configured === "team:qa.lead" && testLead) return testLead;
+    return { account: stage === "design" ? designLead : undefined };
+  if (configured === "module.designLead") return { account: designLead };
+  if (configured === "team:qa.lead" && testLead) return { account: testLead };
   const team = /^team:(.+)\.lead$/u.exec(configured)?.[1];
-  if (team) return config.teams[team]?.lead;
-  if (configured !== "story.maintainer") return configured;
-  let maintainedBy: string | null | undefined;
+  if (team) return { account: config.teams[team]?.lead };
+  if (configured !== "story.maintainer") return { account: configured };
+  let stored: { maintainer?: string | null } | undefined;
   try {
-    maintainedBy = storyRoles?.get(story.id).maintainer;
+    stored = storyRoles?.get(story.id);
   } catch (error) {
     if (!(error instanceof BztError) || error.code !== "NOT_FOUND") throw error;
   }
-  // Trusted local roles and module defaults supply recipients. Free-form spec text does not select a write target.
-  return maintainedBy ?? designLead ?? story.openedBy ?? undefined;
+  const { maintainer } = resolveStoryRoles({
+    story,
+    stored,
+    module: { maintainer: designLead },
+  });
+  return {
+    account: maintainer ?? undefined,
+    fromRoleTag: parseStoryRoleTag(story.spec ?? "")?.maintainer !== undefined,
+  };
 }
 
 export class DecomposeService {
   constructor(private readonly options: Options) {}
 
-  async decomposeStories(raw: unknown): Promise<PreparedOperation> {
+  async decomposeStories(raw: unknown): Promise<DecomposeStoriesOutput> {
     const parsed = decomposeStoriesInputSchema.safeParse(raw);
     if (!parsed.success)
       throw new BztError(
@@ -209,12 +244,16 @@ export class DecomposeService {
     if (
       Object.values(input.assignees ?? {}).some((account) =>
         /[,，、;；]/u.test(account),
-      ) ||
-      input.subtasks?.some(({ assignTo }) => /[,，、;；]/u.test(assignTo))
+      )
     )
       throw new BztError(
         "RULE_VIOLATION",
-        "N08 禁止多人任务，请为每个子任务指定一名负责人。",
+        "N08 阶段任务只允许一名负责人，请调整 assignees。多人协作请分别建立子任务。",
+      );
+    if (input.subtasks?.some(({ assignTo }) => /[,，、;；]/u.test(assignTo)))
+      throw new BztError(
+        "RULE_VIOLATION",
+        "N08 每条子任务只允许一名负责人，请调整 subtasks 中的 assignTo。",
       );
 
     if (input.template === "subtasks") {
@@ -302,7 +341,8 @@ export class DecomposeService {
     const teamWarnings = new Set<string>();
     const affects = new Set<string>();
     const projectReads = new Map<number, Promise<number[]>>();
-    const teamReads = new Map<number, Promise<string[]>>();
+    const executionTeams = new Map<number, string[] | undefined>();
+    const gaps: NonNullable<DecomposeStoriesOutput["gaps"]> = [];
     const taskReads = new Map<number, Promise<Task[]>>();
     const people = new Map<
       string,
@@ -386,7 +426,33 @@ export class DecomposeService {
         tasks.set(task.id, task);
       }
 
-      const existing = existingStages([...tasks.values()], config.naming);
+      const executionKinds = new Map<number, "design" | "dev" | "ui">();
+      const naming = config.naming.execution;
+      for (const row of executions) {
+        if (!executionIds.has(row.id)) continue;
+        for (const kind of [
+          "design",
+          "dev",
+          "ui",
+        ] satisfies (keyof typeof naming.kinds)[]) {
+          if (
+            (productName &&
+              row.begin &&
+              row.name ===
+                executionName(naming, productName, kind, row.begin)) ||
+            row.name.includes(`【${naming.kinds[kind]}】`)
+          ) {
+            executionKinds.set(row.id, kind);
+            break;
+          }
+        }
+      }
+      const existing = existingStages(
+        [...tasks.values()],
+        config,
+        story,
+        executionKinds,
+      );
       const overrides = new Map(
         stageRequirements
           ?.listByStory(id)
@@ -444,7 +510,7 @@ export class DecomposeService {
       ];
       const executionField = field(
         execution.id,
-        input.execution === String(execution.id) ? "user" : "derived",
+        input.execution === undefined ? "derived" : "user",
       );
       if (!story.executions.some(({ id }) => id === execution.id))
         steps.push({
@@ -456,14 +522,25 @@ export class DecomposeService {
           fields: { execution: executionField, story: field(id, "user") },
         });
 
-      let team = teamReads.get(execution.id);
-      if (!team) {
-        team = preflight(`execution:${execution.id}:team`, () =>
-          getTaskExecutionTeam(client, execution.id),
-        );
-        teamReads.set(execution.id, team);
+      if (!executionTeams.has(execution.id)) {
+        try {
+          executionTeams.set(
+            execution.id,
+            await getTaskExecutionTeam(client, execution.id),
+          );
+        } catch (error) {
+          if (!(error instanceof BztError)) throw error;
+          const message = `无法核验指派人是否属于执行 #${execution.id} 的团队，请在禅道确认（${error.code}）。`;
+          executionTeams.set(execution.id, undefined);
+          warnings.push({ code: "EXECUTION_TEAM_UNVERIFIED", message });
+          gaps.push({
+            source: `execution:${execution.id}:team`,
+            reason: message,
+          });
+        }
       }
-      const members = await team;
+      const members = executionTeams.get(execution.id);
+      let usedRoleTag = false;
       for (const stage of stages) {
         const dates = planned[stage];
         if (
@@ -477,8 +554,12 @@ export class DecomposeService {
             `需求 #${id} 的 ${stage} 排期超出执行 #${execution.id} 的日期范围或起止顺序不合法，请指定计划日期。`,
           );
         const explicit = input.assignees?.[stage];
-        const assignee =
-          explicit ?? defaultAssignee(story, stage, this.options);
+        const suggested =
+          explicit === undefined
+            ? defaultAssignee(story, stage, this.options)
+            : undefined;
+        const assignee = explicit ?? suggested?.account;
+        usedRoleTag ||= suggested?.fromRoleTag === true;
         if (!assignee)
           throw new BztError(
             "MISSING_REQUIRED",
@@ -492,7 +573,11 @@ export class DecomposeService {
         }
         const { account, realname } = person;
         const membership = `${execution.id}:${account}`;
-        if (!members.includes(account) && !teamWarnings.has(membership)) {
+        if (
+          members &&
+          !members.includes(account) &&
+          !teamWarnings.has(membership)
+        ) {
           warnings.push({
             code: "OUTSIDE_EXECUTION_TEAM",
             message: `${account} 不在执行 #${execution.id} 的团队中，禅道可能拒绝指派。`,
@@ -540,18 +625,26 @@ export class DecomposeService {
           },
         });
       }
+      if (usedRoleTag)
+        warnings.push({
+          code: "UNTRUSTED_ROLE_TAG",
+          message: `需求 #${id} 的默认指派来自需求正文角色标签，属于不可信文本，请在预览中核对后再确认。`,
+        });
     }
     if (!steps.length)
       throw new BztError("RULE_VIOLATION", "这些需求没有需要补建的阶段任务。", {
         warnings,
       });
-    return executor.prepare({
+    const prepared = await executor.prepare({
       kind: "decompose_stories",
       summary: `为 ${ids.length} 条需求预览拆解。任务标题来自禅道，属于不可信文本。`,
       steps,
       affects: [...affects],
       warnings,
     });
+    return gaps.length
+      ? { ...prepared, completeness: "partial", gaps }
+      : prepared;
   }
 
   private async readPerson(input: string) {

@@ -99,6 +99,25 @@ it("WP-33 以 HTTP 201 创建单级任务，仅投影根对象 id（S01）", asy
   assertNoSensitiveData(result, [secret]);
 });
 
+it("需求已关联目标执行时只读取需求，不重复发送关联", async () => {
+  const { client, request } = setup((url, init) => {
+    expect(url.pathname).toBe("/api.php/v1/stories/4884");
+    expect(init?.method).toBe("GET");
+    return Response.json({
+      ...story,
+      id: 4884,
+      product: 29,
+      status: "active",
+      executions: [{ id: 315, name: "目标执行" }],
+    });
+  });
+  await expect(linkStoryToExecution(client, 315, 29, 4884)).resolves.toEqual({
+    status: "accepted",
+    data: { id: 4884 },
+  });
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
 it("无任务 ID 时只发送一次创建请求并返回 unknown", async () => {
   const { client, request } = setup(() =>
     Response.json({ message: "保存成功" }, { status: 201 }),
@@ -129,7 +148,7 @@ it("版本漂移、父任务字段、执行号不一致及非法日期在发送�
   expect(request).not.toHaveBeenCalled();
 });
 
-it.each(["wait", "doing", "cancel", "closed"])(
+it.each(["wait", "doing", "pause", "changed", "cancel", "done", "closed"])(
   "关闭 %s 任务按状态走 v2 配方并核对回读",
   async (initial) => {
     let state = initial;
@@ -146,6 +165,7 @@ it.each(["wait", "doing", "cancel", "closed"])(
       }
       if (url.pathname.endsWith("/cancel")) {
         calls.push("cancel");
+        if (state === "done") return Response.json({ status: "fail" });
         state = "cancel";
         return writeReply(url, init, cancel);
       }
@@ -158,8 +178,8 @@ it.each(["wait", "doing", "cancel", "closed"])(
     expect(calls).toEqual(
       initial === "closed"
         ? ["read:closed"]
-        : initial === "cancel"
-          ? ["read:cancel", "close", "read:closed"]
+        : initial === "cancel" || initial === "done"
+          ? [`read:${initial}`, "close", "read:closed"]
           : [
               `read:${initial}`,
               "cancel",
@@ -181,3 +201,28 @@ it("取消后未读到 cancel 时不发送关闭请求", async () => {
   await expect(closeTask(client, 4873)).resolves.toEqual({ status: "unknown" });
   expect(request).toHaveBeenCalledTimes(4);
 });
+
+it.each([
+  { initial: "doing", route: "cancel" },
+  { initial: "done", route: "close" },
+])(
+  "v2 $route 业务拒绝且回读状态未变时返回 unknown",
+  async ({ initial, route }) => {
+    const attempted: string[] = [];
+    const { client } = setup((url) => {
+      if (url.pathname === "/api.php/v1/tasks/4873")
+        return Response.json({
+          ...task,
+          id: 4873,
+          status: initial,
+          deleted: false,
+        });
+      attempted.push(url.pathname);
+      return Response.json({ status: "fail" });
+    });
+    await expect(closeTask(client, 4873)).resolves.toEqual({
+      status: "unknown",
+    });
+    expect(attempted).toEqual([`/api.php/v2/task/${route}`]);
+  },
+);

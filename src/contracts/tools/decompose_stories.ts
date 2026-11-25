@@ -53,6 +53,20 @@ export const decomposeStoriesInputSchema = z
   })
   .strict();
 
-export const decomposeStoriesOutputSchema = preparedOperationSchema;
+export const decomposeStoriesOutputSchema = preparedOperationSchema
+  .extend({
+    completeness: z.literal("partial").optional(),
+    gaps: z
+      .array(z.strictObject({ source: text, reason: text }))
+      .min(1)
+      .optional(),
+  })
+  .refine(
+    ({ completeness, gaps }) =>
+      (completeness === undefined) === (gaps === undefined),
+  );
 
 export type DecomposeStoriesInput = z.input<typeof decomposeStoriesInputSchema>;
+export type DecomposeStoriesOutput = z.output<
+  typeof decomposeStoriesOutputSchema
+>;

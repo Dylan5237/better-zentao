@@ -47,6 +47,11 @@ function setup(
     draft?: boolean;
     unlinked?: boolean;
     existing?: boolean;
+    existingSubtask?: boolean;
+    historicalStage?: boolean;
+    spec?: string;
+    storedMaintainer?: string;
+    executionTeam?: "unavailable" | "invalid";
     failOnce?: boolean;
     loseCreateReceipt?: boolean;
     projectProducts?: number[];
@@ -64,8 +69,11 @@ function setup(
     id: 82,
     story: 11,
     execution: executionId,
-    name: "已有实现",
-    desc: "<p>[bzt:stage=dev]</p>",
+    name: options.historicalStage ? "已有阶段任务" : "【研发】已有实现",
+    desc: options.historicalStage ? "" : "<p>[bzt:stage=dev]</p>",
+    type: options.historicalStage ? "design" : "devel",
+    assignedTo: options.historicalStage ? "owner" : "alice",
+    isParent: options.existingSubtask === true,
     status: "done",
     deleted: false,
     deadline: "2026-12-10",
@@ -83,6 +91,15 @@ function setup(
     tasks.set(82, previous);
     tasks.set(83, cancelled);
   }
+  if (options.existingSubtask)
+    tasks.set(84, {
+      ...previous,
+      id: 84,
+      parent: 82,
+      isParent: false,
+      name: "测试用例准备",
+      desc: "",
+    });
   const linked = new Set<number>(options.unlinked ? [] : [11, 12, 13, 14, 15]);
   const status = options.draft ? "draft" : "active";
   const config = teamConfigSchema.parse({
@@ -155,11 +172,16 @@ function setup(
         project: { id: 314, multiple: true, status: "doing" },
         products: options.projectProducts ?? [7],
       });
-    if (path === "v1/executions/315")
+    if (path === "v1/executions/315") {
+      if (options.executionTeam === "unavailable")
+        return Response.json({}, { status: 403 });
+      if (options.executionTeam === "invalid")
+        return Response.json({ id: executionId });
       return Response.json({
         id: executionId,
         teamMembers: ["alice", "owner"],
       });
+    }
     if (path === "v1/executions/315/tasks")
       return Response.json({
         total: options.truncatedTasks ? 100000 : tasks.size,
@@ -191,7 +213,7 @@ function setup(
         deleted: false,
         assignedTo: "alice",
         openedBy: "owner",
-        spec: "",
+        spec: options.spec ?? "",
         executions: linked.has(id) ? [{ id: executionId, name }] : [],
         tasks: [...tasks.values()].filter((task) => task.story === id),
       });
@@ -322,6 +344,12 @@ function setup(
     baseUrl,
     instanceVersion: "22.6",
     stageRequirements: { listByStory: () => options.stageRequirements ?? [] },
+    storyRoles:
+      options.storedMaintainer === undefined
+        ? undefined
+        : {
+            get: () => ({ maintainer: options.storedMaintainer }),
+          },
   });
   return {
     service,
@@ -534,6 +562,174 @@ it("next_stage 跳过已有未取消阶段，按实际截止日排期并应用�
   });
 });
 
+it.each(["next_stage", "feature"])(
+  "%s 不把研发父任务下的测试用例准备识别成测试阶段",
+  async (template) => {
+    const { service } = setup({ existing: true, existingSubtask: true });
+    const { preview } = await service.decomposeStories({
+      storyIds: [11],
+      template,
+    });
+    expect(preview.steps.map(({ fields }) => fields.name?.value)).toEqual([
+      "【测试】需求11",
+      "【验收】需求11",
+    ]);
+    expect(preview.steps[0]?.fields.estStarted?.value).toBe("2026-12-11");
+  },
+);
+
+it("存量顶层任务按设计执行、模块设计组与任务类型识别阶段", async () => {
+  const { service } = setup({
+    category: "design",
+    existing: true,
+    historicalStage: true,
+  });
+  const { preview } = await service.decomposeStories({
+    storyIds: [11],
+    template: "next_stage",
+  });
+  expect(preview.steps.map(({ fields }) => fields.name?.value)).toEqual([
+    "【评审】需求11",
+    "【传递】需求11",
+  ]);
+});
+
+it.each([
+  { template: "feature", category: "feature", stageName: "【验收】需求11" },
+  { template: "design", category: "design", stageName: "【传递】需求11" },
+] satisfies {
+  template: string;
+  category: "feature" | "design";
+  stageName: string;
+}[])(
+  "$template 的 $stageName 默认用正文维护人并提示核对",
+  async ({ template, category, stageName }) => {
+    const { service } = setup({
+      category,
+      spec: "<p>[bzt:v1 maintainer=qa;receiver=alice]</p>",
+    });
+    const result = await service.decomposeStories({
+      storyIds: [11],
+      template,
+      assignees: { dev: "alice", design: "alice" },
+    });
+    expect(
+      result.preview.steps.find(
+        ({ fields }) => fields.name?.value === stageName,
+      )?.fields.assignedTo,
+    ).toEqual({ value: "qa", origin: "default" });
+    expect(result.warnings).toContainEqual({
+      code: "UNTRUSTED_ROLE_TAG",
+      message: expect.stringMatching(/正文角色标签.*不可信.*核对/u),
+    });
+  },
+);
+
+it("显式指派优先于标签，缺少正文维护人时使用本地维护人", async () => {
+  const { service } = setup({
+    storedMaintainer: "alice",
+    spec: "<p>[bzt:v1 receiver=qa]</p>",
+  });
+  const { preview, warnings } = await service.decomposeStories({
+    storyIds: [11],
+    template: "feature",
+    assignees: { dev: "alice" },
+  });
+  expect(preview.steps[2]?.fields.assignedTo).toEqual({
+    value: "alice",
+    origin: "default",
+  });
+  expect(warnings.some(({ code }) => code === "UNTRUSTED_ROLE_TAG")).toBe(
+    false,
+  );
+  const explicit = setup({ spec: "<p>[bzt:v1 maintainer=qa]</p>" });
+  const overridden = await explicit.service.decomposeStories({
+    storyIds: [11],
+    template: "feature",
+    assignees,
+  });
+  expect(overridden.preview.steps[2]?.fields.assignedTo).toEqual({
+    value: "owner",
+    origin: "user",
+  });
+  expect(
+    overridden.warnings.some(({ code }) => code === "UNTRUSTED_ROLE_TAG"),
+  ).toBe(false);
+});
+
+it.each(["unavailable", "invalid"] satisfies ("unavailable" | "invalid")[])(
+  "执行团队读取 %s 时预览只标记一次核验缺口",
+  async (executionTeam) => {
+    const { service, writes } = setup({ executionTeam });
+    const plan = await service.decomposeStories({
+      storyIds: [11, 12],
+      template: "feature",
+      assignees,
+    });
+    expect(writes).toEqual([]);
+    expect(plan.preview.steps).toHaveLength(6);
+    expect(plan.warnings).toEqual([
+      {
+        code: "EXECUTION_TEAM_UNVERIFIED",
+        message: expect.stringContaining("无法核验"),
+      },
+    ]);
+    expect(decomposeStoriesOutputSchema.parse(plan)).toMatchObject({
+      completeness: "partial",
+      gaps: [
+        {
+          source: "execution:315:team",
+          reason: expect.stringContaining("无法核验"),
+        },
+      ],
+    });
+  },
+);
+
+it.each(["#315", "【示例产品】【研发】2026年12月迭代"])(
+  "执行显式指定为 %s 时，关联和创建步骤均标记 user",
+  async (execution) => {
+    const { service } = setup({ unlinked: true });
+    const { preview } = await service.decomposeStories({
+      storyIds: [11],
+      template: "feature",
+      execution,
+      assignees,
+    });
+    expect(preview.steps).toHaveLength(4);
+    for (const { fields } of preview.steps)
+      expect(fields.execution).toEqual({ value: 315, origin: "user" });
+  },
+);
+
+it("通知摘要跳过 done 但缺失禅道任务 ID 或链接的回执", async () => {
+  const { service, executor, advance } = setup();
+  const plan = await service.decomposeStories({
+    storyIds: [11],
+    template: "feature",
+    assignees,
+  });
+  advance();
+  const result = await executor.confirm({ opId: plan.opId, previewAck: true });
+  const steps = result.steps.map((step) => {
+    if (step.seq === 1) {
+      const { zentaoId: _id, ...remaining } = step;
+      return remaining;
+    }
+    if (step.seq === 2) {
+      const { url: _url, ...remaining } = step;
+      return remaining;
+    }
+    return step;
+  });
+  expect(buildDecomposeNotifications(plan, { ...result, steps })).toEqual([
+    expect.objectContaining({
+      account: "owner",
+      taskId: result.steps[2]?.zentaoId,
+    }),
+  ]);
+});
+
 it("草稿、项目产品不匹配和非法排期均无写入", async () => {
   const input = { storyIds: [11], template: "feature", assignees };
   const draft = setup({ draft: true });
@@ -574,10 +770,23 @@ it("AC-49 禁用多人任务，未验证的 L4 降级到禅道手动创建", asy
   const input = { taskId: 82, template: "subtasks" };
   await expect(
     service.decomposeStories({
+      storyIds: [11],
+      template: "feature",
+      assignees: { dev: "alice,qa" },
+    }),
+  ).rejects.toMatchObject({
+    code: "RULE_VIOLATION",
+    message: expect.stringContaining("阶段任务只允许一名负责人"),
+  });
+  await expect(
+    service.decomposeStories({
       ...input,
       subtasks: [{ name: "子任务", assignTo: "alice,qa" }],
     }),
-  ).rejects.toMatchObject({ code: "RULE_VIOLATION" });
+  ).rejects.toMatchObject({
+    code: "RULE_VIOLATION",
+    message: expect.stringContaining("每条子任务只允许一名负责人"),
+  });
   await expect(
     service.decomposeStories({
       ...input,
