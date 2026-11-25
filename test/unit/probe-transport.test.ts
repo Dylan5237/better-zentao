@@ -879,3 +879,95 @@ describe("WP-05 / ADR-19 需求 ID 路由", () => {
     }
   });
 });
+
+describe("WP-30 / ADR-19 任务关闭", () => {
+  const request = { action: "task.close", id: 71, productId: 29, body: {} };
+
+  function setupTaskClose(execution: number) {
+    const send = vi.fn<typeof fetch>(async (input, init) => {
+      const path = new URL(String(input)).pathname.replace("/zentao", "");
+      expect(init?.redirect).toBe("error");
+      switch (path) {
+        case "/api.php/v1/tokens":
+          return Response.json({ token: "synthetic-probe-token" });
+        case "/api.php/v1/tasks/71":
+          return Response.json({
+            id: 71,
+            execution,
+            story: null,
+            parent: 0,
+            isParent: false,
+            name: "Synthetic task",
+            type: "devel",
+            mode: "",
+            status: "wait",
+            estStarted: "2027-01-15",
+            deadline: "2027-01-15",
+            estimate: 0,
+            consumed: 0,
+            left: 0,
+          });
+        case "/api.php/v1/products/29/projects":
+          return Response.json({
+            projects: [
+              { id: 50, multiple: true, status: "doing", products: [29] },
+            ],
+          });
+        case "/api.php/v1/projects/50/executions":
+          return Response.json({
+            executions: [{ id: 60, project: 50, status: "doing" }],
+          });
+        case "/api.php/v1/executions/60":
+          return Response.json({
+            id: 60,
+            project: 50,
+            status: "doing",
+            products: [{ id: 29 }],
+          });
+        case "/api.php/v1/tasks/71/close":
+          return Response.json({ id: 71 });
+        default:
+          throw new Error("Unexpected fake HTTP path");
+      }
+    });
+    vi.stubGlobal("fetch", send);
+    const client = createZentaoReadClient({
+      baseUrl: origin,
+      account: "acct_a",
+      password: "synthetic-probe-password",
+      clock: () => 1,
+    });
+    const approval = createProbeWriteApproval(
+      { ...confirmation, route: getProbeWriteRoute(request) },
+      request,
+    );
+    const options = { baseUrl: origin, client, approval, clock: () => 1 };
+    return {
+      run: () => sendAuthenticatedProbeWrite(options, request),
+      writes: () =>
+        send.mock.calls.filter(
+          ([input, init]) =>
+            init?.method === "POST" && !String(input).endsWith("/tokens"),
+        ),
+    };
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("任务属于未获 #29 归属证明的执行时，业务写请求为 0", async () => {
+    const { run, writes } = setupTaskClose(42);
+    await expect(run()).rejects.toHaveProperty("code", "PERMISSION_DENIED");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("并发重放一次性关闭批准只会消费一次，拒绝方新增写请求为 0", async () => {
+    const { run, writes } = setupTaskClose(60);
+    const first = run();
+    const second = run();
+    await expect(first).resolves.toHaveProperty("status", 200);
+    await expect(second).rejects.toHaveProperty("code", "PERMISSION_DENIED");
+    expect(writes()).toHaveLength(1);
+    await expect(run()).rejects.toHaveProperty("code", "PERMISSION_DENIED");
+    expect(writes()).toHaveLength(1);
+  });
+});
