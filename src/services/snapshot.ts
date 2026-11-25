@@ -36,6 +36,7 @@ import {
 import { isDevExecutionInMonth, planOverlapDays } from "../domain/month.ts";
 import { featureProgress, type FeatureProgress } from "../domain/progress.ts";
 import { summarizeStages } from "../domain/stage.ts";
+import { foldStageRequirements } from "./structured-notes.ts";
 
 const maxSnapshotBytes = 8 * 1024 * 1024;
 const id = z.int().positive();
@@ -201,27 +202,6 @@ function isFeature(story: Story | StoryDetail, product: number) {
     !story.deleted &&
     story.product === product
   );
-}
-
-function stageRequirements(config: TeamConfig, story?: StoryDetail) {
-  const defaults = config.stageDefaults.feature;
-  const settings = new Map(
-    Object.entries(defaults).map(([stage, rule]) => [stage, rule.required]),
-  );
-  const actions = [...(story?.actions ?? [])].sort(
-    (a, b) => (a.date ?? 0) - (b.date ?? 0) || a.id - b.id,
-  );
-  for (const action of actions) {
-    if (action.action.toLowerCase() !== "commented" || !action.actor) continue;
-    // docs/05 §6 只读取结构化阶段裁剪记录。
-    const match =
-      /^\[bzt:meta v1\]\s+stage\.([a-z]+)=(true|false)\s+\|\s+reason=\S[^\r\n]*$/u.exec(
-        action.comment?.trim() ?? "",
-      );
-    const stage = match?.[1];
-    if (stage && settings.has(stage)) settings.set(stage, match[2] === "true");
-  }
-  return Object.fromEntries(settings);
 }
 
 async function readSnapshotFile(input: string): Promise<unknown> {
@@ -394,6 +374,7 @@ class SnapshotCapture {
   constructor(
     private readonly client: ZentaoReadClient,
     private readonly config: TeamConfig,
+    private readonly store: Pick<LocalStore, "stageRequirements">,
   ) {}
 
   executions() {
@@ -634,10 +615,19 @@ class SnapshotCapture {
             ({ execution }) => linkedExecutions.includes(execution),
           );
           const tasks = await this.resolveTasks(story.id, detail, known);
+          const cachedRequirements = await readEvidence(
+            this.gaps,
+            "stageRequirements:" + story.id,
+            async () => this.store.stageRequirements.listByStory(story.id),
+          );
           const progress = featureProgress({
             ...(detail ?? story),
             ...tasks.stages,
-            required: stageRequirements(this.config, detail),
+            required: foldStageRequirements(
+              this.config.stageDefaults.feature,
+              cachedRequirements,
+              detail?.actions,
+            ),
             tasksComplete:
               tasks.complete &&
               linkedExecutions.every(
@@ -697,7 +687,7 @@ export class SnapshotService {
       throw new BztError("INVALID_INPUT", "产品编号必须是正整数。");
     if (input.out !== undefined && !pathInput.safeParse(input.out).success)
       throw new BztError("INVALID_INPUT", "输出路径不合法。");
-    const capture = new SnapshotCapture(client, config);
+    const capture = new SnapshotCapture(client, config, store);
     const executions = await capture.executions();
     const snapshots: SnapshotMetadata[] = [];
     for (const productId of products) {

@@ -39,6 +39,44 @@ const uncertainStory = {
   status: "active",
   executions: [{ id: 99, name: "历史执行" }],
 };
+const execution = {
+  id: 7,
+  project: 8,
+  name: "【产品甲】【研发】2026年11月迭代",
+  type: "sprint",
+  status: "doing",
+  begin: "2026-11-01",
+  end: "2026-11-30",
+};
+const activeStory = {
+  ...story,
+  id: 53,
+  status: "active",
+  executions: [execution],
+  plan: "21",
+};
+const plans = [
+  {
+    id: 21,
+    product: 29,
+    parent: 20,
+    title: "【负责人】权限-2026年11月",
+    begin: "2026-11-01",
+    end: "2026-11-30",
+    status: "wait",
+    deleted: false,
+  },
+  {
+    id: 22,
+    product: 29,
+    parent: 20,
+    title: "【负责人】权限-2026年12月",
+    begin: "2026-12-01",
+    end: "2026-12-31",
+    status: "wait",
+    deleted: false,
+  },
+];
 const people = [
   { id: 1, account: "alice", realname: "设计", role: "design" },
   { id: 2, account: "bob", realname: "研发", role: "dev" },
@@ -77,7 +115,14 @@ function fakeZentao() {
       ...partialProduct,
       moduleOptionMenu: [{ id: 5, name: "审批" }],
     },
-    "/api.php/v1/products/29/plans": { plans: [] },
+    "/api.php/v1/products/29/plans": { plans },
+    "/api.php/v1/products/29/releases": { releases: [] },
+    "/api.php/v2/project/view": {
+      project: { id: 8, status: "doing", multiple: true },
+      products: [29],
+    },
+    "/api.php/v1/executions/7": { id: 7, teamMembers: ["alice", "bob"] },
+    "/api.php/v1/executions/7/tasks": { tasks: [] },
     "/api.php/v1/products/30/plans": { plans: [] },
     "/api.php/v1/products/29/bugs": { bugs: [] },
     "/api.php/v1/products/30/bugs": { bugs: [] },
@@ -88,7 +133,7 @@ function fakeZentao() {
       total: 11,
     },
     "/api.php/v2/product/browse": { stories: [] },
-    "/api.php/v1/executions": { executions: [] },
+    "/api.php/v1/executions": { executions: [execution] },
     "/api.php/v2/my/work": {
       stories: [],
       pager: { recTotal: 0 },
@@ -146,6 +191,14 @@ function fakeZentao() {
       unexpected = true;
       throw new Error("评测收到未定义的假禅道写入。");
     }
+    if (route === "/api.php/v2/productplan/view")
+      return Response.json({
+        plan: plans.find(
+          ({ id }) => id === Number(url.searchParams.get("planID")),
+        ),
+        planStories: [],
+        modulePairs: [],
+      });
     if (route === "/api.php/v1/products/29/stories")
       return Response.json({ stories: [...stories.values()] });
     if (route === "/api.php/v2/story/view")
@@ -157,7 +210,8 @@ function fakeZentao() {
       });
     const item = /^\/api\.php\/v1\/stories\/(\d+)$/u.exec(route);
     if (item) {
-      const found = stories.get(Number(item[1]));
+      const found =
+        Number(item[1]) === 53 ? activeStory : stories.get(Number(item[1]));
       return Response.json(found ?? {}, { status: found ? 200 : 404 });
     }
     return Response.json(routes[route] ?? {}, {

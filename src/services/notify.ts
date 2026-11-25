@@ -60,7 +60,10 @@ const eventSchema = itemSchema.extend({ event: eventKind });
 const digestItemSchema = itemSchema.extend({
   category: z.enum(["今日到期", "逾期", "待接收", "可测试"]),
 });
-const digestOptions = z.strictObject({ force: z.boolean().optional() });
+const digestOptions = z.strictObject({
+  force: z.boolean().optional(),
+  dryRun: z.boolean().optional(),
+});
 type Item = z.output<typeof itemSchema>;
 type Target = z.output<typeof targetSchema>;
 type DigestItem = z.input<typeof digestItemSchema>;
@@ -74,6 +77,7 @@ type Outcome = { skipped: boolean; notified: Notice[] };
 type DigestOutcome = Outcome & {
   completeness: "complete" | "partial";
   gaps: readonly Gap[];
+  preview?: Partial<Record<DigestItem["category"], number>>;
 };
 type DigestSource = { items: readonly DigestItem[]; gaps?: readonly Gap[] };
 
@@ -194,14 +198,15 @@ export class NotifyService {
     requireCollector(env.ZENTAO_ACCOUNT, config.notify.digest.collector);
     const now = clock();
     const day = formatLocalDate(now, config.timezone);
+    const { dryRun, force } = parsed.data;
     if (
-      !env.BZT_WECOM_WEBHOOK?.trim() ||
+      (!dryRun && !env.BZT_WECOM_WEBHOOK?.trim()) ||
       (config.notify.digest.workdaysOnly &&
-        !parsed.data.force &&
+        !force &&
         !isWorkday(day, createWorkCalendar(config.calendar)))
     )
       return digestReport(report());
-    if (isQuiet(now, config))
+    if (!dryRun && isQuiet(now, config))
       return digestReport(report([notice(null, "queued")]));
     if (!loadDigest)
       throw new BztError("CONFIG_MISSING", "缺少摘要数据读取服务。");
@@ -209,6 +214,12 @@ export class NotifyService {
     const selected = z.array(digestItemSchema).safeParse(items);
     if (!selected.success)
       throw new BztError("INVALID_INPUT", "摘要事项字段不合法。");
+    if (dryRun) {
+      const preview: NonNullable<DigestOutcome["preview"]> = {};
+      for (const { category } of selected.data)
+        preview[category] = (preview[category] ?? 0) + 1;
+      return { ...digestReport(report(), gaps), preview };
+    }
     return digestReport(
       await this.deliver(
         "digest",
@@ -297,7 +308,7 @@ export class NotifyService {
           continue;
         }
         if (/^\+?\d{7,15}$/u.test(mapping)) mentionedPhones.add(mapping);
-        else if (/^[\w.-]+$/u.test(mapping)) mentionedIds.add(mapping);
+        else if (/^[\w.@-]+$/u.test(mapping)) mentionedIds.add(mapping);
       }
       let ok = false;
       try {
@@ -477,13 +488,14 @@ async function collectDigest(
 
 export async function runDailyDigest(
   runtime: SchedulerRuntime,
-  options: { config?: string; force?: boolean },
+  options: { config?: string; force?: boolean; dryRun?: boolean },
 ): Promise<DigestOutcome> {
   const { env, clock, logSink } = runtime;
   const cli = { config: options.config };
   const { config: fileConfig } = await loadFileConfig({ ...runtime, cli });
   requireCollector(env.ZENTAO_ACCOUNT, fileConfig.notify.digest.collector);
-  if (!env.BZT_WECOM_WEBHOOK?.trim()) return digestReport(report());
+  if (!options.dryRun && !env.BZT_WECOM_WEBHOOK?.trim())
+    return digestReport(report());
   const config = await loadConfig({ ...runtime, cli });
   const { baseUrl, account } = config.zentao;
   const password = env.ZENTAO_PASSWORD;
@@ -537,7 +549,10 @@ export async function runDailyDigest(
         );
       },
     });
-    return await service.sendDailyDigest({ force: options.force });
+    return await service.sendDailyDigest({
+      force: options.force,
+      dryRun: options.dryRun,
+    });
   } finally {
     store.close();
   }

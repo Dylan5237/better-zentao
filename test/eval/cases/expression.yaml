@@ -55,3 +55,25 @@
   expectedTool: "get_my_work"
   expectedArgs: { "groups": ["maintained"] }
   replyHas: ["正文角色标签", "query_stories", "maintainer"]
+
+- id: "P2-EXPRESSION-PREVIEW"
+  kind: "expression"
+  prompt: "把三十一号标记成只涉及文案无需测试，先给我过一下"
+  expectedTool: "set_story_meta"
+  expectedArgs:
+    {
+      "storyId": 31,
+      "stageRequirements":
+        { "test": { "required": false, "reason": "仅文案" } },
+    }
+  check: "preview"
+  replyHas: ["预览", "确认"]
+
+- id: "P2-EXPRESSION-SCOPE"
+  kind: "expression"
+  prompt: "看下产品甲十一月承诺报表，记得告诉我数据时间"
+  expectedTool: "get_plan_progress"
+  expectedArgs:
+    { "view": "commitment", "month": "2026-11", "product": "产品甲" }
+  check: "scope"
+  replyHas: ["范围", "数据时间"]

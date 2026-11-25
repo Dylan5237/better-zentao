@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -130,7 +130,7 @@ describe("CR-001 配置页生成服务", () => {
     });
     expect(render).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        modules: { 42: [{ id: 1201, name: "/权限管理" }] },
+        modules: { 42: [{ id: 1201, name: "权限管理" }] },
         users: [
           {
             account: "zhangsan",
@@ -158,6 +158,42 @@ describe("CR-001 配置页生成服务", () => {
     expect(html).toContain("权限管理");
   });
 
+  it("WP-38 跳过停用或仅探查产品的模块，拒绝覆盖配置文件的其他路径", async () => {
+    const { client, requests } = fakeZentao();
+    const config = {
+      products: {
+        42: { name: "产品甲", state: "runtime", enabled: false },
+        43: { name: "产品乙", state: "runtime", probeOnly: true },
+      },
+    };
+    const outPath = join(dir, "out.html");
+    const result = await generateConfigEditorPage({
+      config,
+      client,
+      outPath,
+      render: renderTeamConfigEditorHtml,
+    });
+    expect(result.completeness).toBe("complete");
+    expect(requests).not.toContain("/zentao/api.php/v1/products/42");
+    expect(requests).not.toContain("/zentao/api.php/v1/products/43");
+    const configPath = join(dir, "Team.json");
+    const alias = join(dir, "alias.html");
+    await writeFile(configPath, "{}");
+    await link(configPath, alias);
+    for (const path of [
+      alias,
+      ...(process.platform === "win32" ? [join(dir, "TEAM.JSON")] : []),
+    ])
+      await expect(
+        generateConfigEditorPage({
+          configPath,
+          outPath: path,
+          render: renderTeamConfigEditorHtml,
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(await readFile(configPath, "utf8")).toBe("{}");
+  });
+
   it("区分已确认空清单、目录分页截断和读取失败", async () => {
     const { client } = fakeZentao({ truncateProducts: true, failUsers: true });
     const render = vi.fn(renderTeamConfigEditorHtml);
@@ -173,7 +209,7 @@ describe("CR-001 配置页生成服务", () => {
     ]);
     expect(render).toHaveBeenCalledWith(
       expect.objectContaining({
-        modules: { 42: [{ id: 1201, name: "/权限管理" }], 43: [] },
+        modules: { 42: [{ id: 1201, name: "权限管理" }], 43: [] },
       }),
     );
   });

@@ -53,7 +53,7 @@ import {
 } from "../domain/progress.ts";
 import { summarizeRelease } from "../domain/release.ts";
 import { resolveStoryRoles } from "../domain/roles.ts";
-import { detectStage, summarizeStages, type Stage } from "../domain/stage.ts";
+import { detectStage, summarizeStages } from "../domain/stage.ts";
 import {
   isCancelledTask,
   isTaskFinished,
@@ -62,6 +62,13 @@ import {
 } from "../domain/task.ts";
 import { evaluateRules, type RuleInput } from "../rules/index.ts";
 import { DirectoryService } from "./directory.ts";
+import {
+  cachedWaiverEntries,
+  foldRuleWaivers,
+  foldStageRequirements,
+  readJsonNote,
+  resolveReleaseWaiver,
+} from "./structured-notes.ts";
 
 interface ManagementOptions {
   client: ZentaoReadClient;
@@ -80,7 +87,8 @@ interface ManagementOptions {
     >
   >;
   calendar?: WorkCalendar;
-  directory?: Pick<DirectoryService, "resolveTeam">;
+  directory?: Pick<DirectoryService, "resolveTeam"> &
+    Partial<Pick<DirectoryService, "listAccountNames">>;
 }
 
 type PlanData = GetPlanProgressOutput["data"];
@@ -109,32 +117,6 @@ const rescheduleNote = z.strictObject({
   toMonth: monthText,
   reason: z.string().trim().min(1),
 });
-const waiverNote = z.strictObject({
-  rule: z.literal("R13"),
-  version: z.string().trim().min(1).optional(),
-  reason: z.string().trim().min(1),
-});
-const metaNote = z.object({
-  stageRequirements: z
-    .record(z.string(), z.object({ required: z.boolean() }))
-    .optional(),
-});
-
-function structuredNote<T>(
-  kind: string,
-  comment: string,
-  schema: z.ZodType<T>,
-) {
-  const prefix = `[bzt:${kind} v1 `;
-  if (!comment.startsWith(prefix) || !comment.endsWith("]")) return undefined;
-  try {
-    const value: unknown = JSON.parse(comment.slice(prefix.length, -1));
-    return schema.safeParse(value).data;
-  } catch {
-    return undefined;
-  }
-}
-
 function historyReasons(
   details: readonly StoryDetail[],
   from: string,
@@ -147,7 +129,7 @@ function historyReasons(
     );
     for (const { actor, action, comment } of ordered) {
       if (!actor || action.toLowerCase() !== "commented") continue;
-      const note = structuredNote(
+      const note = readJsonNote(
         "reschedule",
         comment?.trim() ?? "",
         rescheduleNote,
@@ -248,6 +230,8 @@ class ManagementRead {
     number,
     Promise<{ items: Bug[]; truncated: boolean } | undefined>
   >();
+  private people = new Map<string, string>();
+  private peopleLoad?: Promise<void>;
   private readonly productsById = new Map<number, ProductScope>();
 
   constructor(readonly options: ManagementOptions) {
@@ -553,10 +537,35 @@ class ManagementRead {
     return url.href;
   }
 
+  async loadPeople(evidence: readonly StoryEvidence[]) {
+    const directory = this.options.directory;
+    if (
+      !directory?.listAccountNames ||
+      !evidence.some(
+        ({ owner, roles }) => owner || roles.maintainer || roles.receiver,
+      )
+    )
+      return;
+    this.peopleLoad ??= this.read("users", () =>
+      directory.listAccountNames?.(),
+    ).then((result) => {
+      if (!result) return;
+      this.people = result.people;
+      for (const { source, reason } of result.gaps) this.gap(source, reason);
+    });
+    await this.peopleLoad;
+  }
+
   storyItem(evidence: StoryEvidence, plan?: ProductPlan): StoryItem {
     const { row, owner, progress, roles } = evidence;
     const person = (account: string | null): StoryItem["currentOwner"] =>
-      account ? { account, realname: account, untrusted: true } : undefined;
+      account
+        ? {
+            account,
+            realname: bounded(this.people.get(account) ?? ""),
+            untrusted: true,
+          }
+        : undefined;
     return {
       id: row.id,
       title: bounded(row.title),
@@ -677,26 +686,30 @@ async function storyEvidence(
   options: { detail?: boolean; bugs?: readonly Bug[] } = {},
 ) {
   const { config, store } = state.options;
-  const required: Partial<Record<Stage, boolean>> = {};
-  for (const stage of featureStages)
-    required[stage] = config.stageDefaults.feature[stage].required;
   const cached = await state.read(
-    `stageRequirements:${row.id}`,
+    "stageRequirements:" + row.id,
     () => store?.stageRequirements?.listByStory(row.id) ?? [],
+  );
+  const initialRequirements = foldStageRequirements(
+    config.stageDefaults.feature,
+    cached,
   );
   const knownStages = summarizeStages(stageInputs(known, config)).stages;
   const needsWaiver = featureStages.some(
-    (stage) => required[stage] && knownStages[stage]?.status === "cancelled",
+    (stage) =>
+      initialRequirements[stage] && knownStages[stage]?.status === "cancelled",
   );
   const shouldRead =
     options.detail ||
+    row.status === "active" ||
     !known.length ||
     needsWaiver ||
     Boolean(cached?.length) ||
     (row.status === "closed" &&
       featureStages.some(
         (stage) =>
-          required[stage] && knownStages[stage]?.status !== "completed",
+          initialRequirements[stage] &&
+          knownStages[stage]?.status !== "completed",
       ));
   const detail = await (shouldRead
     ? state.detail(row.id)
@@ -743,41 +756,22 @@ async function storyEvidence(
   );
   if (incompleteTree || inspect.some((id) => !taskMap.has(id)))
     state.gap(`story:${row.id}:tasks`, "需求关联任务或父子关系读取不完整。");
-  for (const waiver of cached ?? []) {
-    const stage = featureStages.find((name) => name === waiver.stage);
-    if (stage) required[stage] = waiver.required;
-  }
   const actions = [...(detail?.actions ?? [])].sort(
     (a, b) => (a.date ?? 0) - (b.date ?? 0) || a.id - b.id,
   );
-  for (const action of actions) {
-    if (action.action.toLowerCase() !== "commented" || !action.actor) continue;
-    const comment = action.comment?.trim() ?? "";
-    const settings = structuredNote(
-      "meta",
-      comment,
-      metaNote,
-    )?.stageRequirements;
-    for (const stage of featureStages) {
-      const requirement = settings?.[stage];
-      if (requirement) required[stage] = requirement.required;
-    }
-    const meta =
-      /^\[bzt:meta v1\]\s+stage\.([a-z]+)=(true|false)\s+\|\s+reason=\S[^\r\n]*$/u.exec(
-        comment,
-      );
-    const stage = featureStages.find((name) => name === meta?.[1]);
-    if (stage) required[stage] = meta?.[2] === "true";
-  }
+  const required = foldStageRequirements(
+    config.stageDefaults.feature,
+    cached,
+    actions,
+  );
   const stageTasks = stageInputs(rows, config);
   const stages = summarizeStages(stageTasks);
   const summary = {
     ...stages,
     tasksComplete: tasksComplete && !incompleteTree,
   };
-  const module =
-    config.modules[`${row.product}/${row.module}`] ??
-    config.moduleDefaults[row.product];
+  const module = config.modules[candidate.product + ":" + candidate.module];
+  const fallback = config.moduleDefaults[candidate.product];
   const stored = store?.storyRoles
     ? await state.read(`storyRoles:${row.id}`, () => {
         try {
@@ -791,7 +785,10 @@ async function storyEvidence(
     : undefined;
   const roles = resolveStoryRoles({
     story: candidate,
-    module,
+    module: {
+      maintainer: module?.designLead ?? fallback?.designLead,
+      devLead: module?.devLead ?? fallback?.devLead,
+    },
     ...(stored ? { stored } : {}),
   });
   // docs/04 §4.4。测试任务完成后，严重 Bug 仍可阻止需求退出测试阶段。
@@ -913,6 +910,19 @@ async function monthlyPool(
   };
 }
 
+function leafStories(evidence: readonly StoryEvidence[]) {
+  const parents = new Set(
+    evidence.flatMap(({ row, detail }) => [row.parent, detail?.parent]),
+  );
+  return evidence.filter(
+    ({ row, detail }) =>
+      !parents.has(row.id) &&
+      !row.isParent &&
+      !detail?.isParent &&
+      !detail?.children?.length,
+  );
+}
+
 function normalizePlanStory(
   evidence: StoryEvidence,
   planKind?: PlanStory["planKind"],
@@ -939,61 +949,13 @@ async function releaseWaivers(
     `waivers:${story.row.id}`,
     () => store?.waivers?.listByObject("story", String(story.row.id)) ?? [],
   );
-  const prefix = config.versionTag.keywordPrefix;
-  const versionTags =
-    story.row.keywords
-      ?.split(/[\s,，、;；]+/u)
-      .filter((tag) => tag.startsWith(prefix)) ?? [];
-  const belongsToCurrentVersion = (at: number | null) =>
-    versionTags.length === 1 &&
-    versionTags[0] === `${prefix}${version}` &&
-    at != null &&
-    story.row.lastEditedDate != null &&
-    at >= story.row.lastEditedDate;
-  const shared = story.actions
-    .flatMap(({ actor, action, comment, date }) => {
-      if (
-        !actor ||
-        action.toLowerCase() !== "commented" ||
-        !config.roles.PM?.includes(actor)
-      )
-        return [];
-      const text = comment?.trim() ?? "";
-      const note = structuredNote("waiver", text, waiverNote);
-      if (
-        note &&
-        (note.version === version ||
-          (note.version === undefined && belongsToCurrentVersion(date)))
-      )
-        return [{ approvedBy: actor, reason: note.reason }];
-      const entry =
-        /^\[bzt:waiver v1\]\s+rule=R13\s+\|\s+version=([^\s|]+)\s+\|\s+approvedBy=([^\s|]+)\s+\|\s+reason=(\S[^\r\n]*)$/u.exec(
-          text,
-        );
-      return entry?.[1] === version && entry[2] === actor && entry[3]?.trim()
-        ? [{ approvedBy: actor, reason: entry[3] }]
-        : [];
-    })
-    .at(-1);
-  // 本地表没有版本列。当前唯一标签与编辑时间必须同时支持例外归属。
-  const local = (waivers ?? []).find(
-    ({ ruleId, approvedBy, reason, at }) =>
-      ruleId === "R13" &&
-      config.roles.PM?.includes(approvedBy) &&
-      reason.trim() &&
-      belongsToCurrentVersion(at),
+  return resolveReleaseWaiver(
+    config,
+    story.row,
+    story.actions,
+    waivers ?? [],
+    version,
   );
-  const waiver = shared ?? local;
-  return waiver
-    ? [
-        {
-          storyId: story.row.id,
-          version,
-          approvedBy: waiver.approvedBy,
-          reason: bounded(waiver.reason, 500),
-        },
-      ]
-    : [];
 }
 
 export class ManagementService {
@@ -1082,13 +1044,12 @@ export class ManagementService {
       state.inferences.push({
         field: "storyDeliveryRate",
         level: "inferred",
-        basis:
-          "计划列表投影不含需求父子标记，已补读详情可识别父级需求，其余以计划列表为准。",
+        basis: "需求详情读取不完整，按计划列表中的父子标记排除父需求。",
       });
     return {
       view: "plan",
       ...summarizePlan(
-        evidence.map((item) => normalizePlanStory(item, "l3")),
+        leafStories(evidence).map((item) => normalizePlanStory(item, "l3")),
         state.asOf,
         groupBy,
       ),
@@ -1191,14 +1152,19 @@ export class ManagementService {
         const known = grouped.get(row.id) ?? [];
         const test = summarizeStages(stageInputs(known, config)).stages.test;
         return storyEvidence(state, row, known, complete, {
-          detail: test?.status !== "completed" || storyBugs.some(isSerious),
+          detail:
+            row.isParent !== false ||
+            test?.status !== "completed" ||
+            storyBugs.some(isSerious),
           bugs: storyBugs,
         });
       }),
     );
+    const releaseLeaves = leafStories(evidence);
+    state.hints.push("发布门禁按叶子需求计算，父需求及其直属任务不计入。");
     const waivers = (
       await Promise.all(
-        evidence
+        releaseLeaves
           .filter(({ progress }) => progress !== "已取消")
           .map((item) => releaseWaivers(state, item, version)),
       )
@@ -1207,21 +1173,19 @@ export class ManagementService {
       product: product?.id ?? 0,
       version,
       keywordPrefix: prefix,
-      stories: evidence
-        .filter(({ detail }) => !detail?.children?.length)
-        .map((item) => {
-          const original = selected.find(({ id }) => id === item.row.id);
-          return {
-            ...item.row,
-            plan: original?.plan,
-            keywords: original?.keywords,
-            tasks: item.progress === "已取消" ? [] : item.tasks,
-            progress: item.progress,
-            tasksComplete: item.tasksComplete,
-            stages: item.stages,
-            bugs: related.get(item.row.id) ?? [],
-          };
-        }),
+      stories: releaseLeaves.map((item) => {
+        const original = selected.find(({ id }) => id === item.row.id);
+        return {
+          ...item.row,
+          plan: original?.plan,
+          keywords: original?.keywords,
+          tasks: item.progress === "已取消" ? [] : item.tasks,
+          progress: item.progress,
+          tasksComplete: item.tasksComplete,
+          stages: item.stages,
+          bugs: related.get(item.row.id) ?? [],
+        };
+      }),
       legacyPlans: legacyPlans.map(({ id, end, product }) => ({
         id,
         end,
@@ -1502,9 +1466,8 @@ export class ManagementService {
       string | null,
       IterationData["complianceByOwner"][number]["counts"]
     >();
-    for (const item of evidence) {
+    for (const item of leafStories(evidence)) {
       const { row, actions, tasksComplete, progress } = item;
-      if (item.detail?.children?.length) continue;
       const linked = (grouped.get(row.id) ?? []).filter((task) =>
         leafIds.has(task.id),
       );
@@ -1561,7 +1524,22 @@ export class ManagementService {
       const planComplete = !state.gaps.some(
         ({ source }) => source === `plans:${row.product}`,
       );
+      const waivers = await state.read(
+        "waivers:" + row.id,
+        () =>
+          this.options.store?.waivers?.listByObject("story", String(row.id)) ??
+          [],
+      );
       const ruleInput: RuleInput = {
+        waivers: foldRuleWaivers(
+          "story",
+          row.id,
+          cachedWaiverEntries(waivers ?? []),
+          {
+            actions: item.actions,
+            approvers: [...(config.roles.PM ?? []), item.roles.maintainer],
+          },
+        ),
         story: item.detail,
         tasksComplete,
         required: item.required,
@@ -1637,6 +1615,7 @@ export class ManagementService {
     const byStory = new Map(evidence.map((item) => [item.row.id, item]));
     const groups: IterationData["crossProduct"] = [];
     const seen = new Set<string>();
+    await state.loadPeople(evidence);
     const project = (item: StoryEvidence) => ({
       ...state.storyItem(item),
       stages: Object.entries(item.stages).map(([stage, { status }]) => ({
@@ -1687,6 +1666,7 @@ export class ManagementService {
               detail: true,
             });
             byStory.set(id, peer);
+            await state.loadPeople([peer]);
           }
         }
         if (!peer || peer.row.product === row.product) continue;
@@ -1840,17 +1820,20 @@ export class ManagementService {
       }),
     );
     const teamFilter = teamIds.length > 0;
-    const items = scoped.filter(({ row, owner, roles, tasks, detail }) => {
-      if (detail?.children?.length) return false;
-      if (!teamFilter) return true;
-      const module = config.modules[`${row.product}/${row.module}`];
-      if (module?.team) return teamIds.includes(module.team);
-      return [
-        owner,
-        roles.receiver,
-        ...tasks.map(({ assignedTo }) => assignedTo),
-      ].some((account) => account != null && accounts.has(account));
-    });
+    const items = leafStories(scoped).filter(
+      ({ row, owner, roles, tasks, detail }) => {
+        if (detail?.children?.length) return false;
+        if (!teamFilter) return true;
+        const module = config.modules[`${row.product}/${row.module}`];
+        if (module?.team) return teamIds.includes(module.team);
+        return [
+          owner,
+          roles.receiver,
+          ...tasks.map(({ assignedTo }) => assignedTo),
+        ].some((account) => account != null && accounts.has(account));
+      },
+    );
+    await state.loadPeople(items);
     const byId = new Map(items.map((item) => [item.row.id, item]));
     const previousIds = [...snapshotIds, ...(historyIds ?? [])].filter(
       (id) => byId.has(id) || !rows.has(id),
@@ -1933,7 +1916,7 @@ export class ManagementService {
             ? fallbackProducts.length > 0
               ? "mixed"
               : "snapshot"
-            : historyIds
+            : historyIds?.length
               ? "history"
               : null,
       },

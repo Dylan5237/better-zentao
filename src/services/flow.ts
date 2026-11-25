@@ -82,6 +82,7 @@ interface FlowOptions {
 const metadata = z.strictObject({
   stageRequirements: stageRequirementsSchema.optional(),
   roles: metaRolesSchema.optional(),
+  comment: z.string().optional(),
 });
 const rescheduleNote = z.strictObject({
   fromMonth: normalizedMonthSchema.nullable(),
@@ -531,8 +532,11 @@ export class FlowService {
           : `请在禅道手动激活需求 ${storyUrl}。`,
       });
     if (
-      !fromDesign &&
-      ["story.assign", "story.comment"].some(
+      [
+        "story.assign",
+        "story.comment",
+        ...(fromDesign ? ["story.create", "story.linkStory"] : []),
+      ].some(
         (action) =>
           getCapability(action, instanceVersion).state !== "verified" ||
           config.write?.disableCapabilities.includes(action),
@@ -556,6 +560,12 @@ export class FlowService {
         ),
       }),
     );
+    if (!fromDesign)
+      warnings.push({
+        code: "MANUAL_ROLE_TAG",
+        message:
+          "禅道 22.6 的需求编辑不能改写正文角色标签。接收人将记录在结构化备注与本地状态中。",
+      });
     const comment =
       input.comment ??
       (fromDesign
@@ -564,7 +574,9 @@ export class FlowService {
     steps.push(
       follow("story.comment", {
         comment: field(
-          comment,
+          fromDesign
+            ? comment
+            : note("meta", { roles: { receiver: person.account }, comment }),
           input.comment === undefined ? "default" : "user",
         ),
       }),
@@ -732,6 +744,7 @@ export class FlowService {
       throw new BztError(
         "CAPABILITY_UNVERIFIED",
         `正文变更能力尚未验证，请在禅道编辑需求 ${this.link("story-edit", storyId)}。`,
+        { manual: { kind: "story_spec", id: storyId } },
       );
     const story = await this.readStory(client, storyId);
     const warnings: Warnings = [];

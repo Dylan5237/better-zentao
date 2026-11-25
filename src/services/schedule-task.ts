@@ -57,6 +57,7 @@ export async function runScheduleTask(
     action: string;
     target: string;
     dryRun?: boolean;
+    config?: string;
   },
 ) {
   const parsed = argsSchema.safeParse(options);
@@ -64,7 +65,10 @@ export async function runScheduleTask(
     throw new BztError("INVALID_INPUT", "任务计划参数不合法。");
   const { action, target, dryRun = false } = parsed.data;
   const { env, clock } = options;
-  const { config, stateDir } = await loadFileConfig(options);
+  const { config, stateDir } = await loadFileConfig({
+    ...options,
+    cli: { config: options.config },
+  });
   if (action === "install")
     requireCollector(
       env.ZENTAO_ACCOUNT,
@@ -120,7 +124,10 @@ export async function runScheduleTask(
     .replaceAll("{{TRIGGER_TIME}}", `${day}T${time}:00`)
     .replaceAll("{{DAY_OF_MONTH}}", String(config.snapshot.day))
     .replaceAll("{{WORKING_DIR}}", "%USERPROFILE%")
-    .replaceAll("{{ARGS}}", `/d /c bzt ${target}`);
+    .replaceAll(
+      "{{ARGS}}",
+      `/d /c bzt ${target === "snapshot" ? "snapshot capture" : target}`,
+    );
   if (!dryRun) await publishXml(directory, xmlPath, xml);
   return {
     ...base,

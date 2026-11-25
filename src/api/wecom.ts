@@ -9,7 +9,7 @@ const messageSchema = z.strictObject({
     .trim()
     .min(1)
     .refine((value) => Buffer.byteLength(value) <= 2048),
-  mentionedIds: z.array(z.string().regex(/^[\w.-]+$/u)).optional(),
+  mentionedIds: z.array(z.string().regex(/^[\w.@-]+$/u)).optional(),
   mentionedPhones: z.array(z.string().regex(/^\+?\d{7,15}$/u)).optional(),
 });
 

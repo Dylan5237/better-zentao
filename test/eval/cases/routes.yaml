@@ -517,3 +517,82 @@
   prompt: "把最近五条操作结果列出来"
   expectedTool: "get_operation"
   expectedArgs: { "recent": 5 }
+
+- id: "P2-ROUTE-PLAN"
+  kind: "route"
+  prompt: "帮我看产品甲十一月计划的交付情况"
+  expectedTool: "get_plan_progress"
+  expectedArgs: { "view": "plan", "product": "产品甲", "month": "2026-11" }
+
+- id: "P2-ROUTE-RELEASE"
+  kind: "route"
+  prompt: "产品甲 V1.2.3 能发么"
+  expectedTool: "get_plan_progress"
+  expectedArgs: { "view": "release", "product": "产品甲", "version": "V1.2.3" }
+
+- id: "P2-ROUTE-COMMITMENT"
+  kind: "route"
+  prompt: "月初答应的活兑现了多少，查产品甲十一月"
+  expectedTool: "get_plan_progress"
+  expectedArgs:
+    { "view": "commitment", "product": "产品甲", "month": "2026-11" }
+
+- id: "P2-ROUTE-ITERATION"
+  kind: "route"
+  prompt: "看产品甲十一月研发迭代投入"
+  expectedTool: "get_plan_progress"
+  expectedArgs: { "view": "iteration", "product": "产品甲", "month": "2026-11" }
+
+- id: "P2-ROUTE-QUEUE"
+  kind: "route"
+  prompt: "十一月研发队列还有什么"
+  expectedTool: "get_monthly_dev_queue"
+  expectedArgs: { "month": "2026-11" }
+
+- id: "P2-ROUTE-SPLIT"
+  kind: "route"
+  prompt: "五十三号在七号迭代拆三段。鲍勃研发是 11 月 24 到 25 日，鲍勃测试是 26 到 27 日，爱丽丝 30 日验收。都按 2026 年算。"
+  expectedTool: "decompose_stories"
+  expectedArgs:
+    {
+      "template": "feature",
+      "storyIds": [53],
+      "execution": "7",
+      "assignees": { "dev": "bob", "test": "bob", "acceptance": "alice" },
+      "dates":
+        {
+          "dev": { "estStarted": "2026-11-24", "deadline": "2026-11-25" },
+          "test": { "estStarted": "2026-11-26", "deadline": "2026-11-27" },
+          "acceptance":
+            { "estStarted": "2026-11-30", "deadline": "2026-11-30" },
+        },
+    }
+
+- id: "P2-ROUTE-HANDOFF"
+  kind: "route"
+  prompt: "把三十一号激活交给研发鲍勃"
+  expectedTool: "handoff_story"
+  expectedArgs: { "storyId": 31, "mode": "activate", "receiver": "bob" }
+
+- id: "P2-ROUTE-MOVE"
+  kind: "route"
+  prompt: "五十三号因为人手不足挪到十二月"
+  expectedTool: "reschedule_story"
+  expectedArgs: { "storyIds": [53], "toMonth": "2026-12", "reason": "人手不足" }
+
+- id: "P2-ROUTE-CLOSE"
+  kind: "route"
+  prompt: "先预览把三十一号需求取消关闭"
+  expectedTool: "close_stories"
+  expectedArgs: { "mode": "story", "storyIds": [31], "closedReason": "cancel" }
+
+- id: "P2-ROUTE-META"
+  kind: "route"
+  prompt: "三十一号只是文案，登记测试非必需"
+  expectedTool: "set_story_meta"
+  expectedArgs:
+    {
+      "storyId": 31,
+      "stageRequirements":
+        { "test": { "required": false, "reason": "仅文案" } },
+    }

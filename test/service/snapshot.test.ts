@@ -87,6 +87,7 @@ function fixtureClient({
   failPlan = false,
   truncateTasks = false,
   failDetail = false,
+  sharedRequirements = false,
 } = {}) {
   return mockReadClient((url) => {
     const path = url.pathname.replace("/zentao/api.php/", "");
@@ -121,12 +122,43 @@ function fixtureClient({
         return Response.json({ bugs: [] });
       case "v1/executions/7/tasks":
         return Response.json(
-          truncateTasks ? { tasks: [task], total: 1000 } : { tasks: [task] },
+          truncateTasks
+            ? { tasks: [task], total: 1000 }
+            : {
+                tasks: sharedRequirements
+                  ? [
+                      { ...task, status: "done" },
+                      {
+                        ...task,
+                        id: 52,
+                        name: "【测试】快照",
+                        type: "test",
+                        status: "done",
+                      },
+                    ]
+                  : [task],
+              },
         );
       default: {
         const detail = stories.find(({ id }) => path === `v1/stories/${id}`);
         if (detail && !(detail.id === 31 && failDetail))
-          return Response.json(detail);
+          return Response.json(
+            sharedRequirements && detail.id === 31
+              ? {
+                  ...detail,
+                  actions: [
+                    {
+                      id: 1,
+                      actor: "acct_owner",
+                      action: "commented",
+                      date: "2026-10-30 09:00:00",
+                      comment:
+                        '[bzt:meta v1 {"stageRequirements":{"acceptance":{"required":false}}}]',
+                    },
+                  ],
+                }
+              : detail,
+          );
         return Response.json({}, { status: 404 });
       }
     }
@@ -423,7 +455,6 @@ describe("WP-36 月度承诺快照", () => {
 
   it.each(
     [
-      [],
       ["collect"],
       ["capture", "--in", "private-value"],
       ["capture", "--month", "2026-13"],
@@ -441,4 +472,28 @@ describe("WP-36 月度承诺快照", () => {
     expect(result.exitCode).toBe(2);
     expect(JSON.stringify(result)).not.toContain("private-value");
   });
+});
+
+it("WP-38 无子命令与 capture 使用相同的采集入口", async () => {
+  const runtime = { env: {}, clock };
+  const result = await runSnapshotSchedulerCli([], runtime);
+  expect(result).toEqual(await runSnapshotSchedulerCli(["capture"], runtime));
+  expect(result.exitCode).toBe(1);
+});
+
+it("WP-38 快照用共享评论覆盖本地阶段要求，反映可关闭进展", async () => {
+  const { store, service } = setup({ fixture: { sharedRequirements: true } });
+  store.stageRequirements.upsert({
+    storyId: 31,
+    stage: "acceptance",
+    required: true,
+    waiverReason: null,
+    decidedBy: "acct_owner",
+    decidedAt: clock(),
+  });
+  const result = await service.capture({ month: "本月" });
+  const snapId = result.snapshots[0]?.snapId ?? "";
+  expect(store.snapshots.getSnapshot(snapId)?.items).toContainEqual(
+    expect.objectContaining({ storyId: 31, progressAtSnap: "可关闭" }),
+  );
 });

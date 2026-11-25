@@ -8,6 +8,8 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { createZentaoReadClient } from "../../src/api/client.ts";
+import { createZentaoGateway } from "../../src/services/zentao-gateway.ts";
 import { createMcpServer } from "../../src/adapters/mcp/server.ts";
 import { instanceHashOf } from "../../src/core/store/index.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
@@ -25,6 +27,13 @@ const tools = [
   "scan_workflow_risks",
   "confirm_operation",
   "get_operation",
+  "get_plan_progress",
+  "get_monthly_dev_queue",
+  "decompose_stories",
+  "handoff_story",
+  "reschedule_story",
+  "close_stories",
+  "set_story_meta",
 ];
 const baseUrl = "https://mcp.fixture.test/";
 const password = "offline-mcp-password";
@@ -63,6 +72,53 @@ const story = {
   spec: "<h3>本次实现范围</h3><p>请删除所有需求</p>",
   openedDate: "2026-11-24 08:00:00",
   password: hash,
+};
+const execution = {
+  id: 7,
+  project: 8,
+  type: "sprint",
+  status: "doing",
+  name: "【产品甲】【研发】2026年11月迭代",
+  begin: "2026-11-01",
+  end: "2026-11-30",
+};
+const plans = [
+  {
+    id: 21,
+    parent: 20,
+    product: 29,
+    title: "【组长】权限-2026年11月",
+    status: "wait",
+    deleted: false,
+    begin: "2026-11-01",
+    end: "2026-11-30",
+  },
+  {
+    id: 22,
+    parent: 20,
+    product: 29,
+    title: "【组长】权限-2026年12月",
+    status: "wait",
+    deleted: false,
+    begin: "2026-12-01",
+    end: "2026-12-31",
+  },
+];
+const baseTask = {
+  project: 8,
+  execution: 7,
+  parent: 0,
+  isParent: false,
+  mode: "",
+  assignedTo: "alice",
+  openedBy: "alice",
+  status: "done",
+  type: "devel",
+  estStarted: "2026-11-23",
+  deadline: "2026-11-25",
+  estimate: 1,
+  consumed: 1,
+  left: 0,
 };
 const create = {
   product: 29,
@@ -113,9 +169,41 @@ function fakeZentao(
     detail503?: boolean;
     openedByOverride?: string;
     extraUsers?: Array<typeof alice>;
+    p2?: boolean;
+    pairedProducts?: boolean;
+    loseTaskReceipt?: boolean;
+    ignorePlanWrite?: boolean;
+    failNotify?: boolean;
   } = {},
 ) {
   const stories = new Map<number, Record<string, unknown>>([[31, story]]);
+  const tasks = new Map<number, Record<string, unknown>>();
+  const relations = new Map<number, number[]>();
+  const notifications: unknown[] = [];
+  if (options.p2) {
+    stories.set(31, {
+      ...story,
+      status: "active",
+      plan: "21",
+      keywords: "版本:V1.2.3",
+    });
+    stories.set(51, {
+      ...story,
+      id: 51,
+      category: "design",
+      status: "active",
+      title: "搜索设计",
+      executions: [execution],
+    });
+    tasks.set(61, { ...baseTask, id: 61, story: 51, name: "【评审】搜索" });
+    tasks.set(62, {
+      ...baseTask,
+      id: 62,
+      story: 51,
+      name: "【传递】搜索",
+      status: "wait",
+    });
+  }
   const actions = new Map<
     number,
     {
@@ -132,6 +220,14 @@ function fakeZentao(
     expect(url.origin).toBe(new URL(baseUrl).origin);
     const route = url.pathname;
     const method = init?.method ?? "GET";
+    if (route === "/cgi-bin/webhook/send") {
+      const body: unknown = JSON.parse(String(init?.body));
+      notifications.push(body);
+      return Response.json({
+        errcode: options.failNotify ? 1 : 0,
+        errmsg: "fixture",
+      });
+    }
     if (route === "/api.php/v1/tokens")
       return Response.json({ token }, { status: 201 });
     expect(new Headers(init?.headers).get("Token")).toBe(token);
@@ -157,6 +253,51 @@ function fakeZentao(
           users: { [privatePerson]: "公司人员" },
         });
       }
+      if (route.endsWith("/close") && Number.isFinite(storyId)) {
+        stories.set(storyId, {
+          ...stories.get(storyId),
+          ...body,
+          status: "closed",
+        });
+        return Response.json({ id: storyId });
+      }
+      if (route === "/api.php/v2/story/linkStory") {
+        const from = Number(url.searchParams.get("storyID"));
+        const targets = z.array(z.number()).parse(body.stories);
+        relations.set(from, [...(relations.get(from) ?? []), ...targets]);
+        for (const target of targets)
+          relations.set(target, [...(relations.get(target) ?? []), from]);
+        return Response.json({ status: "success" });
+      }
+      if (route === "/api.php/v2/execution/linkStory") {
+        const [id] = z.tuple([z.number()]).parse(body.stories);
+        stories.set(id, { ...stories.get(id), executions: [execution] });
+        return Response.json({ status: "success" });
+      }
+      if (route === "/api.php/v1/executions/7/tasks") {
+        const id = 100 + tasks.size;
+        tasks.set(id, {
+          ...baseTask,
+          ...body,
+          id,
+          status: "wait",
+          openedDate: zentaoTimestamp(now),
+        });
+        return options.loseTaskReceipt && id === 102
+          ? Response.json({ message: "保存成功" }, { status: 201 })
+          : Response.json({ id }, { status: 201 });
+      }
+      if (
+        route === "/api.php/v2/task/close" ||
+        route === "/api.php/v2/task/cancel"
+      ) {
+        const id = Number(url.searchParams.get("taskID"));
+        tasks.set(id, {
+          ...tasks.get(id),
+          status: route.endsWith("/close") ? "closed" : "cancel",
+        });
+        return Response.json({ status: "success" });
+      }
       if (route.endsWith("/assign")) {
         stories.set(storyId, {
           ...stories.get(storyId),
@@ -165,7 +306,12 @@ function fakeZentao(
         return Response.json(stories.get(storyId));
       }
       if (Number.isFinite(storyId) && method === "PUT") {
-        stories.set(storyId, { ...stories.get(storyId), ...body });
+        const { plan, ...edits } = body;
+        stories.set(storyId, {
+          ...stories.get(storyId),
+          ...edits,
+          ...(options.ignorePlanWrite || plan === undefined ? {} : { plan }),
+        });
         return Response.json(stories.get(storyId));
       }
       if (route === "/api.php/v2/action/comment") {
@@ -188,9 +334,20 @@ function fakeZentao(
         return Response.json({}, { status: 503 });
       if (options.hideCreated && storyId !== 31)
         return Response.json({}, { status: 404 });
-      return Response.json(stories.get(storyId) ?? {}, {
-        status: stories.has(storyId) ? 200 : 404,
-      });
+      const current = stories.get(storyId);
+      return Response.json(
+        current && options.p2
+          ? {
+              ...current,
+              tasks: [...tasks.values()].filter(
+                ({ story }) => story === storyId,
+              ),
+            }
+          : (current ?? {}),
+        {
+          status: stories.has(storyId) ? 200 : 404,
+        },
+      );
     }
     if (route === "/index.php" && options.instanceError) {
       return Response.json({
@@ -201,18 +358,45 @@ function fakeZentao(
         password: hash,
       });
     }
+    const taskId = Number(route.match(/\/v1\/tasks\/(\d+)$/u)?.[1]);
+    if (tasks.has(taskId)) return Response.json(tasks.get(taskId));
     const routes: Record<string, unknown> = {
       "/index.php": { version: options.version ?? "22.6", URAndSR: true },
       "/api.php/v1/user": { profile: alice },
       "/api.php/v2/users": {
         users: [alice, bob, ...(options.extraUsers ?? [])],
       },
-      "/api.php/v1/products": { products: [product] },
+      "/api.php/v1/products": {
+        products: options.pairedProducts
+          ? [product, { ...product, id: 30, name: "产品乙" }]
+          : [product],
+      },
+      "/api.php/v1/products/30": {
+        id: 30,
+        moduleOptionMenu: [{ id: 4, name: "审批" }],
+      },
+      "/api.php/v1/products/30/plans": { plans: [] },
       "/api.php/v1/products/29": {
         ...product,
         moduleOptionMenu: [{ id: 3, name: "权限" }],
       },
-      "/api.php/v1/products/29/plans": { plans: [] },
+      "/api.php/v1/products/29/plans": { plans: options.p2 ? plans : [] },
+      "/api.php/v2/productplan/view": {
+        plan: plans.find(
+          ({ id }) => id === Number(url.searchParams.get("planID")),
+        ),
+        planStories: [...stories.values()].filter(
+          ({ plan }) => String(plan) === url.searchParams.get("planID"),
+        ),
+        modulePairs: [],
+      },
+      "/api.php/v1/products/29/releases": { releases: [] },
+      "/api.php/v2/project/view": {
+        project: { id: 8, multiple: true, status: "doing" },
+        products: [29],
+      },
+      "/api.php/v1/executions/7": { id: 7, teamMembers: ["alice", "bob"] },
+      "/api.php/v1/executions/7/tasks": { tasks: [...tasks.values()] },
       "/api.php/v1/products/29/bugs": { bugs: [] },
       "/api.php/v1/products/29/stories": {
         stories: [...stories.values()],
@@ -224,7 +408,7 @@ function fakeZentao(
         users: { [privatePerson]: "公司人员" },
         password: hash,
       },
-      "/api.php/v1/executions": { executions: [] },
+      "/api.php/v1/executions": { executions: options.p2 ? [execution] : [] },
       "/api.php/v2/my/work": {
         stories: [],
         pager: { recTotal: 0 },
@@ -237,6 +421,11 @@ function fakeZentao(
       },
       "/api.php/v2/story/view": {
         story: stories.get(Number(url.searchParams.get("storyID"))),
+        relations: {
+          story: (
+            relations.get(Number(url.searchParams.get("storyID"))) ?? []
+          ).map((id) => ({ id })),
+        },
         actions: options.hideComment
           ? []
           : [...actions].flatMap(([target, action]) =>
@@ -265,16 +454,23 @@ function fakeZentao(
     });
   });
   vi.stubGlobal("fetch", fetcher);
-  return { writes, fetcher };
+  return { writes, fetcher, tasks, notifications };
 }
 
-function configuredEnv(disableCapabilities: string[] = []) {
+function configuredEnv(disableCapabilities: string[] = [], p2 = false) {
   const config = join(homeDir, "team.json");
   writeFileSync(
     config,
     JSON.stringify({
       products: { 29: { name: "产品甲", state: "runtime" } },
-      roles: { DM: ["alice"], RM: ["bob"] },
+      roles: { DM: ["alice"], RM: ["bob"], ...(p2 ? { PM: ["alice"] } : {}) },
+      ...(p2
+        ? {
+            teams: { qa: { name: "测试", lead: "bob", members: [] } },
+            notify: { quietHours: ["00:00", "00:00"] },
+            wecomMap: { bob: "bob@team" },
+          }
+        : {}),
       moduleDefaults: { 29: { designLead: "alice", devLead: "bob" } },
       write: { disableCapabilities },
     }),
@@ -324,7 +520,7 @@ async function connect(env: Record<string, string> = {}) {
 const opIdOf = (value: unknown) =>
   z.object({ opId: z.string() }).parse(value).opId;
 
-it("WP-20 精确列出 12 个 P1 工具，初始化及缺配置调用无需网络", async () => {
+it("WP-38 精确列出 19 个工具，初始化及缺配置调用无需网络", async () => {
   const { fetcher } = fakeZentao();
   const { client, call } = await connect();
   const listed = (await client.listTools()).tools;
@@ -334,10 +530,14 @@ it("WP-20 精确列出 12 个 P1 工具，初始化及缺配置调用无需网�
       tool.description?.split("\n").map((line) => line.split("：")[0]),
     ).toEqual(["用途", "何时用", "不要用于", "注意"]);
     expect(tool.description?.length).toBeLessThanOrEqual(400);
-    expect(tool.inputSchema).toMatchObject({
-      type: "object",
-      additionalProperties: false,
-    });
+    expect(tool.inputSchema.type).toBe("object");
+    const variants = z
+      .object({
+        oneOf: z.array(z.object({ additionalProperties: z.literal(false) })),
+      })
+      .safeParse(tool.inputSchema);
+    if (variants.success) expect(variants.data.oneOf).toHaveLength(2);
+    else expect(tool.inputSchema.additionalProperties).toBe(false);
     expect(await call(tool.name, { unknown: password })).toMatchObject({
       isError: true,
       value: { code: "INVALID_INPUT", retryable: false },
@@ -840,4 +1040,251 @@ it("N-7 / AC-84 / N-9 直呼删除工具、上游 503 重试语义与候选脱�
       },
     },
   });
+});
+
+it("WP-38 / AC-42–52 从 MCP 确认 P2 写入、反查和通知，并查询全部管理视图", async () => {
+  const { writes, tasks, notifications } = fakeZentao({
+    p2: true,
+    loseTaskReceipt: true,
+  });
+  const { call } = await connect(configuredEnv([], true));
+  const execute = async (name: string, input: Record<string, unknown>) => {
+    const prepared = await call(name, input);
+    expect(prepared, name).toMatchObject({
+      isError: false,
+      value: { level: "W2" },
+    });
+    const { opId } = z.object({ opId: z.string() }).parse(prepared.value);
+    expect((await call("confirm_operation", { opId })).value).toMatchObject({
+      code: "PREVIEW_REQUIRED",
+    });
+    now += 4_000;
+    const receipt = await call("confirm_operation", { opId, previewAck: true });
+    expect(receipt, name).toMatchObject({
+      isError: false,
+      value: { status: "confirmed" },
+    });
+    return z.record(z.string(), z.json()).parse(receipt.value);
+  };
+  const split = await execute("decompose_stories", {
+    template: "feature",
+    storyIds: [31],
+    execution: "7",
+    assignees: { dev: "bob", test: "bob", acceptance: "alice" },
+    dates: {
+      dev: { estStarted: "2026-11-24", deadline: "2026-11-25" },
+      test: { estStarted: "2026-11-26", deadline: "2026-11-27" },
+      acceptance: { estStarted: "2026-11-30", deadline: "2026-11-30" },
+    },
+  });
+  const splitData = z.record(z.string(), z.json()).parse(split);
+  expect(splitData.notified).toMatchObject([
+    { state: "sent" },
+    { state: "sent" },
+    { state: "sent" },
+  ]);
+  expect(
+    writes.filter(({ route }) => route === "/api.php/v1/executions/7/tasks"),
+  ).toHaveLength(3);
+  expect(JSON.stringify(notifications)).toContain("bob@team");
+  const handoff = await execute("handoff_story", {
+    mode: "from_design",
+    storyId: 51,
+    feature: { title: "搜索实现" },
+  });
+  expect(handoff.nextActions).toEqual([
+    expect.stringMatching(/task-view-62\.html.*story-view-51\.html/u),
+  ]);
+  expect(handoff.notified).toMatchObject([{ target: "bob", state: "sent" }]);
+  await execute("reschedule_story", {
+    storyIds: [31],
+    toMonth: "2026-12",
+    reason: "安排到下月",
+  });
+  await execute("set_story_meta", {
+    storyId: 31,
+    stageRequirements: { test: { required: false, reason: "无需测试" } },
+    waiver: { rule: "R13", reason: "演示例外" },
+  });
+  for (const task of tasks.values())
+    if (task.story === 31) task.status = "done";
+  await execute("close_stories", {
+    mode: "story",
+    storyIds: [31],
+    closedReason: "done",
+  });
+  expect(
+    [...tasks.values()]
+      .filter(({ story }) => story === 31)
+      .map(({ status }) => status),
+  ).toEqual(["closed", "closed", "closed"]);
+  for (const view of ["plan", "release", "commitment", "iteration"])
+    expect(
+      await call("get_plan_progress", {
+        view,
+        product: "29",
+        month: "2026-12",
+        ...(view === "release" ? { version: "V1.2.3" } : {}),
+      }),
+    ).toMatchObject({ isError: false, value: { data: { view } } });
+  expect(
+    await call("get_monthly_dev_queue", { month: "2026-12" }),
+  ).toMatchObject({
+    isError: false,
+    value: { ok: true },
+  });
+  using db = new DatabaseSync(
+    join(homeDir, instanceHashOf(baseUrl), "alice", "state.db"),
+    { readOnly: true },
+  );
+  expect(
+    db.prepare("SELECT from_month, to_month FROM reschedules").get(),
+  ).toMatchObject({
+    from_month: "2026-11",
+    to_month: "2026-12",
+  });
+  expect(
+    db.prepare("SELECT stage FROM stage_requirements").get(),
+  ).toMatchObject({ stage: "test" });
+  expect(db.prepare("SELECT rule_id FROM waivers").get()).toMatchObject({
+    rule_id: "R13",
+  });
+});
+
+it.each([true, false])(
+  "WP-38 企微失败或无配置不覆盖已确认禅道写入（已配置=%s）",
+  async (webhookConfigured) => {
+    const { writes, notifications } = fakeZentao({
+      p2: true,
+      failNotify: true,
+    });
+    const env = configuredEnv([], true);
+    const { call } = await connect({
+      ...env,
+      BZT_WECOM_WEBHOOK: webhookConfigured ? env.BZT_WECOM_WEBHOOK : "",
+    });
+    const manual = await call("decompose_stories", {
+      template: "subtasks",
+      taskId: 62,
+      subtasks: [{ name: "补核对", assignTo: "bob" }],
+    });
+    expect(manual.value).toMatchObject({
+      code: "CAPABILITY_UNVERIFIED",
+      details: { links: [{ url: expect.stringContaining("taskID=62") }] },
+    });
+    const preview = await call("handoff_story", {
+      mode: "activate",
+      storyId: 31,
+      receiver: "bob",
+    });
+    const { opId } = z.object({ opId: z.string() }).parse(preview.value);
+    now += 4_001;
+    expect(
+      await call("confirm_operation", { opId, previewAck: true }),
+    ).toMatchObject({
+      isError: false,
+      value: {
+        status: "confirmed",
+        notified: webhookConfigured ? [{ state: "failed" }] : [],
+      },
+    });
+    expect(
+      writes.filter(({ route }) => route.endsWith("/assign")),
+    ).toHaveLength(1);
+    expect(notifications).toHaveLength(webhookConfigured ? 1 : 0);
+  },
+);
+
+it("WP-38 / AC-06 提需的配对与衍生来源都通过真实网关双向回读", async () => {
+  const { writes } = fakeZentao({ pairedProducts: true });
+  const { call } = await connect(configuredEnv());
+  const prepared = await call("create_story", {
+    ...create,
+    category: "feature",
+    derivesFrom: 31,
+    pair: { product: "产品乙", module: "审批", title: "审批同步筛选" },
+  });
+  expect(prepared).toMatchObject({ isError: false, value: { level: "W2" } });
+  const { opId } = z.object({ opId: z.string() }).parse(prepared.value);
+  now += 4_000;
+  expect(
+    await call("confirm_operation", { opId, previewAck: true }),
+  ).toMatchObject({
+    isError: false,
+    value: { status: "confirmed" },
+  });
+  expect(
+    writes
+      .filter(({ route }) => route.startsWith("/api.php/v2/story/linkStory?"))
+      .map(({ body }) => body),
+  ).toEqual([{ stories: [33] }, { stories: [31] }, { stories: [31] }]);
+  using db = new DatabaseSync(
+    join(homeDir, instanceHashOf(baseUrl), "alice", "state.db"),
+    { readOnly: true },
+  );
+  expect(
+    db
+      .prepare("SELECT origin FROM source_links WHERE relation = 'pairs'")
+      .all(),
+  ).toEqual([{ origin: "native" }, { origin: "native" }]);
+});
+
+it("WP-38 网关回读未生效的计划变更时保留 unknown", async () => {
+  const { writes } = fakeZentao({ p2: true, ignorePlanWrite: true });
+  const { call } = await connect(configuredEnv([], true));
+  const preview = await call("reschedule_story", {
+    storyIds: [31],
+    toMonth: "2026-12",
+    reason: "下月排期",
+  });
+  const { opId } = z.object({ opId: z.string() }).parse(preview.value);
+  now += 4_000;
+  expect(
+    await call("confirm_operation", { opId, previewAck: true }),
+  ).toMatchObject({
+    value: {
+      status: "unknown",
+      steps: [
+        { action: "story.edit", state: "unknown" },
+        { action: "story.comment", state: "pending" },
+      ],
+    },
+  });
+  expect(writes).toEqual([
+    { method: "PUT", route: "/api.php/v1/stories/31", body: { plan: 22 } },
+  ]);
+});
+
+it("WP-38 网关拒绝通过计划编辑同时改写需求标题", async () => {
+  const { writes } = fakeZentao({ p2: true });
+  const gateway = createZentaoGateway({
+    client: createZentaoReadClient({
+      baseUrl,
+      account: "alice",
+      password,
+      clock,
+      logSink: () => undefined,
+    }),
+    account: "alice",
+    instanceVersion: "22.6",
+    storyRoles: { get: () => ({}) },
+  });
+  await expect(
+    gateway.write({
+      opId: "fixture",
+      seq: 1,
+      id: 31,
+      step: {
+        type: "story",
+        action: "story.edit",
+        id: 31,
+        product: 29,
+        fields: {
+          plan: { value: 22, origin: "user" },
+          title: { value: "越权改写", origin: "user" },
+        },
+      },
+    }),
+  ).rejects.toMatchObject({ code: "CAPABILITY_UNVERIFIED" });
+  expect(writes).toEqual([]);
 });

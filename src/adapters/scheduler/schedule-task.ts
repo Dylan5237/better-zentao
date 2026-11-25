@@ -1,3 +1,4 @@
+import { parseArgs } from "node:util";
 import type { SchedulerRuntime } from "../../services/notify.ts";
 import { runScheduleTask } from "../../services/schedule-task.ts";
 
@@ -10,24 +11,43 @@ export async function runScheduleTaskCommand(
   args: string[],
   runtime: TaskRuntime,
 ): Promise<number> {
-  const [action, target, flag] = args;
+  const invalid = () => {
+    runtime.stderr("参数不合法。请检查任务计划命令、目标和选项。\n");
+    return 2;
+  };
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args,
+      options: { config: { type: "string" }, "dry-run": { type: "boolean" } },
+      allowPositionals: true,
+      tokens: true,
+    });
+  } catch {
+    return invalid();
+  }
+  const names = parsed.tokens.flatMap((token) =>
+    token.kind === "option" ? [token.name] : [],
+  );
+  const [action, target] = parsed.positionals;
+  const { config, "dry-run": dryRun } = parsed.values;
   if (
     (action !== "install" && action !== "status" && action !== "uninstall") ||
     (target !== "digest" && target !== "snapshot") ||
-    args.length > 3 ||
-    (flag !== undefined && (flag !== "--dry-run" || action !== "install"))
+    parsed.positionals.length !== 2 ||
+    names.length !== new Set(names).size ||
+    (config !== undefined && !config.trim()) ||
+    (dryRun !== undefined && action !== "install")
   ) {
-    runtime.stderr(
-      "参数不合法。用法为 bzt schedule-task <install|status|uninstall> <digest|snapshot>，install 可加 --dry-run。\n",
-    );
-    return 2;
+    return invalid();
   }
   try {
     const result = await runScheduleTask({
       ...runtime,
       action,
       target,
-      dryRun: flag ? true : undefined,
+      dryRun,
+      config,
     });
     runtime.stdout(JSON.stringify(result) + "\n");
     return 0;

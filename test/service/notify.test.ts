@@ -408,7 +408,7 @@ describe("Windows 任务计划", () => {
     });
     const snapshotXml = await readFile(snapshot.xmlPath, "utf8");
     expect(snapshotXml).toContain("<Day>3</Day>");
-    expect(snapshotXml).toContain("bzt snapshot");
+    expect(snapshotXml).toContain("/d /c bzt snapshot capture");
   });
 
   it("CLI 适配器对非法参数返回 2", async () => {
@@ -463,6 +463,7 @@ describe("Windows 任务计划", () => {
             count: 2,
             items: [
               task,
+              { ...task, id: 82, timeState: "overdue" },
               { ...task, id: 81, name: "父任务不发", isParent: true },
             ],
           },
@@ -474,9 +475,9 @@ describe("Windows 任务计划", () => {
       gaps: [],
       inferences: [],
     });
-    vi.spyOn(TrackingService.prototype, "queryStories").mockRejectedValue(
-      new Error("离线读取失败"),
-    );
+    const query = vi
+      .spyOn(TrackingService.prototype, "queryStories")
+      .mockRejectedValue(new Error("离线读取失败"));
     expect(await runDigestCommand([], runtime)).toBe(1);
     expect(fetcher).toHaveBeenCalledTimes(1);
     const [, request] = fetcher.mock.calls[0] ?? [];
@@ -486,5 +487,113 @@ describe("Windows 任务计划", () => {
       '"completeness":"partial"',
     );
     expect(runtime.stdout.mock.calls[0]?.[0]).toContain("无法读取研发需求");
+    const scope = { asOf: day + "T01:00:00Z", filters: {} };
+    const base = {
+      scope,
+      completeness: "complete",
+      gaps: [],
+      inferences: [],
+    } satisfies Pick<
+      Awaited<ReturnType<TrackingService["queryStories"]>>,
+      "scope" | "completeness" | "gaps" | "inferences"
+    >;
+    const waiting = {
+      id: 92,
+      title: "待接收示例",
+      url: new URL("story-view-92.html", env.ZENTAO_BASE_URL).href,
+      untrusted: true,
+      product: { id: 29, name: "示例产品", untrusted: true },
+      status: "active",
+      category: "feature",
+      progress: { value: "待接收", level: "inferred" },
+      riskCodes: [],
+    } satisfies Awaited<
+      ReturnType<TrackingService["queryStories"]>
+    >["data"]["items"][number];
+    const testing = {
+      ...waiting,
+      id: 93,
+      progress: { ...waiting.progress, value: "待测试" },
+    };
+    query.mockResolvedValue({
+      ...base,
+      ok: true,
+      data: {
+        items: [waiting, testing],
+        countsByProgress: { 待接收: 1, 待测试: 1 },
+      },
+    });
+    vi.spyOn(TrackingService.prototype, "getStoryProgress").mockResolvedValue({
+      ...base,
+      ok: true,
+      data: {
+        story: testing,
+        progress: { ...testing.progress, basis: "研发已完成" },
+        stages: [
+          {
+            stage: "dev",
+            required: true,
+            state: "done",
+            tasks: [],
+            evidence: [],
+          },
+          {
+            stage: "test",
+            required: true,
+            state: "not_started",
+            tasks: [task],
+            evidence: [],
+          },
+        ],
+        people: { raisedBy: "collector", untrusted: true },
+        related: { bugs: [] },
+        risks: [],
+        untrusted: true,
+      },
+    });
+    expect(await runDigestCommand(["--dry-run"], runtime)).toBe(0);
+    expect(runtime.stdout.mock.lastCall?.[0]).toContain(
+      '"preview":{"今日到期":1,"逾期":1,"待接收":1,"可测试":1}',
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
+});
+
+it("WP-38 企业微信映射支持 @，标题和映射中的凭据不发送", async () => {
+  const { service, sender } = setup(
+    teamConfigSchema.parse({
+      wecomMap: { alice: "alice@department", carol: secret },
+    }),
+  );
+  await service.notifyEvent({
+    ...event,
+    title: "Token=" + secret + " " + webhook.href,
+  });
+  const message = sender.mock.calls[0]?.[0];
+  expect(message?.mentionedIds).toEqual(["alice@department"]);
+  expect(message?.content).toContain("已脱敏");
+  expect(JSON.stringify(message)).not.toContain(secret);
+});
+
+it("WP-38 静默期不取摘要，dry-run 只返回分类数量并且不占去重记录", async () => {
+  const { deps, sender, setTime } = setup();
+  const loadDigest = vi.fn<
+    NonNullable<ConstructorParameters<typeof NotifyService>[0]["loadDigest"]>
+  >(async () => ({ items: [{ ...event, category: "今日到期" }] }));
+  const service = new NotifyService({ ...deps, sender, loadDigest });
+  setTime(day + " 20:00:00");
+  expect((await service.sendDailyDigest()).notified).toMatchObject([
+    { state: "queued" },
+  ]);
+  expect(loadDigest).not.toHaveBeenCalled();
+  expect(await service.sendDailyDigest({ dryRun: true })).toMatchObject({
+    preview: { 今日到期: 1 },
+    notified: [],
+  });
+  expect(sender).not.toHaveBeenCalled();
+  expect(
+    deps.store.notifications.listBySentDateRange(0, Number.MAX_SAFE_INTEGER),
+  ).toEqual([]);
+  setTime(day + " 09:00:00");
+  expect((await service.sendDailyDigest()).notified[0]?.state).toBe("sent");
 });

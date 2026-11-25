@@ -80,3 +80,20 @@
   expectedArgs: { "module": "审批" }
   expectedCode: "AMBIGUOUS_ENTITY"
   replyHas: ["候选", "产品甲", "产品乙", "请选择"]
+
+- id: "P2-CLARIFY-MOVE"
+  kind: "clarification"
+  prompt: "五十三号挪下月吧，原因我没填"
+  expectedTool: "reschedule_story"
+  expectedArgs: { "storyIds": [53], "toMonth": "2026-12" }
+  expectedCode: "INVALID_INPUT"
+  replyHas: ["原因"]
+
+- id: "P2-CLARIFY-SPLIT"
+  kind: "clarification"
+  prompt: "拆一下这个功能，我没给需求编号"
+  expectedTool: "decompose_stories"
+  expectedArgs: { "template": "feature" }
+  expectedCode: "MISSING_REQUIRED"
+  missing: ["storyIds"]
+  replyHas: ["需求编号"]

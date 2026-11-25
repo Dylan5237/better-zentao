@@ -1,11 +1,17 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { platform } from "node:os";
 import { z } from "zod";
-import type { ZentaoReadClient } from "../api/client.ts";
+import {
+  createZentaoReadClient,
+  type ZentaoReadClient,
+} from "../api/client.ts";
 import { listUsers } from "../api/org.ts";
 import { getProductModules, listProducts } from "../api/product.ts";
 import {
   assertNoConfigCredentials,
+  findMissingEnv,
+  loadConfig,
   loadFileConfig,
   PROBE_PRODUCT_ID,
   teamConfigSchema,
@@ -98,7 +104,15 @@ async function readSource<T>(
   }
 }
 
-async function readDirectory(client: ZentaoReadClient) {
+function readsModules(id: number, config: z.output<typeof teamConfigSchema>) {
+  const product = config.products[id];
+  return product?.enabled !== false && !product?.probeOnly;
+}
+
+async function readDirectory(
+  client: ZentaoReadClient,
+  config: z.output<typeof teamConfigSchema>,
+) {
   const gaps: Gap[] = [];
   const [catalog, people] = await Promise.all([
     readSource(gaps, "products", () => listProducts(client)),
@@ -111,6 +125,7 @@ async function readDirectory(client: ZentaoReadClient) {
     .map(({ id, name }) => ({ id, name }));
   const modules: z.output<typeof directorySchema>["modules"] = {};
   for (const { id } of products) {
+    if (!readsModules(id, config)) continue;
     const items = await readSource(gaps, "modules:" + id, () =>
       getProductModules(client, id),
     );
@@ -121,7 +136,7 @@ async function readDirectory(client: ZentaoReadClient) {
           ({ id, name }) =>
             id > 0 && name.split("/").filter(Boolean).length === 1,
         )
-        .map(({ id, name }) => ({ id, name }));
+        .map(({ id, name }) => ({ id, name: name.replace(/^\/+/, "") }));
     }
   }
   const users = (people?.items ?? [])
@@ -149,7 +164,7 @@ export async function generateConfigEditorPage({
     | { readonly client?: never; readonly snapshot?: ConfigEditorSnapshot }
   )) {
   const teamPath = (configPath ?? env.BZT_CONFIG)?.trim();
-  if (!outPath.trim() || (teamPath && resolve(teamPath) === resolve(outPath)))
+  if (!outPath.trim() || (teamPath && (await sameFile(teamPath, outPath))))
     throw new BztError("INVALID_INPUT", "请选择独立的 HTML 输出路径。");
   // 团队文件不能混入个人偏好。只保留加载器识别配置和敏感值所需的环境项。
   const initialConfig: unknown =
@@ -167,8 +182,11 @@ export async function generateConfigEditorPage({
           })
         ).config
       : config;
+  const validated = teamConfigSchema.safeParse(initialConfig);
+  if (!validated.success)
+    throw new BztError("INVALID_INPUT", "团队配置字段不合法。");
   const directory = client
-    ? await readDirectory(client)
+    ? await readDirectory(client, validated.data)
     : (snapshot ?? {
         products: [],
         modules: {},
@@ -182,6 +200,7 @@ export async function generateConfigEditorPage({
   for (const { id } of directory.products) {
     const source = "modules:" + id;
     if (
+      readsModules(id, validated.data) &&
       !Object.hasOwn(directory.modules, id) &&
       !gaps.some((gap) => gap.source === source)
     ) {
@@ -204,4 +223,59 @@ export async function generateConfigEditorPage({
     );
   }
   return { outPath, completeness, gaps };
+}
+
+async function sameFile(left: string, right: string) {
+  const normalized = (path: string) =>
+    platform() === "win32" ? path.toLowerCase() : path;
+  if (normalized(resolve(left)) === normalized(resolve(right))) return true;
+  const [a, b] = await Promise.all([
+    realpath(left).catch(() => undefined),
+    realpath(right).catch(() => undefined),
+  ]);
+  if (!a || !b) return false;
+  if (normalized(a) === normalized(b)) return true;
+  const [first, second] = await Promise.all([
+    stat(a, { bigint: true }),
+    stat(b, { bigint: true }),
+  ]);
+  return (
+    first.ino !== 0n && first.ino === second.ino && first.dev === second.dev
+  );
+}
+
+export async function runConfigEditor(options: {
+  config?: string;
+  out?: string;
+  env: ConfigEnv;
+  homeDir?: string;
+  clock: () => number;
+  render: GenerateConfigEditorOptions["render"];
+}) {
+  const { env, render, clock } = options;
+  const sources = { ...options, cli: { config: options.config } };
+  const { config, stateDir } = await loadFileConfig(sources);
+  const common = {
+    env,
+    config,
+    render,
+    configPath: options.config,
+    outPath:
+      options.out ??
+      resolve(stateDir ?? ".better-zentao", "team-config-editor.html"),
+  };
+  const password = env.ZENTAO_PASSWORD;
+  if (!password || findMissingEnv(env).length)
+    return generateConfigEditorPage(common);
+  const live = await loadConfig(sources);
+  return generateConfigEditorPage({
+    ...common,
+    client: createZentaoReadClient({
+      ...live.zentao,
+      password,
+      clock,
+      env,
+      timezone: live.timezone,
+    }),
+  });
 }

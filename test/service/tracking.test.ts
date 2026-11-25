@@ -110,6 +110,7 @@ afterEach(() => {
 
 function setup({
   account = "dev",
+  teamConfig = config,
   extraUsers = [],
   tasks = [task],
   stories = [story, draft, closed],
@@ -134,6 +135,7 @@ function setup({
   ],
 }: {
   account?: string;
+  teamConfig?: typeof config;
   extraUsers?: typeof users;
   tasks?: (typeof task & { closedReason?: string })[];
   stories?: (typeof story & {
@@ -216,7 +218,7 @@ function setup({
     service: new TrackingService({
       client,
       clock: queryClock,
-      config,
+      config: teamConfig,
       baseUrl,
       store: {
         seenCursor: localStore.seenCursor,
@@ -991,4 +993,61 @@ it("requiredDetail 命中响应缓存或角色未变更时不重复写入 story_
     upsertSpy.mockRestore();
     localStore.close();
   }
+});
+
+it("WP-38 单需求进度开启全局 P2 规则时仅运行已采证的 P1 规则", async () => {
+  const teamConfig = teamConfigSchema.parse({
+    ...config,
+    rules: Object.fromEntries(
+      Object.keys(config.rules).map((id) => [id, { enabled: true }]),
+    ),
+  });
+  const active = { ...story, plan: "" };
+  const { service } = setup({ stories: [active], teamConfig });
+  const result = await service.getStoryProgress({ storyId: 31 });
+  if (!("risks" in result.data)) throw new Error("未返回需求风险");
+  expect(result.data.risks.some(({ rule }) => rule >= "R06")).toBe(false);
+});
+
+it("WP-38 新工作区的需求进度消费共享阶段要求和规则豁免", async () => {
+  const withNotes = {
+    ...story,
+    spec: "",
+    actions: [
+      {
+        id: 1,
+        actor: story.openedBy,
+        action: "commented",
+        date: "2026-11-22 12:00:00",
+        comment:
+          '[bzt:meta v1 {"stageRequirements":{"acceptance":{"required":false}}}]',
+      },
+      {
+        id: 2,
+        actor: story.openedBy,
+        action: "commented",
+        date: "2026-11-23 12:00:00",
+        comment: '[bzt:waiver v1 {"rule":"R05","reason":"历史需求例外"}]',
+      },
+    ],
+  };
+  const { service } = setup({ stories: [withNotes] });
+  const result = await service.getStoryProgress({ storyId: story.id });
+  expect(result.data).toMatchObject({
+    stages: expect.arrayContaining([
+      {
+        stage: "acceptance",
+        required: false,
+        state: "waived",
+        tasks: [],
+        evidence: expect.any(Array),
+      },
+    ]),
+    risks: expect.arrayContaining([
+      expect.objectContaining({
+        rule: "R05",
+        waived: expect.objectContaining({ reason: "历史需求例外" }),
+      }),
+    ]),
+  });
 });

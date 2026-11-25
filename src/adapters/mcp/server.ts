@@ -11,7 +11,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import { p1Tools } from "../../contracts/tools/index.ts";
+import { allTools } from "../../contracts/tools/index.ts";
 import { createWorkbench, projectToolError } from "../../services/workbench.ts";
 import type { Workbench, WorkbenchRuntime } from "../../services/workbench.ts";
 import { renderScheduleHtml } from "../cli/render/schedule-html.ts";
@@ -27,13 +27,15 @@ function register<Input extends z.ZodType>(
   contract: { input: Input; output: z.ZodType; description: string },
   run: (services: Workbench, input: z.output<Input>, raw: unknown) => unknown,
 ) {
-  const inputSchema = ToolSchema.shape.inputSchema.parse(
-    z.toJSONSchema(contract.input, {
+  const inputSchema = ToolSchema.shape.inputSchema.parse({
+    ...z.toJSONSchema(contract.input, {
       io: "input",
       target: "draft-07",
       unrepresentable: "any",
     }),
-  );
+    // MCP requires an object at the root, including for unions of strict objects.
+    type: "object",
+  });
   return {
     description: contract.description,
     inputSchema,
@@ -60,19 +62,19 @@ function register<Input extends z.ZodType>(
 
 const tools = {
   resolve_context: register(
-    p1Tools.resolve_context,
+    allTools.resolve_context,
     ({ directory }, _input, raw) => directory.resolveContext(raw),
   ),
-  get_my_work: register(p1Tools.get_my_work, ({ tracking }, _input, raw) =>
+  get_my_work: register(allTools.get_my_work, ({ tracking }, _input, raw) =>
     tracking.getMyWork(raw),
   ),
-  get_team_work: register(p1Tools.get_team_work, ({ tracking }, _input, raw) =>
+  get_team_work: register(allTools.get_team_work, ({ tracking }, _input, raw) =>
     tracking.getTeamWork(raw),
   ),
   get_member_schedule: register(
-    p1Tools.get_member_schedule,
+    allTools.get_member_schedule,
     async ({ schedule, reportDir }, input, raw) => {
-      const result = p1Tools.get_member_schedule.output.parse(
+      const result = allTools.get_member_schedule.output.parse(
         await schedule.getMemberSchedule(raw),
       );
       if (input.format !== "html") return result;
@@ -104,33 +106,58 @@ const tools = {
       }
     },
   ),
-  query_stories: register(p1Tools.query_stories, ({ tracking }, _input, raw) =>
+  query_stories: register(allTools.query_stories, ({ tracking }, _input, raw) =>
     tracking.queryStories(raw),
   ),
   get_story_progress: register(
-    p1Tools.get_story_progress,
+    allTools.get_story_progress,
     ({ tracking }, _input, raw) => tracking.getStoryProgress(raw),
   ),
-  create_story: register(p1Tools.create_story, (services, _input, raw) =>
+  create_story: register(allTools.create_story, (services, _input, raw) =>
     services.createStory(raw),
   ),
-  import_stories: register(p1Tools.import_stories, (services, _input, raw) =>
+  import_stories: register(allTools.import_stories, (services, _input, raw) =>
     services.importStories(raw),
   ),
-  assign_story: register(p1Tools.assign_story, (services, _input, raw) =>
+  assign_story: register(allTools.assign_story, (services, _input, raw) =>
     services.assignStory(raw),
   ),
   scan_workflow_risks: register(
-    p1Tools.scan_workflow_risks,
+    allTools.scan_workflow_risks,
     ({ risk }, _input, raw) => risk.scanWorkflowRisks(raw),
   ),
-  confirm_operation: register(p1Tools.confirm_operation, (services, input) =>
+  confirm_operation: register(allTools.confirm_operation, (services, input) =>
     services.confirmOperation(input),
   ),
-  get_operation: register(p1Tools.get_operation, (services, input) =>
+  get_operation: register(allTools.get_operation, (services, input) =>
     services.getOperation(input),
   ),
-} satisfies Record<keyof typeof p1Tools, unknown>;
+  get_plan_progress: register(
+    allTools.get_plan_progress,
+    ({ management }, _input, raw) => management.getPlanProgress(raw),
+  ),
+  get_monthly_dev_queue: register(
+    allTools.get_monthly_dev_queue,
+    ({ management }, _input, raw) => management.getMonthlyDevQueue(raw),
+  ),
+  decompose_stories: register(
+    allTools.decompose_stories,
+    (services, _input, raw) => services.decomposeStories(raw),
+  ),
+  handoff_story: register(allTools.handoff_story, (services, _input, raw) =>
+    services.handoffStory(raw),
+  ),
+  reschedule_story: register(
+    allTools.reschedule_story,
+    (services, _input, raw) => services.rescheduleStory(raw),
+  ),
+  close_stories: register(allTools.close_stories, (services, _input, raw) =>
+    services.closeStories(raw),
+  ),
+  set_story_meta: register(allTools.set_story_meta, (services, _input, raw) =>
+    services.setStoryMeta(raw),
+  ),
+} satisfies Record<keyof typeof allTools, unknown>;
 
 function isDeleteToolRequest(name: string): boolean {
   return /(?:^|[._-])delete(?:$|[._-])|delete_story/iu.test(name);

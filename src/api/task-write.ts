@@ -196,6 +196,7 @@ export async function closeTask(
 export async function getTaskProjectProducts(
   client: ZentaoReadClient,
   projectId: number,
+  options?: { includeClosed: boolean },
 ): Promise<number[]> {
   const view = await getReadClient(client).http.read(
     {
@@ -212,9 +213,10 @@ export async function getTaskProjectProducts(
       "无法核对目标执行所属项目的产品。",
     );
   if (
-    !view.project.multiple ||
     view.project.deleted ||
-    !["wait", "doing"].includes(view.project.status)
+    (!options?.includeClosed &&
+      (!view.project.multiple ||
+        !["wait", "doing"].includes(view.project.status)))
   )
     return [];
   return products;

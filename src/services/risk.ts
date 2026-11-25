@@ -1,9 +1,25 @@
 import { z } from "zod";
+import { getCapability } from "../api/capabilities.ts";
+import { listProductBugs } from "../api/bug.ts";
+import { listProductPlans } from "../api/plan.ts";
+import {
+  listProductRequirements,
+  getRequirementDetail,
+} from "../api/requirement.ts";
+import { listReleases } from "../api/release.ts";
+import { walkProductPlans } from "../core/dto/plan.ts";
+import { isDevExecutionInMonth, planOverlapDays } from "../domain/month.ts";
+import { featureProgress } from "../domain/progress.ts";
+import { detectStage, summarizeStages } from "../domain/stage.ts";
 import type { ZentaoReadClient } from "../api/client.ts";
 import { listExecutionsIncludingClosed } from "../api/execution.ts";
 import { getCurrentUser, listUsers } from "../api/org.ts";
 import { listProducts } from "../api/product.ts";
-import { getStoryDetail, listProductStories } from "../api/story.ts";
+import {
+  getStoryDetail,
+  getStoryDetailV2,
+  listProductStories,
+} from "../api/story.ts";
 import { listExecutionTasks } from "../api/task.ts";
 import {
   scanWorkflowRisksInputSchema,
@@ -24,6 +40,12 @@ import {
   type RuleContext,
   type RuleInput,
 } from "../rules/index.ts";
+import {
+  cachedWaiverEntries,
+  foldRuleWaivers,
+  foldStageRequirements,
+  resolveReleaseWaiver,
+} from "./structured-notes.ts";
 import { DirectoryService } from "./directory.ts";
 
 interface RiskOptions {
@@ -32,7 +54,12 @@ interface RiskOptions {
   readonly clock: Clock;
   readonly baseUrl: string;
   readonly store?: Pick<LocalStore, "cache"> &
-    Partial<Pick<LocalStore, "storyRoles">>;
+    Partial<
+      Pick<
+        LocalStore,
+        "storyRoles" | "stageRequirements" | "waivers" | "sourceLinks"
+      >
+    >;
 }
 
 type OutputHit = ScanWorkflowRisksOutput["data"]["hits"][number];
@@ -42,9 +69,9 @@ type ObjectType = Hit["objectType"];
 type Gaps = ScanWorkflowRisksOutput["gaps"];
 type Waiver = NonNullable<RuleInput["waivers"]>[number];
 const severityOrder = ["info", "low", "medium", "high"] as const;
-// WP-32 注册纯规则。巡检的数据采集仍只支持 P1。
-const serviceRules = rules.filter(({ id }) => id <= "R05");
-const registered = new Set<string>(serviceRules.map(({ id }) => id));
+const registered = new Map<string, (typeof rules)[number]["id"]>(
+  rules.map(({ id }) => [id, id]),
+);
 const waiverRows = z.array(
   z.strictObject({
     ruleId: z.enum(["R01", "R02", "R03", "R04", "R05"]),
@@ -89,7 +116,7 @@ async function read<T>(gaps: Gaps, source: string, load: () => T | Promise<T>) {
     return await load();
   } catch (error) {
     if (!(error instanceof BztError)) throw error;
-    gaps.push({ source, reason: `读取失败（${error.code}）。` });
+    gaps.push({ source, reason: "读取失败（" + error.code + "）。" });
     return undefined;
   }
 }
@@ -148,7 +175,7 @@ export class RiskService {
     const now = clock();
     const today = formatLocalDate(now, config.timezone);
     const month = scanMonth(scope.month, today);
-    const selected = serviceRules.filter(
+    const selected = rules.filter(
       ({ id }) =>
         config.rules[id].enabled &&
         (requested === undefined || requested.includes(id)),
@@ -162,6 +189,12 @@ export class RiskService {
           `当前版本尚未注册所请求的 ${skipped.length} 条规则：${skipped.filter((id) => /^R\d{2}$/u.test(id)).join("、") || "规则编号无法识别"}。`,
         ]
       : [];
+    const disabled = [...new Set(requested)].filter((id) => {
+      const rule = registered.get(id);
+      return rule !== undefined && !config.rules[rule].enabled;
+    });
+    if (disabled.length)
+      hints.push("配置中未启用：" + disabled.join("、") + "。");
     const gaps: Gaps = [];
     const hits: OutputHit[] = [];
     const inferences: ScanWorkflowRisksOutput["inferences"] = [];
@@ -189,7 +222,8 @@ export class RiskService {
       scope: {
         asOf: asOf(now),
         filters,
-        timeBasis: "截止日与本地工作日日历；月份按迭代起止日期相交范围。",
+        timeBasis:
+          "按业务时区计算截止日、工作日和自然日。月份按已读取的迭代或 L3 计划重叠范围，用户需求和 Bug 按登记月份。",
       },
       completeness: gaps.length ? "partial" : "complete",
       gaps,
@@ -214,12 +248,23 @@ export class RiskService {
       : undefined;
     if (scope.mine && !me?.account) return finish();
 
-    const storyRules = selected.some(({ id }) => id !== "R01");
-    const overdue = enabled.has("R01");
-    const stageRules = enabled.has("R02") || enabled.has("R03");
+    const storyRules = selected.some(({ id }) => !["R01", "R08"].includes(id));
+    const taskRules = selected.some(({ id }) =>
+      ["R01", "R06", "R14"].includes(id),
+    );
+    const stageRules = selected.some(({ id }) =>
+      ["R02", "R03", "R06", "R07", "R09", "R11", "R12", "R13", "R14"].includes(
+        id,
+      ),
+    );
+    const p2 = selected.some(({ id }) => id >= "R06");
+    const wantsBugs = selected.some(({ id }) =>
+      ["R09", "R12", "R13", "R14"].includes(id),
+    );
+    const evidenceMonth = month ?? today.slice(0, 7);
     const products = product
       ? [product]
-      : storyRules
+      : storyRules || enabled.has("R08")
         ? ((await page(gaps, "products", () => listProducts(client)))?.items
             .filter(({ deleted }) => !deleted)
             .map(({ id }) => id) ?? [])
@@ -227,7 +272,10 @@ export class RiskService {
     const storyRows = new Map(
       (
         await Promise.all(
-          [...new Set(products)].map(async (id) => {
+          (storyRules || (product && taskRules)
+            ? [...new Set(products)]
+            : []
+          ).map(async (id) => {
             const rows = await page(gaps, `stories:${id}`, () =>
               listProductStories(client, id),
             );
@@ -274,14 +322,55 @@ export class RiskService {
         (!module || story.module === module) &&
         matchesOwner(story.assignedTo),
     );
-    const executions =
-      overdue || month
-        ? ((
-            await page(gaps, "executions", () =>
-              listExecutionsIncludingClosed(client),
-            )
-          )?.items ?? [])
-        : [];
+    const executionPage =
+      taskRules || month || enabled.has("R10")
+        ? await page(gaps, "executions", () =>
+            listExecutionsIncludingClosed(client),
+          )
+        : undefined;
+    const executions = executionPage?.items ?? [];
+    const [planPages, bugPages] = await Promise.all([
+      Promise.all(
+        (enabled.has("R06") || enabled.has("R10") ? products : []).map(
+          async (id) =>
+            [
+              id,
+              await page(gaps, "plans:" + id, () =>
+                listProductPlans(client, id),
+              ),
+            ] satisfies readonly [
+              number,
+              Awaited<ReturnType<typeof listProductPlans>> | undefined,
+            ],
+        ),
+      ),
+      Promise.all(
+        (wantsBugs ? products : []).map(
+          async (id) =>
+            [
+              id,
+              await page(gaps, "bugs:" + id, () => listProductBugs(client, id)),
+            ] satisfies readonly [
+              number,
+              Awaited<ReturnType<typeof listProductBugs>> | undefined,
+            ],
+        ),
+      ),
+    ]);
+    const plansByProduct = new Map(
+      planPages.map(([product, planPage]) => [
+        product,
+        {
+          complete: planPage?.truncated === false,
+          l3ById: new Map(
+            [...walkProductPlans(planPage?.items ?? [])]
+              .filter((plan) => this.isL3(plan))
+              .map((plan) => [plan.id, plan]),
+          ),
+        },
+      ]),
+    );
+    const bugsByProduct = new Map(bugPages);
     const monthExecutions = new Set(
       executions
         .filter(({ id, begin, end }) => {
@@ -297,10 +386,10 @@ export class RiskService {
         })
         .map(({ id }) => id),
     );
-    const executionIds = new Set(overdue ? monthExecutions : []);
+    const executionIds = new Set(taskRules ? monthExecutions : []);
     if (stageRules)
       for (const story of stories)
-        if (story.category === "feature" && story.status === "active")
+        if (p2 || (story.category === "feature" && story.status === "active"))
           for (const { id } of story.executions) executionIds.add(id);
     const taskPages = new Map(
       await Promise.all(
@@ -332,6 +421,8 @@ export class RiskService {
 
     const context: RuleContext = {
       today,
+      month: evidenceMonth,
+      systemStartDate: config.rules.R06.systemStartDate,
       timezone: config.timezone,
       calendar: createWorkCalendar(config.calendar),
       thresholds: {
@@ -340,6 +431,20 @@ export class RiskService {
           waitAfter: threshold(config.rules.R02.waitAfter, 2),
         },
         R03: { after: threshold(config.rules.R03.after, 3) },
+        R07: { after: threshold(config.rules.R07.after, 2) },
+        R08: { after: threshold(config.rules.R08.after, 5) },
+        R09: { after: threshold(config.rules.R09.after, 5) },
+        R10: { fromWorkday: threshold(config.rules.R10.fromWorkday, 5) },
+        R11: { after: threshold(config.rules.R11.after, 1) },
+        R13: { beforeRelease: threshold(config.rules.R13.beforeRelease, 3) },
+        R14: {
+          olderThanDays: {
+            days: config.rules.R14.olderThanDays,
+            unit: "calendarDays",
+            source:
+              config.rules.R14.olderThanDays === 30 ? "default" : "configured",
+          },
+        },
       },
       disabledRules: new Set(
         rules.filter(({ id }) => !enabled.has(id)).map(({ id }) => id),
@@ -375,7 +480,7 @@ export class RiskService {
       account: string | null | undefined;
       storyId: number | null;
     }[] = [];
-    if (overdue) {
+    if (taskRules) {
       // 先在完整的执行任务树上判定叶子，再按对象范围筛选。
       const scopedTasks = tasks.filter(({ execution }) =>
         monthExecutions.has(execution),
@@ -409,16 +514,64 @@ export class RiskService {
         "R01",
       ] as const),
     };
+    const seenHits = new Set(
+      evaluated.map(
+        ({ hit }) => hit.ruleId + ":" + hit.objectType + ":" + hit.objectId,
+      ),
+    );
+    const addHits = (
+      result: readonly Hit[],
+      object: { title: string; assignedTo?: string | null },
+      storyId: number | null,
+    ) => {
+      for (const hit of result) {
+        const key = hit.ruleId + ":" + hit.objectType + ":" + hit.objectId;
+        if (seenHits.has(key)) continue;
+        seenHits.add(key);
+        evaluated.push({
+          hit,
+          title: object.title,
+          account: object.assignedTo,
+          storyId,
+        });
+      }
+    };
+    const storyDetails = new Map(stories.map((story) => [story.id, story]));
+    const releaseStories = new Map<
+      number,
+      NonNullable<RuleInput["release"]>["stories"][number][]
+    >();
     for (const story of stories) {
       const linked = byStory.get(story.id) ?? [];
+      const planPage = plansByProduct.get(story.product);
+      const planIds = story.plan ?? storyRows.get(story.id)?.plan;
+      if (
+        planPage &&
+        planIds === undefined &&
+        story.category === "feature" &&
+        story.status === "active"
+      )
+        gaps.push({
+          source: "story:" + story.id + ":plan",
+          reason: "需求缺少计划归属信息。",
+        });
+      const linkedPlans = (planIds ?? []).flatMap((id) => {
+        const plan = planPage?.l3ById.get(id);
+        return plan ? [plan] : [];
+      });
+      const inMonthPlan = linkedPlans.some(
+        (plan) => planOverlapDays({ ...plan, kind: "l3" }, evidenceMonth) > 0,
+      );
       if (
         month &&
+        !inMonthPlan &&
         !story.executions.some(({ id }) => monthExecutions.has(id)) &&
         !linked.some(({ execution }) => monthExecutions.has(execution))
       )
         continue;
       const relevantTasks =
-        stageRules && story.category === "feature" && story.status === "active";
+        stageRules &&
+        (p2 || (story.category === "feature" && story.status === "active"));
       const taskIds = new Set(linked.map(({ id }) => id));
       const missingTask =
         relevantTasks && story.tasks?.some(({ id }) => !taskIds.has(id));
@@ -442,36 +595,279 @@ export class RiskService {
           devLead: moduleConfig?.devLead ?? defaults?.devLead,
         },
       };
-      const { receiver } = resolveStoryRoles({ story, ...roles });
-      const waivers = await this.waivers(
-        "story",
-        story.id,
-        gaps,
+      const { receiver, maintainer } = resolveStoryRoles({ story, ...roles });
+      const waivers = await this.waivers("story", story.id, gaps, {
+        actions: story.actions,
+        approvers: [...(config.roles.PM ?? []), maintainer],
+      });
+      const overrides = stageRules
+        ? await read(
+            gaps,
+            "stageRequirements:" + story.id,
+            () =>
+              this.options.store?.stageRequirements?.listByStory(story.id) ??
+              [],
+          )
+        : [];
+      const required = foldStageRequirements(
+        story.category === "design"
+          ? config.stageDefaults.design
+          : config.stageDefaults.feature,
+        overrides,
         story.actions,
       );
-      const required = {
-        test: config.stageDefaults.feature.test.required,
-        interface: config.stageDefaults.feature.interface.required,
-      };
+      const stageTasks = linked.map((task) => ({
+        ...task,
+        evidence: { prefixes: config.naming.taskPrefix },
+      }));
+      const bugPage = bugsByProduct.get(story.product);
+      const bugs = bugPage?.items.filter(
+        (bug) =>
+          !bug.deleted &&
+          bug.product === story.product &&
+          bug.story === story.id,
+      );
+      if (
+        enabled.has("R10") &&
+        story.executions.some(
+          ({ id }) => !executions.some((execution) => execution.id === id),
+        )
+      )
+        gaps.push({
+          source: "story:" + story.id + ":executions",
+          reason: "执行列表缺少需求引用的迭代。",
+        });
+      const hasL3Plan =
+        linkedPlans.length > 0
+          ? true
+          : planIds !== undefined && planPage?.complete
+            ? false
+            : undefined;
+      const inMonthDevExecution =
+        executionPage?.truncated === false &&
+        story.executions.every(({ id }) =>
+          executions.some((execution) => execution.id === id),
+        )
+          ? story.executions.some(({ id }) =>
+              executions.some(
+                (execution) =>
+                  execution.id === id &&
+                  isDevExecutionInMonth(execution, evidenceMonth, {
+                    devLabel: config.naming.execution.kinds.dev,
+                  }),
+              ),
+            )
+          : undefined;
+      const linkedStories =
+        enabled.has("R07") && story.category === "design"
+          ? await this.storyRelations(story.id, story.product, gaps)
+          : undefined;
+      const available = new Set(storyContext.disabledRules);
+      if (wantsBugs && bugPage?.truncated !== false) {
+        available.add("R09");
+        if (story.status !== "closed") available.add("R14");
+      }
       const result = evaluateRules(
         {
           story,
           roles,
-          tasks: linked,
-          tasksComplete,
+          tasks: stageTasks,
+          tasksComplete: tasksComplete && overrides !== undefined,
+          bugs,
+          hasL3Plan,
+          inMonthL3Plan: inMonthPlan,
+          inMonthDevExecution,
+          linkedStories,
           required,
           waivers,
           handoffAt: handoffTime(story, receiver),
         },
-        storyContext,
+        { ...storyContext, disabledRules: available },
       );
-      for (const hit of [...result.hits, ...result.waived])
-        evaluated.push({
-          hit,
-          title: story.title,
-          account: story.assignedTo,
-          storyId: story.id,
+      for (const hit of [...result.hits, ...result.waived]) {
+        if (hit.objectType === "story") {
+          addHits([hit], story, story.id);
+        } else if (hit.ruleId === "R14") {
+          const task = linked.find(({ id }) => id === hit.objectId);
+          if (
+            !task ||
+            !matchesOwner(task.assignedTo) ||
+            (month && !monthExecutions.has(task.execution))
+          )
+            continue;
+          const waiver = (await this.waivers("task", task.id, gaps)).find(
+            ({ ruleId }) => ruleId === hit.ruleId,
+          );
+          addHits(
+            [waiver ? { ...hit, waived: waiver } : hit],
+            { title: task.name, assignedTo: task.assignedTo },
+            story.id,
+          );
+        }
+      }
+      if (
+        enabled.has("R13") &&
+        story.category === "feature" &&
+        !story.isParent &&
+        !story.children?.length
+      ) {
+        const stages = summarizeStages(stageTasks);
+        const release = releaseStories.get(story.product) ?? [];
+        release.push({
+          ...story,
+          ...stages,
+          progress: featureProgress({
+            ...story,
+            ...stages,
+            required,
+            tasksComplete,
+            bugs,
+          }).progress,
+          tasks: linked,
+          tasksComplete,
+          bugs: bugs ?? [],
         });
+        releaseStories.set(story.product, release);
+      }
+    }
+    for (const id of products) {
+      if (enabled.has("R08")) {
+        const requirements = await page(gaps, "requirements:" + id, () =>
+          listProductRequirements(client, id),
+        );
+        for (const row of requirements?.items ?? []) {
+          if (
+            row.product !== id ||
+            row.deleted ||
+            (module && row.module !== module) ||
+            !matchesOwner(row.assignedTo) ||
+            (month &&
+              (row.openedDate == null ||
+                formatLocalDate(row.openedDate, config.timezone).slice(0, 7) !==
+                  month))
+          )
+            continue;
+          const linked = await this.storyRelations(
+            row.id,
+            id,
+            gaps,
+            "requirement",
+          );
+          const result = evaluateRules(
+            {
+              requirement: row,
+              linkedStories: linked,
+              waivers: await this.waivers("requirement", row.id, gaps),
+            },
+            context,
+          );
+          addHits([...result.hits, ...result.waived], row, null);
+        }
+      }
+      if (enabled.has("R12")) {
+        for (const bug of bugsByProduct.get(id)?.items ?? []) {
+          if (
+            bug.product !== id ||
+            (module &&
+              (bug.module ?? storyRows.get(bug.story ?? 0)?.module) !==
+                module) ||
+            !matchesOwner(bug.assignedTo) ||
+            (month &&
+              (bug.openedDate == null ||
+                formatLocalDate(bug.openedDate, config.timezone).slice(0, 7) !==
+                  month))
+          )
+            continue;
+          const openedAt = bug.openedDate;
+          const openedDuringTest =
+            openedAt != null &&
+            bug.story != null &&
+            (byStory.get(bug.story) ?? []).some(
+              (task) =>
+                !task.deleted &&
+                task.realStarted != null &&
+                task.realStarted <= openedAt &&
+                (task.finishedDate != null
+                  ? openedAt <= task.finishedDate
+                  : task.status === "doing") &&
+                detectStage(task, { prefixes: config.naming.taskPrefix })
+                  .stage === "test",
+            );
+          const result = evaluateRules(
+            {
+              bugs: [{ ...bug, openedDuringTest }],
+              waivers: await this.waivers("bug", bug.id, gaps),
+            },
+            context,
+          );
+          addHits([...result.hits, ...result.waived], bug, bug.story ?? null);
+        }
+      }
+      const scopedRelease = releaseStories.get(id);
+      if (!scopedRelease?.length) continue;
+      const releases =
+        getCapability("release.read").state === "verified"
+          ? await page(gaps, "releases:" + id, () => listReleases(client, id))
+          : undefined;
+      const versions = new Set([
+        ...config.releaseCalendar
+          .filter(({ product }) => product === id)
+          .map(({ version }) => version),
+        ...(releases?.items ?? [])
+          .filter(({ product }) => product === id)
+          .map(({ name }) => name),
+      ]);
+      const parents = new Set(
+        [...storyRows.values()].map(({ parent }) => parent),
+      );
+      const leafRelease = scopedRelease.filter(({ id }) => !parents.has(id));
+      for (const version of versions) {
+        const waivers: Waiver[] = [];
+        for (const { id } of leafRelease) {
+          const detail = storyDetails.get(id);
+          if (!detail) continue;
+          const local = await read(
+            gaps,
+            "waivers:story:" + id,
+            () =>
+              this.options.store?.waivers?.listByObject("story", String(id)) ??
+              [],
+          );
+          const [waiver] = resolveReleaseWaiver(
+            config,
+            detail,
+            detail.actions ?? [],
+            local ?? [],
+            version,
+          );
+          if (waiver)
+            waivers.push({
+              ruleId: "R13",
+              objectType: "story",
+              objectId: id,
+              by: waiver.approvedBy,
+              reason: waiver.reason,
+            });
+        }
+        const result = evaluateRules(
+          {
+            waivers,
+            release: {
+              product: id,
+              version,
+              stories: leafRelease,
+              releases: releases?.items,
+              releaseCalendar: config.releaseCalendar,
+              keywordPrefix: config.versionTag.keywordPrefix,
+            },
+          },
+          context,
+        );
+        for (const hit of [...result.hits, ...result.waived]) {
+          const story = storyDetails.get(hit.objectId);
+          if (story) addHits([hit], story, story.id);
+        }
+      }
     }
     const visible = evaluated.filter(
       ({ hit }) =>
@@ -489,7 +885,7 @@ export class RiskService {
         ? (account ?? "")
         : groupBy === "story"
           ? storyId == null
-            ? `task:${hit.objectId}`
+            ? `${hit.objectType}:${hit.objectId}`
             : `story:${storyId}`
           : hit.ruleId;
     visible.sort(
@@ -511,7 +907,9 @@ export class RiskService {
       const limit =
         hit.threshold && "workdays" in hit.threshold
           ? `（${hit.threshold.source === "default" ? "默认" : "已确认配置"}阈值：${hit.threshold.workdays} 个工作日）`
-          : "";
+          : hit.threshold?.unit === "calendarDays"
+            ? "（阈值：" + hit.threshold.days + " 个自然日）"
+            : "";
       hits.push({
         rule: hit.ruleId,
         severity: hit.severity,
@@ -544,6 +942,84 @@ export class RiskService {
       });
     }
     return finish();
+  }
+
+  private isL3(plan: {
+    parent: number | null;
+    title: string;
+    deleted?: boolean;
+  }) {
+    const { legacyReleasePlans } = this.options.config;
+    return (
+      !plan.deleted &&
+      plan.parent !== null &&
+      plan.parent > 0 &&
+      (!legacyReleasePlans ||
+        !new RegExp(legacyReleasePlans.titlePattern, "iu").test(plan.title))
+    );
+  }
+
+  private async storyRelations(
+    id: number,
+    product: number,
+    gaps: Gaps,
+    type: "story" | "requirement" = "story",
+  ) {
+    const { client, store } = this.options;
+    const related = await read(
+      gaps,
+      type + ":" + id + ":relations",
+      async () => {
+        const detail =
+          type === "story"
+            ? await getStoryDetailV2(client, id)
+            : await getRequirementDetail(client, id);
+        if (
+          detail.story.id !== id ||
+          detail.story.product !== product ||
+          detail.story.deleted
+        )
+          throw new BztError(
+            "ZENTAO_SCHEMA_MISMATCH",
+            "关联详情与巡检对象不一致。",
+          );
+        const local = [
+          ...(store?.sourceLinks?.listFrom(type, String(id)) ?? [])
+            .filter(({ toType }) => toType === "story")
+            .map(({ toId }) => Number(toId)),
+          ...(store?.sourceLinks?.listTo(type, String(id)) ?? [])
+            .filter(({ fromType }) => fromType === "story")
+            .map(({ fromId }) => Number(fromId)),
+        ];
+        return [
+          ...new Set([
+            ...detail.relations
+              .filter(({ type }) => type === "story")
+              .map(({ id }) => id),
+            ...(detail.story.linkStories ?? []),
+            ...local,
+          ]),
+        ].filter(
+          (target) =>
+            target !== id && Number.isSafeInteger(target) && target > 0,
+        );
+      },
+    );
+    if (!related) return undefined;
+    const rows = await Promise.all(
+      related.map((target) =>
+        read(gaps, "story:" + target, async () => {
+          const story = await getStoryDetail(client, target);
+          if (story.id !== target)
+            throw new BztError(
+              "ZENTAO_SCHEMA_MISMATCH",
+              "关联需求与请求不一致。",
+            );
+          return { ...story, relation: "derives" };
+        }),
+      ),
+    );
+    return rows.every((row) => row !== undefined) ? rows : undefined;
   }
 
   private async readStoryRoles(id: number, gaps: Gaps) {
@@ -589,10 +1065,15 @@ export class RiskService {
     type: ObjectType,
     id: number,
     gaps: Gaps,
-    actions?: StoryDetail["actions"],
+    sourceComments?: Parameters<typeof foldRuleWaivers>[3],
   ): Promise<Waiver[]> {
     const { store } = this.options;
-    const byRule = new Map<Waiver["ruleId"], Waiver>();
+    const local = await read(
+      gaps,
+      "waivers:" + type + ":" + id,
+      () => store?.waivers?.listByObject(type, String(id)) ?? [],
+    );
+    const entries = cachedWaiverEntries(local ?? []);
     const source = `waivers:${type}:${id}`;
     const cached = store
       ? await read(gaps, source, () => store.cache.get(`risk:${source}`))
@@ -600,30 +1081,11 @@ export class RiskService {
     if (cached !== undefined) {
       try {
         const rows = waiverRows.parse(JSON.parse(cached));
-        for (const row of rows)
-          byRule.set(row.ruleId, { ...row, objectType: type, objectId: id });
+        entries.push(...rows);
       } catch {
         gaps.push({ source, reason: "本地规则豁免记录格式无效。" });
       }
     }
-    // docs/04 §2、docs/07 §4.7：只接受登记人自己发布的结构化豁免。
-    const approvers = this.options.config.roles.PM ?? [];
-    const comments = [...(actions ?? [])].sort(
-      (a, b) => (a.date ?? 0) - (b.date ?? 0) || a.id - b.id,
-    );
-    for (const { action, actor, comment } of comments) {
-      if (action.toLowerCase() !== "commented" || !actor || !comment) continue;
-      const match =
-        /^\[bzt:waiver v1\]\s+rule=(R0[1-5])\s+\|\s+approvedBy=([^\s|]+)\s+\|\s+reason=(\S[^\r\n]*)$/u.exec(
-          comment.trim(),
-        );
-      if (!match || match[2] !== actor || !approvers.includes(actor)) continue;
-      const [row] = waiverRows.parse([
-        { ruleId: match[1], by: match[2], reason: match[3] },
-      ]);
-      if (row)
-        byRule.set(row.ruleId, { ...row, objectType: type, objectId: id });
-    }
-    return [...byRule.values()];
+    return foldRuleWaivers(type, id, entries, sourceComments);
   }
 }

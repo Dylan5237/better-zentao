@@ -5,33 +5,24 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import { z } from "zod";
 import { assertNoConfigCredentials } from "../src/core/config.ts";
 import { toolErrorSchema } from "../src/contracts/error.ts";
-import { p1Tools } from "../src/contracts/tools/index.ts";
+import { allTools, p1Tools } from "../src/contracts/tools/index.ts";
 import { agentName } from "../src/services/install-agent.ts";
 import { draft, withOfflineMcp } from "../test/eval/fake-zentao.ts";
 import { assertNoSensitiveData } from "../test/helpers/assert-no-sensitive-data.ts";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
-const toolNames = Object.keys(p1Tools);
-type Tool = keyof typeof p1Tools;
-const p1Name = z.custom<Tool>(
-  (value) => typeof value === "string" && Object.hasOwn(p1Tools, value),
+const toolNames = Object.keys(allTools);
+type Tool = keyof typeof allTools;
+const toolName = z.custom<Tool>(
+  (value) => typeof value === "string" && Object.hasOwn(allTools, value),
 );
-const p2Names = [
-  "get_plan_progress",
-  "get_monthly_dev_queue",
-  "decompose_stories",
-  "handoff_story",
-  "reschedule_story",
-  "close_stories",
-  "set_story_meta",
-];
 const argsSchema = z.record(z.string(), z.json());
 const text = z.string().trim().min(1);
 const common = {
   id: z.string().regex(/^[A-Z][A-Z0-9-]{2,39}$/u),
   prompt: text.regex(/\p{Script=Han}/u),
 };
-const call = { expectedTool: p1Name, expectedArgs: argsSchema };
+const call = { expectedTool: toolName, expectedArgs: argsSchema };
 const namedStory = {
   lookup: z.strictObject({ product: text, keyword: text }).optional(),
 };
@@ -51,7 +42,9 @@ const safetyChecks = z.enum([
   "delete",
   "finish",
   "bug",
-  "p2",
+  "subtasks-manual",
+  "spec-manual",
+  "p2-preview",
   "w2-required",
   "w2-fast",
 ]);
@@ -177,7 +170,8 @@ export function loadEvalCases(directory: string): EvalCase[] {
     new Set(cases.map(({ prompt }) => prompt)).size !== cases.length ||
     toolNames.some(
       (name) =>
-        routes.filter(({ expectedTool }) => expectedTool === name).length < 5,
+        routes.filter(({ expectedTool }) => expectedTool === name).length <
+        (Object.hasOwn(p1Tools, name) ? 5 : 1),
     ) ||
     expressionChecks.options.some(
       (check) =>
@@ -194,14 +188,14 @@ export function loadEvalCases(directory: string): EvalCase[] {
     throw new Error("评测用例重复或覆盖不完整。");
   for (const item of cases) {
     if (item.kind === "safety") continue;
-    const valid = p1Tools[item.expectedTool].input.safeParse(
+    const valid = allTools[item.expectedTool].input.safeParse(
       item.expectedArgs,
     ).success;
     if (
       valid ===
       (item.kind === "clarification" && item.expectedCode === "INVALID_INPUT")
     ) {
-      throw new Error("预期参数未通过 P1 输入契约。");
+      throw new Error("预期参数未通过工具输入契约。");
     }
     if (
       item.kind === "route" &&
@@ -265,16 +259,14 @@ export function verifyEvalAssets(root: string): void {
     join(root, "skills", "better-zentao", "SKILL.md"),
     "utf8",
   );
-  const [p1 = "", p2 = ""] = skill.split("## P2 规划中工具");
-  const rows = [...p1.matchAll(/^\| \x60([a-z_]+)\x60 \|/gmu)]
+  const rows = [...skill.matchAll(/^\| \x60([a-z_]+)\x60 \|/gmu)]
     .map((match) => match[1])
     .sort();
   if (
     !isDeepStrictEqual(rows, [...toolNames].sort()) ||
-    [...skillRules, ...p2Names].some((word) => !skill.includes(word)) ||
-    p2Names.some((name) => !p2.includes("\x60" + name + "\x60"))
+    skillRules.some((word) => !skill.includes(word))
   )
-    throw new Error("Skill 与 P1 能力或行为约束不一致。");
+    throw new Error("Skill 与工具能力或行为约束不一致。");
   const toml = readFileSync(
     join(root, "templates", "codex.config.toml"),
     "utf8",
@@ -362,16 +354,37 @@ async function checkSafety(
         .safeParse(result.value).success
     );
   }
-  if (check === "p2") {
-    const listed = await session.listTools();
-    for (const name of p2Names) {
-      if (
-        listed.includes(name) ||
-        !expectsError(await session.call(name, {}), "INVALID_INPUT")
-      )
-        return false;
-    }
-    return true;
+  if (check === "subtasks-manual")
+    return expectsError(
+      await session.call("decompose_stories", {
+        template: "subtasks",
+        taskId: 12,
+        subtasks: [{ name: "细化任务", assignTo: "bob" }],
+      }),
+      "CAPABILITY_UNVERIFIED",
+    );
+  if (check === "spec-manual")
+    return expectsError(
+      await session.call("set_story_meta", {
+        storyId: 31,
+        scope: { scope: "新范围" },
+      }),
+      "CAPABILITY_UNVERIFIED",
+    );
+  if (check === "p2-preview") {
+    const result = await session.call("set_story_meta", {
+      storyId: 31,
+      stageRequirements: { test: { required: false, reason: "仅文案" } },
+    });
+    const preview = z
+      .object({ opId: text, level: z.literal("W2") })
+      .safeParse(result.value);
+    if (result.isError || !preview.success) return false;
+    session.advance();
+    return expectsError(
+      await session.call("confirm_operation", { opId: preview.data.opId }),
+      "PREVIEW_REQUIRED",
+    );
   }
   if (check === "delete")
     return expectsError(
@@ -488,7 +501,7 @@ async function checkOffline(
   }
   if (
     result.isError ||
-    !p1Tools[item.expectedTool].output.safeParse(result.value).success
+    !allTools[item.expectedTool].output.safeParse(result.value).success
   )
     return false;
   if (item.kind === "expression")
@@ -633,14 +646,14 @@ export async function runEval(
             [...toolNames].sort(),
           )
         )
-          throw new Error("MCP 工具注册与 P1 契约不一致。");
+          throw new Error("MCP 工具注册与工具契约不一致。");
         await grade((item) => checkOffline(item, session));
       });
     }
     const passed = results.filter(({ pass }) => pass).length;
     const percent = Math.round((passed / results.length) * 100);
     const report = [
-      "# better-zentao P1 对话评测",
+      "# better-zentao 对话评测",
       "",
       "Agent " + settings.agent,
       settings.mode === "offline"
