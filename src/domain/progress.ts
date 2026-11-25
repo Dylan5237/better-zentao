@@ -41,7 +41,7 @@ function isDraft(status: string): boolean {
 }
 
 // docs/04 §4.4、§6 关闭需要阶段证据。综合任务保留为无法判断。
-function classifyFeature(input: FeatureInput) {
+function classifyFeature(input: FeatureInput): FeatureProgress {
   const { status, stages, closedReason, bugs, hasUnknownTasks } = input;
   const isRequired = (stage: Stage) =>
     input.required?.[stage] ?? defaultRequired.includes(stage);
@@ -98,6 +98,29 @@ export function featureProgress(input: FeatureInput) {
   )
     flags.push("已发布·测试未完成");
   return { progress, flags };
+}
+
+export type FeatureProgress =
+  | "未就绪"
+  | "已取消"
+  | "已完成"
+  | "已关闭·证据缺失"
+  | "无法判断"
+  | "待接收"
+  | "研发中"
+  | "待测试"
+  | "测试中"
+  | "待验收"
+  | "待交付"
+  | "可关闭";
+
+// docs/04 §4.7 保留原始分母；零分母没有可计算的比率。
+export function completionRate(numerator: number, denominator: number) {
+  return {
+    numerator,
+    denominator,
+    rate: denominator > 0 ? numerator / denominator : null,
+  };
 }
 
 interface DesignInput extends ProgressInput {

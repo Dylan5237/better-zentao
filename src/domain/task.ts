@@ -20,6 +20,32 @@ function isFinished(status: Task["status"]): boolean {
   return status === "done" || status === "closed" || status === "cancel";
 }
 
+type TaskTreeNode = Pick<Task, "id" | "parent" | "isParent" | "deleted">;
+export type LeafCountTask = TaskTreeNode &
+  Pick<Task, "status" | "closedReason">;
+
+// docs/04 §4.3 同一个任务可从多个集合取到，已知父任务不进入叶子统计。
+export function selectLeafTasks<T extends TaskTreeNode>(
+  tasks: readonly T[],
+): T[] {
+  const active = tasks.filter((task) => !task.deleted);
+  const unique = new Map(active.map((task) => [task.id, task]));
+  const parentIds = new Set(active.map(({ parent }) => parent));
+  return [...unique.values()].filter(
+    (task) => !task.isParent && !parentIds.has(task.id),
+  );
+}
+
+// docs/04 §3.3 已关闭但原因是取消的任务也不进入有效完成率。
+export function isCancelledTask(
+  task: Pick<Task, "status" | "closedReason">,
+): boolean {
+  return (
+    task.status === "cancel" ||
+    (task.status === "closed" && task.closedReason === "cancel")
+  );
+}
+
 // docs/04 §4.2 终态仍须比较真实完成时间和业务时区的截止时刻。
 export function taskTimeStatus(
   task: Pick<Task, "status" | "deadline" | "finishedDate">,
