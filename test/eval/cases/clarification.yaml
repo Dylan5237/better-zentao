@@ -5,7 +5,7 @@
   expectedTool: "create_story"
   expectedArgs:
     {
-      "product": 29,
+      "product": "产品甲",
       "title": "增加筛选",
       "spec": { "background": "数据较多", "scope": "按部门筛选" },
       "verify": "显示对应部门的数据",
@@ -19,8 +19,8 @@
   expectedTool: "create_story"
   expectedArgs:
     {
-      "product": 29,
-      "module": 3,
+      "product": "产品甲",
+      "module": "权限",
       "title": "增加筛选",
       "spec": { "background": "数据较多", "scope": "按部门筛选" },
     }
@@ -34,8 +34,8 @@
   expectedTool: "create_story"
   expectedArgs:
     {
-      "product": 29,
-      "module": 3,
+      "product": "产品甲",
+      "module": "权限",
       "title": "增加筛选",
       "spec": { "background": "近期反馈较多" },
       "verify": "显示对应部门的数据",
@@ -50,8 +50,8 @@
   expectedTool: "create_story"
   expectedArgs:
     {
-      "product": 29,
-      "module": 3,
+      "product": "产品甲",
+      "module": "权限",
       "title": "增加筛选",
       "spec":
         {
@@ -72,3 +72,11 @@
   expectedArgs: { "people": ["重名同事"] }
   expectedCode: "AMBIGUOUS_ENTITY"
   replyHas: ["候选", "请选择"]
+
+- id: "AC-02-MODULE"
+  kind: "clarification"
+  prompt: "帮我找审批模块，产品记不清了。"
+  expectedTool: "resolve_context"
+  expectedArgs: { "module": "审批" }
+  expectedCode: "AMBIGUOUS_ENTITY"
+  replyHas: ["候选", "产品甲", "产品乙", "请选择"]

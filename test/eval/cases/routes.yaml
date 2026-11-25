@@ -20,15 +20,15 @@
 
 - id: "ROUTE-01-4"
   kind: "route"
-  prompt: "找下产品甲的权限模块"
+  prompt: "两个产品都有审批模块，我要产品甲的那个"
   expectedTool: "resolve_context"
-  expectedArgs: { "product": "产品甲", "module": "权限" }
+  expectedArgs: { "product": "产品甲", "module": "审批" }
 
 - id: "ROUTE-01-5"
   kind: "route"
   prompt: "把设计和研发这两个禅道账号都核对一下"
   expectedTool: "resolve_context"
-  expectedArgs: { "people": ["alice", "bob"] }
+  expectedArgs: { "people": ["设计", "研发"] }
 
 - id: "ROUTE-02-1"
   kind: "route"
@@ -76,20 +76,21 @@
   kind: "route"
   prompt: "产品甲逾期活儿按需求汇总"
   expectedTool: "get_team_work"
-  expectedArgs: { "product": "29", "view": "overdue", "groupBy": "story" }
+  expectedArgs: { "product": "产品甲", "view": "overdue", "groupBy": "story" }
 
 - id: "ROUTE-03-4"
   kind: "route"
   prompt: "给我看产品甲所有未完工的任务，按迭代分"
   expectedTool: "get_team_work"
-  expectedArgs: { "product": "29", "view": "all_open", "groupBy": "execution" }
+  expectedArgs:
+    { "product": "产品甲", "view": "all_open", "groupBy": "execution" }
 
 - id: "ROUTE-03-5"
   kind: "route"
   prompt: "设计和研发这两位今天有哪些待做，按人分组"
   expectedTool: "get_team_work"
   expectedArgs:
-    { "members": ["alice", "bob"], "view": "all_open", "groupBy": "member" }
+    { "members": ["设计", "研发"], "view": "all_open", "groupBy": "member" }
 
 - id: "ROUTE-04-1"
   kind: "route"
@@ -107,13 +108,13 @@
   kind: "route"
   prompt: "给我个研发的三周排期网页"
   expectedTool: "get_member_schedule"
-  expectedArgs: { "members": ["bob"], "weeks": 3, "format": "html" }
+  expectedArgs: { "members": ["研发"], "weeks": 3, "format": "html" }
 
 - id: "ROUTE-04-4"
   kind: "route"
   prompt: "设计和研发两人的四周排期都看看"
   expectedTool: "get_member_schedule"
-  expectedArgs: { "members": ["alice", "bob"], "weeks": 4 }
+  expectedArgs: { "members": ["设计", "研发"], "weeks": 4 }
 
 - id: "ROUTE-04-5"
   kind: "route"
@@ -121,7 +122,7 @@
   expectedTool: "get_member_schedule"
   expectedArgs:
     {
-      "members": ["bob"],
+      "members": ["研发"],
       "newTask": { "estimateHours": 8, "deadline": "2026-11-30" },
     }
 
@@ -129,13 +130,13 @@
   kind: "route"
   prompt: "产品甲里面找标题带查询的需求"
   expectedTool: "query_stories"
-  expectedArgs: { "product": "29", "keyword": "查询" }
+  expectedArgs: { "product": "产品甲", "keyword": "查询" }
 
 - id: "ROUTE-05-2"
   kind: "route"
   prompt: "我维护着哪些产品甲的需求？"
   expectedTool: "query_stories"
-  expectedArgs: { "product": "29", "role": "maintainer" }
+  expectedArgs: { "product": "产品甲", "role": "maintainer" }
 
 - id: "ROUTE-05-3"
   kind: "route"
@@ -143,7 +144,7 @@
   expectedTool: "query_stories"
   expectedArgs:
     {
-      "product": "29",
+      "product": "产品甲",
       "module": "权限",
       "month": "本月",
       "category": "feature",
@@ -153,13 +154,13 @@
   kind: "route"
   prompt: "列三条我提出的产品甲需求"
   expectedTool: "query_stories"
-  expectedArgs: { "product": "29", "role": "raised", "limit": 3 }
+  expectedArgs: { "product": "产品甲", "role": "raised", "limit": 3 }
 
 - id: "ROUTE-05-5"
   kind: "route"
   prompt: "产品甲未关联的用户需求扫一下"
   expectedTool: "query_stories"
-  expectedArgs: { "product": "29", "type": "requirement", "unlinked": true }
+  expectedArgs: { "product": "产品甲", "type": "requirement", "unlinked": true }
 
 - id: "ROUTE-06-1"
   kind: "route"
@@ -169,9 +170,10 @@
 
 - id: "ROUTE-06-2"
   kind: "route"
-  prompt: "把三十一号的进度做成能转发的卡片"
+  prompt: "把产品甲的查询能力需求进度做成能转发的卡片"
   expectedTool: "get_story_progress"
   expectedArgs: { "storyId": 31, "format": "card" }
+  lookup: { "product": "产品甲", "keyword": "查询能力" }
 
 - id: "ROUTE-06-3"
   kind: "route"
@@ -197,8 +199,8 @@
   expectedTool: "create_story"
   expectedArgs:
     {
-      "product": 29,
-      "module": 3,
+      "product": "产品甲",
+      "module": "权限",
       "title": "增加筛选",
       "spec": { "background": "数据较多", "scope": "按部门筛选" },
       "verify": "显示对应部门的数据",
@@ -224,8 +226,8 @@
   expectedTool: "create_story"
   expectedArgs:
     {
-      "product": 29,
-      "module": 3,
+      "product": "产品甲",
+      "module": "权限",
       "title": "增加筛选",
       "spec": { "background": "数据较多", "scope": "按部门筛选" },
       "verify": "显示对应部门的数据",
@@ -238,8 +240,8 @@
   expectedTool: "create_story"
   expectedArgs:
     {
-      "product": 29,
-      "module": 3,
+      "product": "产品甲",
+      "module": "权限",
       "title": "增加筛选",
       "spec": { "background": "数据较多", "scope": "按部门筛选" },
       "verify": "显示对应部门的数据",
@@ -256,8 +258,8 @@
   expectedTool: "create_story"
   expectedArgs:
     {
-      "product": 29,
-      "module": 3,
+      "product": "产品甲",
+      "module": "权限",
       "title": "增加筛选",
       "spec": { "background": "数据较多", "scope": "按部门筛选" },
       "verify": "显示对应部门的数据",
@@ -276,8 +278,8 @@
           "rows":
             [
               {
-                "product": 29,
-                "module": 3,
+                "product": "产品甲",
+                "module": "权限",
                 "title": "增加筛选",
                 "spec": { "background": "数据较多", "scope": "按部门筛选" },
                 "verify": "显示对应部门的数据",
@@ -298,8 +300,8 @@
           "rows":
             [
               {
-                "product": 29,
-                "module": 3,
+                "product": "产品甲",
+                "module": "权限",
                 "title": "增加筛选",
                 "spec": { "background": "数据较多", "scope": "按部门筛选" },
                 "verify": "显示对应部门的数据",
@@ -321,15 +323,15 @@
           "rows":
             [
               {
-                "product": 29,
-                "module": 3,
+                "product": "产品甲",
+                "module": "权限",
                 "title": "增加筛选",
                 "spec": { "background": "数据较多", "scope": "按部门筛选" },
                 "verify": "显示对应部门的数据",
               },
               {
-                "product": 29,
-                "module": 3,
+                "product": "产品甲",
+                "module": "权限",
                 "title": "增加导出",
                 "spec": { "background": "汇总", "scope": "导出结果" },
                 "verify": "下载筛选结果",
@@ -356,7 +358,7 @@
               },
             ],
         },
-      "defaults": { "product": 29, "module": 3 },
+      "defaults": { "product": "产品甲", "module": "权限" },
     }
 
 - id: "ROUTE-08-5"
@@ -371,8 +373,8 @@
           "rows":
             [
               {
-                "product": 29,
-                "module": 3,
+                "product": "产品甲",
+                "module": "权限",
                 "title": "增加筛选",
                 "spec": { "background": "数据较多", "scope": "按部门筛选" },
                 "verify": "显示对应部门的数据",
@@ -397,15 +399,15 @@
 
 - id: "ROUTE-09-3"
   kind: "route"
-  prompt: "给研发账号 bob 分三十二号，别发通知"
+  prompt: "给研发主管（前端） 分三十二号，别发通知"
   expectedTool: "assign_story"
-  expectedArgs: { "storyIds": [32], "to": "bob", "notify": false }
+  expectedArgs: { "storyIds": [32], "to": "研发主管（前端）", "notify": false }
 
 - id: "ROUTE-09-4"
   kind: "route"
-  prompt: "三十一和三十二都交给 alice"
+  prompt: "三十一和三十二都交给设计同事"
   expectedTool: "assign_story"
-  expectedArgs: { "storyIds": [31, 32], "to": "alice" }
+  expectedArgs: { "storyIds": [31, 32], "to": "设计" }
 
 - id: "ROUTE-09-5"
   kind: "route"
@@ -418,34 +420,37 @@
   kind: "route"
   prompt: "看产品甲的流程有哪些问题"
   expectedTool: "scan_workflow_risks"
-  expectedArgs: { "scope": { "product": "29" } }
+  expectedArgs: { "scope": { "product": "产品甲" } }
 
 - id: "ROUTE-10-2"
   kind: "route"
   prompt: "产品甲只查研发完成没接测试的 R02"
   expectedTool: "scan_workflow_risks"
-  expectedArgs: { "scope": { "product": "29" }, "rules": ["R02"] }
+  expectedArgs: { "scope": { "product": "产品甲" }, "rules": ["R02"] }
 
 - id: "ROUTE-10-3"
   kind: "route"
   prompt: "查产品甲权限模块有哪些中度及以上的风险"
   expectedTool: "scan_workflow_risks"
   expectedArgs:
-    { "scope": { "product": "29", "module": "权限" }, "minSeverity": "medium" }
+    {
+      "scope": { "product": "产品甲", "module": "权限" },
+      "minSeverity": "medium",
+    }
 
 - id: "ROUTE-10-4"
   kind: "route"
   prompt: "本月产品甲风险按负责人归一下"
   expectedTool: "scan_workflow_risks"
   expectedArgs:
-    { "scope": { "product": "29", "month": "本月" }, "groupBy": "owner" }
+    { "scope": { "product": "产品甲", "month": "本月" }, "groupBy": "owner" }
 
 - id: "ROUTE-10-5"
   kind: "route"
   prompt: "我自己的产品甲风险按需求分组看看"
   expectedTool: "scan_workflow_risks"
   expectedArgs:
-    { "scope": { "product": "29", "mine": true }, "groupBy": "story" }
+    { "scope": { "product": "产品甲", "mine": true }, "groupBy": "story" }
 
 - id: "ROUTE-11-1"
   kind: "route"

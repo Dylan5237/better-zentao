@@ -175,28 +175,17 @@ async function publish(updates: FileUpdate[]): Promise<void> {
   }
 }
 
-const skillUrls = [
-  new URL("../../skills/better-zentao/SKILL.md", import.meta.url),
-  new URL("../../../skills/better-zentao/SKILL.md", import.meta.url),
-];
-
-async function readPackagedSkill(): Promise<string> {
-  for (const url of skillUrls) {
-    try {
-      return await readFile(url, "utf8");
-    } catch (error) {
-      if (ioError.safeParse(error).data?.code !== "ENOENT") throw error;
-    }
-  }
-  throw new Error("找不到随包分发的 Skill。");
-}
+const skillUrl = new URL(
+  "../../skills/better-zentao/SKILL.md",
+  import.meta.url,
+);
 
 export async function installAgent(options: InstallOptions) {
-  const { config, project, homeDir, env, dryRun } = options;
+  const { config: inputConfig, project, homeDir, env, dryRun } = options;
   const parsed = agentName.safeParse(options.agent);
   if (
     !parsed.success ||
-    (config !== undefined && !safePath(config, env)) ||
+    (inputConfig !== undefined && !safePath(inputConfig, env)) ||
     (project !== undefined &&
       (parsed.data !== "claude" || !safePath(project, env)))
   ) {
@@ -209,6 +198,13 @@ export async function installAgent(options: InstallOptions) {
   const agent = parsed.data;
   try {
     if (!homeDir) throw new Error("缺少用户目录。");
+    const config =
+      inputConfig === undefined
+        ? undefined
+        : /^~(?:[/\\]|$)/u.test(inputConfig)
+          ? resolve(homeDir, ...inputConfig.slice(1).split(/[/\\]+/u))
+          : resolve(inputConfig);
+    if (config !== undefined) assertNoConfigCredentials(config, env);
     const agentDir = resolve(homeDir, "." + agent);
     const configFile =
       agent === "claude"
@@ -224,7 +220,7 @@ export async function installAgent(options: InstallOptions) {
     const [before, oldSkill, skill, guide] = await Promise.all([
       readExisting(configFile),
       readExisting(skillFile),
-      readPackagedSkill(),
+      readFile(skillUrl, "utf8"),
       agent === "claude" ? undefined : readExisting(guideFile),
     ]);
     const updates = [
