@@ -165,3 +165,110 @@ it("WP-30 产品无项目时返回空集，不读取其他产品或执行", asyn
   });
   expect(fetch).toHaveBeenCalledTimes(2);
 });
+
+it("WP-30 22.6 项目列表缺少 multiple/products 时回读 v2/project/view 验证归属", async () => {
+  const { client, fetch } = mockReadClient((url) => {
+    if (url.pathname === "/zentao/api.php/v1/products/29/projects") {
+      return Response.json({
+        total: 1,
+        projects: [{ id: 314, status: "wait" }],
+      });
+    }
+    if (url.pathname === "/zentao/api.php/v2/project/view") {
+      expect(url.searchParams.get("projectID")).toBe("314");
+      return Response.json({
+        project: { id: 314, status: "wait", deleted: 0, multiple: 1 },
+        products: { "29": { id: 29, name: "示例产品" } },
+      });
+    }
+    if (url.pathname === "/zentao/api.php/v1/projects/314/executions") {
+      return Response.json({
+        executions: [{ id: 315, project: 314, status: "wait" }],
+      });
+    }
+    if (url.pathname === "/zentao/api.php/v1/executions/315") {
+      return Response.json({
+        id: 315,
+        project: 314,
+        status: "wait",
+        deleted: false,
+        products: [{ id: 29, name: "示例产品" }],
+      });
+    }
+    throw new Error(`Unexpected fixture path: ${url.pathname}`);
+  });
+  await expect(readProbeExecutions(client)).resolves.toEqual({
+    projectsCount: 1,
+    executions: [{ id: 315, project: 314 }],
+  });
+  expect(fetch).toHaveBeenCalledTimes(5);
+});
+
+it.each([
+  {
+    name: "包含非 29 产品",
+    body: {
+      project: { id: 314, status: "wait", deleted: 0, multiple: 1 },
+      products: { "29": { id: 29 }, "42": { id: 42 } },
+    },
+  },
+  {
+    name: "缺少 products 字段",
+    body: {
+      project: { id: 314, status: "wait", deleted: 0, multiple: 1 },
+    },
+  },
+  {
+    name: "详情 project.id 不匹配",
+    body: {
+      project: { id: 999, status: "wait", deleted: 0, multiple: 1 },
+      products: { "29": { id: 29 } },
+    },
+  },
+])("WP-30 v2/project/view 异常（$name）时拒绝放行", async ({ body }) => {
+  const { client } = mockReadClient((url) => {
+    if (url.pathname === "/zentao/api.php/v1/products/29/projects") {
+      return Response.json({
+        total: 1,
+        projects: [{ id: 314, status: "wait" }],
+      });
+    }
+    if (url.pathname === "/zentao/api.php/v2/project/view") {
+      return Response.json(body);
+    }
+    throw new Error(`Unexpected fixture path: ${url.pathname}`);
+  });
+  await expect(readProbeExecutions(client)).rejects.toHaveProperty(
+    "code",
+    "PERMISSION_DENIED",
+  );
+});
+
+it.each([
+  { multiple: 0, status: "wait" },
+  { multiple: 1, status: "closed" },
+])(
+  "WP-30 v2/project/view 为非多迭代或已关闭项目（%o）时直接跳过",
+  async ({ multiple, status }) => {
+    const { client, fetch } = mockReadClient((url) => {
+      if (url.pathname === "/zentao/api.php/v1/products/29/projects") {
+        return Response.json({
+          total: 1,
+          projects: [{ id: 314, status: "wait" }],
+        });
+      }
+      if (url.pathname === "/zentao/api.php/v2/project/view") {
+        return Response.json({
+          project: { id: 314, status, deleted: 0, multiple },
+          products: { "29": { id: 29 } },
+        });
+      }
+      throw new Error(`Unexpected fixture path: ${url.pathname}`);
+    });
+    await expect(readProbeExecutions(client)).resolves.toEqual({
+      projectsCount: 1,
+      executions: [],
+    });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  },
+);

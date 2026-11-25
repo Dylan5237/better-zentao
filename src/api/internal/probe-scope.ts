@@ -4,6 +4,7 @@ import { zId } from "../../core/dto/common.ts";
 import {
   probeExecutionDto,
   probeProjectDto,
+  probeProjectViewDto,
 } from "../../core/dto/execution.ts";
 import { walkProductPlans } from "../../core/dto/plan.ts";
 import {
@@ -227,9 +228,26 @@ export async function readProbeExecutions(client: ZentaoReadClient) {
   const { http } = getReadClient(client);
   for (const project of projects) {
     if (project.products !== undefined) assertProbeProducts(project.products);
-    if (!project.multiple || !isOpen(project)) continue;
+    if (project.multiple === false || !isOpen(project)) continue;
+    let verifiedProducts = project.products;
+    if (project.multiple === undefined || verifiedProducts === undefined) {
+      const view = await http.read(
+        {
+          pathTemplate: "/api.php/v2/project/view",
+          query: { projectID: project.id },
+          objectId: project.id,
+        },
+        probeProjectViewDto,
+      );
+      if (view.project.id !== project.id) throw probeDenied();
+      const products = view.products ?? view.project.products;
+      if (products !== undefined) assertProbeProducts(products);
+      if (!view.project.multiple || !isOpen(view.project)) continue;
+      if (products === undefined) throw probeDenied();
+      verifiedProducts = products;
+    }
     // 执行关联需求时，禅道也会写入父项目的关联记录。
-    if (project.products === undefined) throw probeDenied();
+    if (verifiedProducts === undefined) throw probeDenied();
     const rows = await readScopePage(
       client,
       {

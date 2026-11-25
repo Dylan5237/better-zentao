@@ -30,7 +30,15 @@ const probeScopeFields = {
 
 export const probeProjectDto = z.object({
   ...probeScopeFields,
-  multiple: zBool,
+  multiple: zBool.optional(),
+});
+
+export const probeProjectViewDto = z.object({
+  project: z.object({
+    ...probeScopeFields,
+    multiple: zBool,
+  }),
+  products: probeProducts.optional(),
 });
 
 export const probeExecutionDto = z.object({
