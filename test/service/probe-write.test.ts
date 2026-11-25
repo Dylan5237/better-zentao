@@ -370,8 +370,6 @@ function fakeZentao(
     if (method === "PUT" && body?.keywords)
       story.keywords = String(body.keywords);
     if (method === "PUT" && body?.plan) story.plan = Number(body.plan);
-    if (method === "PUT" && typeof body?.spec === "string")
-      story.spec = options.normalizeSpec?.(body.spec) ?? body.spec;
     if (action === "comment") {
       if (match && options.commentUnsupported) return respond({}, 404);
       story.actions.push({
@@ -455,12 +453,13 @@ describe("WP-30 Phase A", () => {
       expect(
         [...zen.stories.values()].every(({ status }) => status === "closed"),
       ).toBe(true);
-      expect(
-        zen.entries.find(({ method }) => method === "PUT")?.body,
-      ).toMatchObject({
+      const putBody = zen.entries.find(({ method }) => method === "PUT")?.body;
+      expect(putBody).toMatchObject({
+        title: expect.any(String),
+        keywords: expect.stringContaining("WP-05-"),
         plan: 33,
-        spec: expect.stringContaining("[bzt:v1 "),
       });
+      expect(putBody).not.toHaveProperty("spec");
       const files = await readdir(out);
       expect(files).toEqual(
         expect.arrayContaining([

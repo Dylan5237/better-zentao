@@ -503,32 +503,24 @@ async function probeAction(
     case "story.edit": {
       const keywords = "WP-05-" + reference;
       const plan = state.session.scope?.openPlanIds[0];
-      const spec = buildStoryHtmlSpec(
-        {
-          background: ["WP-30 探查更新正文。\n验证微标签回读。"],
-          scope: ["回读修改后的正文。"],
-        },
-        {
-          maintainer: body.assignedTo,
-          receiver: body.assignedTo,
-          intake: "probe-wp30",
-        },
-        "visible",
-      );
       const results = await probeExisting(
         state,
         [
           {
             ...target,
             action: capability,
-            body: { title: body.title, keywords, spec, plan },
+            body: {
+              title: body.title,
+              keywords,
+              ...(plan !== undefined ? { plan } : {}),
+            },
           },
         ],
         (story) => {
           const { htmlStructure, roleTag } = storySpecReadback(
             story.spec,
-            spec,
-            "visible",
+            body.spec,
+            state.tagFormat,
           );
           return (
             story.keywords === keywords &&
@@ -546,7 +538,7 @@ async function probeAction(
               ? {
                   ...attempt,
                   fields: ["plan"],
-                  reason: "#29 无可用未关闭计划，已确认关键词和可见微标签。",
+                  reason: "#29 无可用未关闭计划，已确认关键词且正文完整。",
                 }
               : attempt,
           )
