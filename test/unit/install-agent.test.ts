@@ -6,7 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runCli } from "../../src/adapters/cli/run-cli.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
@@ -53,13 +53,14 @@ it("WP-21 Codex 保留其他配置和注释，更新已有环境表与说明段�
     ".codex/AGENTS.md",
     "用户说明\n<!-- better-zentao:start -->\n旧内容\n<!-- better-zentao:end -->\n后续内容\n",
   );
-  const args = ["--agent", "codex", "--config", "C:\\team\\团队.json"];
+  const configPath = join(homeDir, "团队.json");
+  const args = ["--agent", "codex", "--config", configPath];
   expect((await install(...args)).status).toBe(0);
   const config = read(".codex/config.toml");
   expect(config).toContain('command = "bzt" # 指令');
   expect(config).toContain("# 参数");
   expect(config).toContain('args = ["mcp"]');
-  expect(config).toContain('BZT_CONFIG = "C:\\\\team\\\\团队.json"');
+  expect(config).toContain("BZT_CONFIG = " + JSON.stringify(configPath));
   expect(config).toContain('[mcp_servers.other]\r\ncommand = "mine"');
   const guide = read(".codex/AGENTS.md");
   expect(guide).toContain("用户说明");
@@ -79,7 +80,9 @@ it("WP-21 Codex 兼容旧模板的内联 env，保留其他成员", async () => 
   );
   expect((await install("codex", "--config", "new.json")).status).toBe(0);
   expect(read(".codex/config.toml")).toContain(
-    'env = { OTHER = "a,b#c", BZT_CONFIG = "new.json" } # 保留',
+    'env = { OTHER = "a,b#c", BZT_CONFIG = ' +
+      JSON.stringify(resolve("new.json")) +
+      " } # 保留",
   );
   expect((await install("codex")).status).toBe(0);
   const path = ".codex/config.toml";
@@ -123,7 +126,7 @@ it.each([
         command: "bzt",
         args: ["mcp"],
         timeout: 20,
-        env: { OTHER: "kept", BZT_CONFIG: "team.json" },
+        env: { OTHER: "kept", BZT_CONFIG: resolve("team.json") },
       },
     },
   });
@@ -134,6 +137,59 @@ it.each([
     expect(read(".gemini/GEMINI.md")).toMatch(
       /^用户说明\n[\s\S]*better-zentao:start/u,
     );
+});
+
+it.each(["~/配置/团队.json", "~\\配置\\团队.json"])(
+  "N5 将 %s 展开为用户目录下的绝对路径",
+  async (path) => {
+    expect((await install("claude", "--config", path)).status).toBe(0);
+    expect(JSON.parse(read(".claude.json"))).toMatchObject({
+      mcpServers: {
+        "better-zentao": {
+          env: { BZT_CONFIG: join(homeDir, "配置", "团队.json") },
+        },
+      },
+    });
+  },
+);
+
+it("N4 保留带方括号的引号表名、非 env 子表及其他服务器的数组表", async () => {
+  const original = [
+    "[mcp_servers.better-zentao]",
+    'command = "old"',
+    '[mcp_servers.better-zentao."auth[cli]"] # 保留',
+    '"键=名" = true',
+    'command = "child"',
+    "[mcp_servers.better-zentao.env]",
+    'OTHER = "kept"',
+    '[[mcp_servers."other[server]".fallbacks]]',
+    'command = "kept"',
+    "",
+  ].join("\n");
+  put(".codex/config.toml", original);
+  expect((await install("codex", "--config", "team.json")).status).toBe(0);
+  const updated = read(".codex/config.toml");
+  expect(updated).toContain(
+    '[mcp_servers.better-zentao."auth[cli]"] # 保留\n"键=名" = true\ncommand = "child"',
+  );
+  expect(updated).toContain(
+    '[[mcp_servers."other[server]".fallbacks]]\ncommand = "kept"',
+  );
+  expect(updated).toContain('OTHER = "kept"');
+  expect(updated.match(/^command = "bzt"$/gmu)).toHaveLength(1);
+});
+
+it.each([
+  '[[mcp_servers]]\ncommand = "other"\n',
+  '[mcp_servers.other]]\ncommand = "other"\n',
+  "[unmanaged]\nmalformed line\n",
+  "[unmanaged]\nvalue = nonsense\n",
+  "[unmanaged]\nvalue = [true false]\n",
+])("N4 拒绝冲突或损坏的 TOML，且文件不落盘", async (original) => {
+  put(".codex/config.toml", original);
+  expect((await install("codex", "--config", "team.json")).status).toBe(1);
+  expect(read(".codex/config.toml")).toBe(original);
+  expect(() => read(".codex/skills/better-zentao/SKILL.md")).toThrow();
 });
 
 it("WP-21 Claude 项目安装只修改项目 MCP 配置与用户 Skill，dry-run 无写入", async () => {

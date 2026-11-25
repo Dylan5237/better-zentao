@@ -29,20 +29,121 @@ function statements(text: string, separator: "\n" | ","): string[] {
   return parts;
 }
 
+const bareKey = /^[A-Za-z0-9_-]+$/u;
+const keyPart = /[A-Za-z0-9_-]+|"(?:\\[^\r\n]|[^"\\\r\n])*"|'[^'\r\n]*'/u;
 const keyPath =
-  /^(?:[A-Za-z0-9_-]+|"[A-Za-z0-9_-]+"|'[A-Za-z0-9_-]+')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"[A-Za-z0-9_-]+"|'[A-Za-z0-9_-]+'))*$/u;
+  "(?:" + keyPart.source + ")(?:[ \\t]*\\.[ \\t]*(?:" + keyPart.source + "))*";
+const setting = new RegExp(
+  "^([ \\t]*(" + keyPath + ")[ \\t]*=[ \\t]*)([\\s\\S]*)$",
+  "u",
+);
+const table = new RegExp(
+  "^[ \\t]*(\\[{1,2})[ \\t]*(" +
+    keyPath +
+    ")[ \\t]*(\\]{1,2})[ \\t]*(?:#[^\\r\\n]*)?$",
+  "u",
+);
 
-function normalizeKey(key: string): string {
-  const name = key.trim();
-  return keyPath.test(name) ? name.replace(/[\s'"]/gu, "") : "";
+function syntaxError(): never {
+  throw new Error("无法识别 TOML 语句。");
+}
+
+const basicEscapes: Readonly<Record<string, string>> = {
+  b: "\b",
+  t: "\t",
+  n: "\n",
+  f: "\f",
+  r: "\r",
+  '"': '"',
+  "\\": "\\",
+};
+
+function decodeBasicString(text: string, multiline = false): string {
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text))
+    syntaxError();
+  return text.replace(
+    /\\(?:[ \t]*\r?\n[ \t\r\n]*|u[\da-fA-F]{4}|U[\da-fA-F]{8}|[\s\S]|$)/gu,
+    (escape) => {
+      if (multiline && escape.includes("\n")) return "";
+      if (/^\\[uU][\da-fA-F]{4,8}$/u.test(escape)) {
+        const point = Number.parseInt(escape.slice(2), 16);
+        if (point > 0x10ffff || (point >= 0xd800 && point <= 0xdfff))
+          syntaxError();
+        return String.fromCodePoint(point);
+      }
+      return basicEscapes[escape.slice(1)] ?? syntaxError();
+    },
+  );
+}
+
+function normalizeKey(path: string): string {
+  return [...path.matchAll(new RegExp(keyPart.source, "gu"))]
+    .map(([key]) => {
+      const text = key.startsWith('"')
+        ? decodeBasicString(key.slice(1, -1))
+        : key.startsWith("'")
+          ? key.slice(1, -1)
+          : key;
+      if (
+        key.startsWith("'") &&
+        /[\u0000-\u0008\u000b-\u001f\u007f]/u.test(text)
+      )
+        syntaxError();
+      return bareKey.test(text) ? text : JSON.stringify(text);
+    })
+    .join(".");
 }
 
 function assignment(line: string) {
-  const match = /^(\s*[^=\r\n]+?=\s*)([\s\S]*)$/u.exec(line);
-  const prefix = match?.[1];
-  if (!prefix) return;
-  const key = normalizeKey(prefix.split("=")[0] ?? "");
-  if (key) return { key, prefix, value: match[2] ?? "" };
+  const [, prefix, path, value] = setting.exec(line) ?? [];
+  if (prefix && path && value !== undefined)
+    return { key: normalizeKey(path), prefix, value };
+}
+
+const tomlNumber =
+  /^(?:[+-]?(?:inf|nan|(?:0|[1-9](?:_?\d)*)(?:\.\d(?:_?\d)*)?(?:[eE][+-]?\d(?:_?\d)*)?)|0x[\da-fA-F](?:_?[\da-fA-F])*|0o[0-7](?:_?[0-7])*|0b[01](?:_?[01])*)$/u;
+const tomlDate =
+  /^(?:\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})?)?|\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/u;
+
+function validateValue(raw: string): void {
+  const value = [...raw.matchAll(tokens)]
+    .map(([token]) => (token.startsWith("#") ? "" : token))
+    .join("")
+    .trim();
+  if (
+    value === "true" ||
+    value === "false" ||
+    tomlNumber.test(value) ||
+    tomlDate.test(value)
+  )
+    return;
+
+  if (value.startsWith("[") && value.endsWith("]")) {
+    const items = statements(value.slice(1, -1), ",");
+    if (!items.at(-1)?.trim()) items.pop();
+    for (const item of items) validateValue(item);
+    return;
+  }
+  if (value.startsWith("{") && value.endsWith("}")) {
+    const inner = value.slice(1, -1);
+    if (!inner.trim()) return;
+    const entries = new Set<string>();
+    for (const item of statements(inner, ",")) {
+      const entry = assignment(item);
+      if (!entry || entries.has(entry.key)) syntaxError();
+      entries.add(entry.key);
+      validateValue(entry.value);
+    }
+    return;
+  }
+
+  const [string] = value.matchAll(tokens);
+  if (string?.[0] !== value || !/^["']/u.test(value)) syntaxError();
+  const width = value.startsWith('"""') || value.startsWith("'''") ? 3 : 1;
+  const content = value.slice(width, -width);
+  if (value.startsWith('"')) decodeBasicString(content, width === 3);
+  else if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(content))
+    syntaxError();
 }
 
 function replaceAssignment(
@@ -134,11 +235,26 @@ export function mergeCodexToml(original: string, config?: string): string {
     { name: "", body: [] },
   ];
   for (const line of lines) {
-    const header = /^\s*(\[{1,2})([^[\]\r\n]+)\]{1,2}\s*(?:#.*)?$/u.exec(line);
+    const header = table.exec(line);
     if (header) {
-      const name = normalizeKey(header[2] ?? "");
-      if (header[1] === "[[" && (name === server || name === envTable))
+      const [, opening, path, closing] = header;
+      if (!path || opening?.length !== closing?.length) syntaxError();
+      const name = normalizeKey(path);
+      if (
+        opening === "[[" &&
+        (name === "mcp_servers" || name === server || name === envTable)
+      )
         throw new Error("MCP 配置与 TOML 数组表冲突。");
+      if (
+        name === server + ".command" ||
+        name.startsWith(server + ".command.") ||
+        name === server + ".args" ||
+        name.startsWith(server + ".args.") ||
+        (config !== undefined &&
+          (name === envTable + ".BZT_CONFIG" ||
+            name.startsWith(envTable + ".BZT_CONFIG.")))
+      )
+        throw new Error("MCP 配置键与 TOML 表冲突。");
       sections.push({ name, header: line, body: [] });
     } else sections.at(-1)?.body.push(line);
   }
@@ -152,16 +268,22 @@ export function mergeCodexToml(original: string, config?: string): string {
 
   // Dotted definitions can claim the same keys as the tables we write.
   for (const section of sections) {
+    const keys = new Set<string>();
     for (const line of section.body) {
+      if (!line.trim() || line.trimStart().startsWith("#")) continue;
       const entry = assignment(line);
-      if (!entry) continue;
+      if (!entry || keys.has(entry.key)) syntaxError();
+      keys.add(entry.key);
+      validateValue(entry.value);
       const full = section.name ? section.name + "." + entry.key : entry.key;
       if (
         full === "mcp_servers" ||
         full === server ||
-        (section.name !== server &&
-          section.name !== envTable &&
-          full.startsWith(server + "."))
+        ((section.name === "" || section.name === "mcp_servers") &&
+          full.startsWith(server + ".")) ||
+        full.startsWith(server + ".command.") ||
+        full.startsWith(server + ".args.") ||
+        (config !== undefined && full.startsWith(envTable + ".BZT_CONFIG."))
       )
         throw new Error("MCP 配置与 TOML 点分键冲突。");
     }

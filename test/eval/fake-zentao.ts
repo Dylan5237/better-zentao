@@ -68,9 +68,15 @@ function fakeZentao() {
     "/api.php/v1/products": { products: [product, partialProduct] },
     "/api.php/v1/products/29": {
       ...product,
-      moduleOptionMenu: [{ id: 3, name: "权限" }],
+      moduleOptionMenu: [
+        { id: 3, name: "权限" },
+        { id: 4, name: "审批" },
+      ],
     },
-    "/api.php/v1/products/30": { ...partialProduct, moduleOptionMenu: [] },
+    "/api.php/v1/products/30": {
+      ...partialProduct,
+      moduleOptionMenu: [{ id: 5, name: "审批" }],
+    },
     "/api.php/v1/products/29/plans": { plans: [] },
     "/api.php/v1/products/30/plans": { plans: [] },
     "/api.php/v1/products/29/bugs": { bugs: [] },

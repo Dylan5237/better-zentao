@@ -7,6 +7,7 @@ import { BztError } from "../core/errors.ts";
 import { assertCapabilityExecutable } from "./capabilities.ts";
 import type { ZentaoReadClient } from "./client.ts";
 import { getReadClient } from "./internal/read-client.ts";
+import { getStoryDetail } from "./story.ts";
 
 const id = z.int().positive();
 const text = z.string().refine((value) => value.trim() !== "");
@@ -40,12 +41,49 @@ const editBody = z.strictObject({
 });
 const closeBody = z.strictObject({ closedReason: z.literal("cancel") });
 const commentBody = z.strictObject({ comment: text });
+const discardedDeleteReceipt = z.unknown().transform(() => undefined);
 
 function parse<T>(schema: z.ZodType<T>, input: unknown): T {
   const result = schema.safeParse(input);
   if (!result.success)
     throw new BztError("INVALID_INPUT", "需求写入字段不符合已验证配方。");
   return result.data;
+}
+
+// docs/06 §6.4: deletion never enters the MCP write dispatcher.
+export async function deleteStory(
+  client: ZentaoReadClient,
+  storyId: number,
+): Promise<"confirmed" | "unknown"> {
+  assertCapabilityExecutable("story.delete", { channel: "cli" });
+  const objectId = parse(id, storyId);
+  const { http } = getReadClient(client, "write");
+  try {
+    await http.write(
+      {
+        method: "DELETE",
+        pathTemplate: "/api.php/v1/stories/{id}",
+        params: { id: objectId },
+        objectId,
+        allowReceiptMessage: true,
+      },
+      discardedDeleteReceipt,
+    );
+  } catch (error) {
+    // The story may disappear between the preview and the delete request.
+    if (!(error instanceof BztError && error.code === "NOT_FOUND")) throw error;
+  }
+
+  try {
+    const current = await getStoryDetail(client, objectId);
+    return current.id === objectId && current.deleted === true
+      ? "confirmed"
+      : "unknown";
+  } catch (error) {
+    return error instanceof BztError && error.code === "NOT_FOUND"
+      ? "confirmed"
+      : "unknown";
+  }
 }
 
 export async function writeStory(

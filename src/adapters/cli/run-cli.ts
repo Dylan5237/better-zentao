@@ -1,4 +1,5 @@
 import { parseArgs } from "node:util";
+import { runDeleteStory } from "../../services/delete-story.ts";
 import { getDoctorStatus } from "../../services/doctor.ts";
 import { installAgent } from "../../services/install-agent.ts";
 import { runProbeCapture } from "../../services/probe-capture.ts";
@@ -21,6 +22,7 @@ const help = `用法
   bzt probe write <能力> --product 29 [--config 路径] [--assignee 测试账号] [--visible-tag] [--out 目录]
   bzt probe write --all --product 29 [--config 路径] [--assignee 测试账号] [--visible-tag] [--out 目录]
   bzt probe cleanup --product 29 --story ID [--config 路径]    关闭 #29 测试需求
+  bzt delete --story ID [--confirm] [--config 路径]    预览研发需求，添加 --confirm 删除并回读
   bzt install-agent <codex|claude|gemini> [--config 路径] [--project 目录] [--dry-run]
       也接受 --agent <codex|claude|gemini>，--project 仅用于 Claude Code
   bzt mcp       启动 stdio 服务
@@ -46,6 +48,7 @@ export async function runCli(
         out: { type: "string" },
         live: { type: "boolean" },
         story: { type: "string" },
+        confirm: { type: "boolean" },
         assignee: { type: "string" },
         "visible-tag": { type: "boolean" },
         all: { type: "boolean" },
@@ -68,6 +71,7 @@ export async function runCli(
   const cleanup = command === "probe" && action === "cleanup";
   const probe = capture || write || cleanup;
   const install = command === "install-agent";
+  const remove = command === "delete";
   if (
     positionals.length > (write ? 3 : probe || install ? 2 : 1) ||
     (!probe && command === "probe") ||
@@ -76,7 +80,9 @@ export async function runCli(
       (values.assignee !== undefined ||
         values.all !== undefined ||
         values["visible-tag"] !== undefined)) ||
-    (!cleanup && values.story !== undefined) ||
+    (!cleanup && !remove && values.story !== undefined) ||
+    (!remove && values.confirm !== undefined) ||
+    (remove && values.product !== undefined) ||
     (command !== "doctor" && values.live !== undefined) ||
     (!install &&
       (values.agent !== undefined ||
@@ -88,7 +94,7 @@ export async function runCli(
   ) {
     return invalidArgs(runtime);
   }
-  if (write || cleanup || install) {
+  if (write || cleanup || install || remove) {
     const names = tokens.flatMap((token) =>
       token.kind === "option" ? [token.name] : [],
     );
@@ -97,6 +103,24 @@ export async function runCli(
   if (values.help || args.length === 0) {
     runtime.stdout(help);
     return 0;
+  }
+
+  if (remove) {
+    const result = await runDeleteStory({
+      story: values.story,
+      confirm: values.confirm,
+      config: values.config,
+      env: runtime.env,
+      homeDir: runtime.homeDir,
+      clock: runtime.clock,
+      logSink: runtime.stderr,
+    });
+    if ("invalidArgs" in result) {
+      runtime.stderr(result.message + "\n");
+      return 2;
+    }
+    runtime.stdout(JSON.stringify(result) + "\n");
+    return result.status === "confirmed" ? 0 : 1;
   }
 
   if (install) {

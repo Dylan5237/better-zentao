@@ -4,7 +4,7 @@
   check: "scope"
   prompt: "发我产品甲截至现在的未完任务口径。"
   expectedTool: "get_team_work"
-  expectedArgs: { "product": "29", "view": "all_open" }
+  expectedArgs: { "product": "产品甲", "view": "all_open" }
   replyHas: ["产品甲", "数据时间"]
 
 - id: "EXPR-PARTIAL"
@@ -12,7 +12,7 @@
   check: "partial"
   prompt: "产品乙这个列表数据不全，还能说都完成了吗？"
   expectedTool: "query_stories"
-  expectedArgs: { "product": "30" }
+  expectedArgs: { "product": "产品乙" }
   replyHas: ["产品乙", "数据时间", "未读全"]
   replyLacks: ["没有逾期", "全部完成"]
 
@@ -37,8 +37,8 @@
           "rows":
             [
               {
-                "product": 29,
-                "module": 3,
+                "product": "产品甲",
+                "module": "权限",
                 "title": "增加筛选",
                 "spec": { "background": "数据较多", "scope": "按部门筛选" },
                 "verify": "显示对应部门的数据",

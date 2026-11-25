@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -15,6 +16,7 @@ import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 const command = fileURLToPath(
   new URL("../../dist/adapters/cli/bzt.js", import.meta.url),
 );
+const repo = fileURLToPath(new URL("../../", import.meta.url));
 const blockNetwork =
   "data:text/javascript," +
   encodeURIComponent(String.raw`globalThis.fetch = () => {
@@ -83,6 +85,42 @@ it.each([
 
 it("WP-21 编译入口拒绝同时传入两种 Agent 参数", () => {
   expect(run(["install-agent", "codex", "--agent", "gemini"]).status).toBe(2);
+});
+
+it("N7 安装包缺少 Skill 时不读取包外同名文件", () => {
+  const fixture = mkdtempSync(join(repo, ".tmp-package-"));
+  try {
+    const pkg = join(fixture, "package");
+    cpSync(join(repo, "dist"), join(pkg, "dist"), { recursive: true });
+    const outside = join(fixture, "skills", "better-zentao");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "SKILL.md"), "包外替身");
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        blockNetwork,
+        join(pkg, "dist", "adapters", "cli", "bzt.js"),
+        "install-agent",
+        "codex",
+      ],
+      {
+        encoding: "utf8",
+        timeout: 6000,
+        windowsHide: true,
+        env: {
+          SystemRoot: process.env.SystemRoot,
+          USERPROFILE: homeDir,
+          HOME: homeDir,
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(existsSync(join(homeDir, ".codex", "config.toml"))).toBe(false);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 it("WP-00 错误命令只写 stderr 且不复述参数", () => {

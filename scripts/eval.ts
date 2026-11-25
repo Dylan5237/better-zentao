@@ -32,6 +32,9 @@ const common = {
   prompt: text.regex(/\p{Script=Han}/u),
 };
 const call = { expectedTool: p1Name, expectedArgs: argsSchema };
+const namedStory = {
+  lookup: z.strictObject({ product: text, keyword: text }).optional(),
+};
 const reply = {
   replyHas: z.array(text).min(1),
   replyLacks: z.array(text).optional(),
@@ -56,6 +59,7 @@ const evalCase = z.discriminatedUnion("kind", [
   z.strictObject({
     ...common,
     ...call,
+    ...namedStory,
     kind: z.literal("route"),
     setup: z.enum(["w1", "w2"]).optional(),
   }),
@@ -89,26 +93,39 @@ type EvalCase = z.output<typeof evalCase>;
 type Session = Parameters<Parameters<typeof withOfflineMcp>[0]>[0];
 
 function parseJsonField(json: string): unknown {
-  // Prettier's YAML layout uses trailing commas in multiline flow values.
-  const normalized = json.replace(
-    /"(?:[^"\\]|\\.)*"|,(?=\s*[\]}])/gu,
-    (token) => (token === "," ? "" : token),
-  );
-  const value: unknown = JSON.parse(normalized);
+  // A sticky match never restarts at escaped quotes inside a malformed string.
+  const quoted = /"(?:[^"\\\r\n]|\\[^\r\n])*"/uy;
   const objects: Set<string>[] = [];
-  for (const [token, key] of json.matchAll(
-    /("(?:[^"\\]|\\.)*")(?=\s*:)|"(?:[^"\\]|\\.)*"|[{}]/gu,
-  )) {
+  const chunks: string[] = [];
+  let start = 0;
+  function nextToken(from: number) {
+    while (from < json.length && /\s/u.test(json.charAt(from))) from++;
+    return json[from];
+  }
+  for (let index = 0; index < json.length; index++) {
+    const token = json[index];
     if (token === "{") objects.push(new Set());
     else if (token === "}") objects.pop();
-    else if (key) {
+    else if (token === '"') {
+      quoted.lastIndex = index;
+      const key = quoted.exec(json)?.[0];
+      if (key === undefined) throw new Error("用例 YAML 字符串未闭合。");
+      index = quoted.lastIndex - 1;
+      if (nextToken(quoted.lastIndex) !== ":") continue;
       const name = z.string().parse(JSON.parse(key));
       const members = objects.at(-1);
       if (members?.has(name)) throw new Error("用例 YAML 流式映射键重复。");
       members?.add(name);
+    } else if (token === ",") {
+      // Prettier's YAML layout can end flow values with a trailing comma.
+      const next = nextToken(index + 1);
+      if (next !== "]" && next !== "}") continue;
+      chunks.push(json.slice(start, index));
+      start = index + 1;
     }
   }
-  return value;
+  chunks.push(json.slice(start));
+  return JSON.parse(chunks.join(""));
 }
 
 // YAML 1.2 block sequences, with each field value written as a JSON scalar or
@@ -191,6 +208,13 @@ export function loadEvalCases(directory: string): EvalCase[] {
       (item.expectedArgs.opId === "op_eval") !== Boolean(item.setup)
     )
       throw new Error("操作回执样本需要准备步骤。");
+    if (
+      item.kind === "route" &&
+      item.lookup &&
+      (item.expectedTool !== "get_story_progress" ||
+        typeof item.expectedArgs.storyId !== "number")
+    )
+      throw new Error("按名称查询的用例必须核对需求进展与对应编号。");
   }
   return cases;
 }
@@ -428,6 +452,23 @@ async function checkOffline(
     args = { ...args, opId: await prepare(session, item.setup) };
     session.advance();
   }
+  if (item.kind === "route" && item.lookup) {
+    const lookup = await session.call("query_stories", item.lookup);
+    const result = p1Tools.query_stories.output.safeParse(lookup.value);
+    if (
+      lookup.isError ||
+      !result.success ||
+      result.data.completeness !== "complete"
+    )
+      return false;
+    const matches = result.data.data.items.filter(
+      ({ title }) => title === item.lookup?.keyword,
+    );
+    const [match] = matches;
+    if (matches.length !== 1 || !match || match.id !== args.storyId)
+      return false;
+    args = { ...args, storyId: match.id };
+  }
   const result = await session.call(item.expectedTool, args);
   if (item.kind === "clarification") {
     const details = z
@@ -491,6 +532,16 @@ function checkLive(item: EvalCase, raw: unknown): boolean {
   }
   if (item.kind === "clarification")
     return calls.every(({ name }) => name === "resolve_context");
+  if (item.kind === "route" && item.lookup) {
+    const [lookup, call] = calls;
+    return (
+      calls.length === 2 &&
+      lookup?.name === "query_stories" &&
+      isDeepStrictEqual(lookup.args, item.lookup) &&
+      call?.name === item.expectedTool &&
+      isDeepStrictEqual(call.args, item.expectedArgs)
+    );
+  }
   return (
     calls.length === 1 &&
     calls[0]?.name === item.expectedTool &&
