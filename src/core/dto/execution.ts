@@ -1,5 +1,42 @@
 import { z } from "zod";
-import { brandDto, zCount, zDate, zHours, zId, zNullableId } from "./common.ts";
+import {
+  brandDto,
+  zBool,
+  zCollection,
+  zCount,
+  zDate,
+  zHours,
+  zId,
+  zNullableId,
+} from "./common.ts";
+
+const probeProducts = zCollection(
+  z.union([zId, z.object({ id: zId }).transform(({ id }) => id)]),
+);
+const probeScopeFields = {
+  id: zId,
+  status: z.enum([
+    "wait",
+    "doing",
+    "suspended",
+    "closed",
+    "done",
+    "pause",
+    "cancel",
+  ]),
+  deleted: zBool.optional(),
+  products: probeProducts.optional(),
+};
+
+export const probeProjectDto = z.object({
+  ...probeScopeFields,
+  multiple: zBool,
+});
+
+export const probeExecutionDto = z.object({
+  ...probeScopeFields,
+  project: zId,
+});
 
 const projectBrand: unique symbol = Symbol("Project");
 const executionBrand: unique symbol = Symbol("Execution");

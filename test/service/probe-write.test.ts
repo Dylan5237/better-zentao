@@ -71,10 +71,28 @@ function fakeZentao(
     fixtureSecret?: boolean;
     unrelatedReceiptId?: boolean;
     normalizeSpec?: (spec: string) => string;
+    executionProducts?: number[];
+    projectProducts?: number[];
+    linkStatus?: number;
+    linkDespite404?: boolean;
+    requirementProduct?: number;
+    unreportedTasks?: boolean;
+    childParent?: number;
+    batchReceiptId?: number;
   } = {},
 ) {
   const entries: Entry[] = [];
   const stories = new Map<number, FakeStory>();
+  const tasks = new Map<number, Record<string, unknown>>();
+  const taskDefaults = {
+    isParent: false,
+    mode: "",
+    estimate: 0,
+    consumed: 0,
+    left: 0,
+  };
+  const executionStories = new Set<number>();
+  const storyLinks = new Map<number, number[]>();
   let failDetailOnce = options.badFirstDetail;
   const date = "2027-01-15 16:00:00";
   const makeStory = (id: number, input: Record<string, unknown> = {}) => ({
@@ -158,6 +176,145 @@ function fakeZentao(
         ],
         total: 1,
       });
+    if (path === "/api.php/v1/products/29/projects")
+      return respond({
+        projects: options.executionProducts
+          ? [
+              {
+                id: 50,
+                multiple: "1",
+                status: "doing",
+                products: options.projectProducts ?? [29],
+              },
+            ]
+          : [],
+        total: options.executionProducts ? 1 : 0,
+      });
+    const execution = {
+      id: 60,
+      project: 50,
+      status: "doing",
+      products: options.executionProducts,
+    };
+    if (path === "/api.php/v1/projects/50/executions")
+      return respond({ executions: [execution], total: 1 });
+    if (path === "/api.php/v1/executions/60") return respond(execution);
+    if (
+      path === "/api.php/v1/executions/60/stories" ||
+      path === "/api.php/v2/execution/linkStory"
+    ) {
+      if (method === "GET")
+        return respond({
+          stories: [...executionStories].map((id) => stories.get(id)),
+          total: executionStories.size,
+        });
+      if (
+        path.includes("/v1/") &&
+        options.linkStatus &&
+        !options.linkDespite404
+      )
+        return respond({}, options.linkStatus);
+      if (path.includes("/v2/"))
+        expect(url.searchParams.get("objectID")).toBe("60");
+      for (const id of body?.stories as number[]) executionStories.add(id);
+      return respond(
+        {},
+        path.includes("/v1/") ? (options.linkStatus ?? 201) : 200,
+      );
+    }
+    if (path === "/api.php/v1/executions/60/tasks" && method === "GET")
+      return respond({ tasks: [...tasks.values()], total: tasks.size });
+    if (path === "/api.php/v1/executions/60/tasks" && method === "POST") {
+      expect(executionStories.has(Number(body?.story))).toBe(true);
+      expect(body).toMatchObject({
+        execution: 60,
+        module: 11,
+        type: "devel",
+        assignedTo: account,
+        pri: 3,
+        estStarted: "2027-01-15",
+        deadline: "2027-01-15",
+        desc: expect.stringContaining("<!-- bzt:stage=dev -->"),
+      });
+      tasks.set(70, {
+        ...taskDefaults,
+        ...body,
+        id: 70,
+        parent: 0,
+        status: "wait",
+        openedBy: account,
+      });
+      return respond(options.unreportedTasks ? {} : { id: 70, token }, 201);
+    }
+    if (path === "/api.php/v2/task/batchCreate") {
+      expect(Object.fromEntries(url.searchParams)).toMatchObject({
+        executionID: "60",
+        moduleID: "11",
+        taskID: "70",
+      });
+      const [task] = (body?.name as string[]).map((_, i) =>
+        Object.fromEntries(
+          Object.entries(body ?? {}).map(([key, values]) => [
+            key,
+            (values as unknown[])[i],
+          ]),
+        ),
+      );
+      tasks.set(71, {
+        ...taskDefaults,
+        ...task,
+        id: 71,
+        execution: 60,
+        parent: options.childParent ?? 70,
+        status: "wait",
+        openedBy: account,
+      });
+      return respond({
+        status: "success",
+        changes: options.unreportedTasks
+          ? {}
+          : { objectList: [options.batchReceiptId ?? 71] },
+        password,
+      });
+    }
+    const taskRoute = /^\/api\.php\/v1\/tasks\/(\d+)(\/close)?$/u.exec(path);
+    if (taskRoute) {
+      const task = tasks.get(Number(taskRoute[1]));
+      if (!task) return respond({}, 404);
+      if (method === "POST") task.status = "closed";
+      return respond(task);
+    }
+    const requirement = {
+      ...makeStory(99, { product: options.requirementProduct }),
+      type: "requirement",
+      status: "active",
+    };
+    if (path === "/api.php/v2/product/browse")
+      return respond({
+        stories: options.requirementProduct === undefined ? [] : [requirement],
+      });
+    if (
+      path === "/api.php/v2/story/view" ||
+      path === "/api.php/v2/requirement/view"
+    ) {
+      const id = Number(url.searchParams.get("storyID"));
+      return respond({
+        story: {
+          ...(id === 99 ? requirement : stories.get(id)),
+          linkStories: (storyLinks.get(id) ?? []).join(","),
+        },
+      });
+    }
+    if (
+      path === "/api.php/v2/story/linkStory" ||
+      path === "/api.php/v2/requirement/linkStory"
+    ) {
+      const id = Number(url.searchParams.get("storyID"));
+      const [target] = body?.stories as number[];
+      storyLinks.set(id, [Number(target)]);
+      if (id !== 99) storyLinks.set(Number(target), [id]);
+      return respond({ status: "success", password });
+    }
     if (path === "/api.php/v1/products/29/stories")
       return respond({
         stories: [...stories.values()].filter((story) => story.product === 29),
@@ -212,6 +369,9 @@ function fakeZentao(
     if (method === "PUT" && body?.status === "active") story.status = "active";
     if (method === "PUT" && body?.keywords)
       story.keywords = String(body.keywords);
+    if (method === "PUT" && body?.plan) story.plan = Number(body.plan);
+    if (method === "PUT" && typeof body?.spec === "string")
+      story.spec = options.normalizeSpec?.(body.spec) ?? body.spec;
     if (action === "comment") {
       if (match && options.commentUnsupported) return respond({}, 404);
       story.actions.push({
@@ -228,6 +388,7 @@ function fakeZentao(
   return {
     entries,
     stories,
+    tasks,
     sends: (contains: string) =>
       entries.filter(
         ({ method, path }) => method !== "GET" && path.includes(contains),
@@ -236,6 +397,212 @@ function fakeZentao(
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+function phaseA(capability?: string, out?: string) {
+  return runProbeWrite({
+    ...runtime,
+    cli: {
+      action: "write",
+      product: "29",
+      capability,
+      all: capability === undefined,
+      assignee: alternate,
+      out,
+    },
+  });
+}
+
+describe("WP-30 Phase A", () => {
+  it("串行探通所有配方、复读子任务及父任务关闭，落盘夹具通过 S01", async () => {
+    const zen = fakeZentao({
+      executionProducts: [29],
+      requirementProduct: 29,
+      fixtureSecret: true,
+    });
+    const out = await mkdtemp(join(tmpdir(), "bzt-wp30-"));
+    try {
+      const result = await phaseA(undefined, out);
+      expect(result).toMatchObject({ ok: true });
+      for (const capability of [
+        "story.create.plan",
+        "story.edit",
+        "story.linkExecution",
+        "story.linkStory",
+        "requirement.linkStory",
+        "task.create",
+        "task.close",
+      ]) {
+        expect(result.attempts).toContainEqual(
+          expect.objectContaining({ capability, status: "confirmed" }),
+        );
+      }
+      expect(zen.sends("/api.php/v1/tasks/").map(({ path }) => path)).toEqual([
+        "/api.php/v1/tasks/71/close",
+        "/api.php/v1/tasks/70/close",
+      ]);
+      for (const [id, task] of zen.tasks) {
+        expect(task.status).toBe("closed");
+        const closed = zen.entries.findIndex(
+          ({ path }) => path === `/api.php/v1/tasks/${id}/close`,
+        );
+        expect(zen.entries.slice(closed + 1)).toContainEqual(
+          expect.objectContaining({
+            method: "GET",
+            path: `/api.php/v1/tasks/${id}`,
+          }),
+        );
+      }
+      expect(
+        [...zen.stories.values()].every(({ status }) => status === "closed"),
+      ).toBe(true);
+      expect(
+        zen.entries.find(({ method }) => method === "PUT")?.body,
+      ).toMatchObject({
+        plan: 33,
+        spec: expect.stringContaining("[bzt:v1 "),
+      });
+      const files = await readdir(out);
+      expect(files).toEqual(
+        expect.arrayContaining([
+          "task-create.70.json",
+          "task-create.71.json",
+          "task-close.70.json",
+          "task-close.71.json",
+        ]),
+      );
+      for (const file of files) {
+        const fixture: unknown = JSON.parse(
+          await readFile(join(out, file), "utf8"),
+        );
+        expect(fixture).toMatchObject({
+          endpoint: expect.any(String),
+          status: expect.any(Number),
+          body: { request: expect.any(Object), response: expect.anything() },
+        });
+        assertNoSensitiveData(fixture, [
+          password,
+          token,
+          account,
+          env.ZENTAO_BASE_URL,
+        ]);
+      }
+    } finally {
+      await rm(out, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [404, false, 1],
+    [404, true, 0],
+    [503, false, 0],
+  ] as const)(
+    "只有 404 且未关联才试 v2（%i / %s）",
+    async (linkStatus, linkDespite404, fallback) => {
+      const zen = fakeZentao({
+        executionProducts: [29],
+        linkStatus,
+        linkDespite404,
+      });
+      const result = await phaseA("story.linkExecution");
+      expect(zen.sends("/executions/60/stories")).toHaveLength(1);
+      expect(zen.sends("/execution/linkStory")).toHaveLength(fallback);
+      expect(result.attempts.at(-1)?.status).toBe(
+        fallback ? "confirmed" : "unknown",
+      );
+    },
+  );
+
+  it.each([
+    { executionProducts: [29, 42] },
+    { executionProducts: [29], projectProducts: [29, 42] },
+    { executionProducts: [] },
+    { requirementProduct: 42 },
+  ])("ADR-19 跨产品或缺归属时没有业务写入 %#", async (options) => {
+    const zen = fakeZentao(options);
+    const result = await phaseA(
+      options.requirementProduct ? "requirement.linkStory" : "task.create",
+    );
+    expect(result.ok).toBe(false);
+    expect(
+      zen.entries.filter(
+        ({ method, path }) => method !== "GET" && path !== "/api.php/v1/tokens",
+      ),
+    ).toEqual([]);
+  });
+
+  it("没有用户需求时报告原因且不发业务写入", async () => {
+    const zen = fakeZentao();
+    const result = await phaseA("requirement.linkStory");
+    expect(result.attempts).toContainEqual(
+      expect.objectContaining({
+        capability: "requirement.linkStory",
+        status: "not_executed",
+        reason: expect.stringContaining("无可用用户需求"),
+      }),
+    );
+    expect(zen.sends("/v2/stories")).toHaveLength(0);
+  });
+
+  it("父任务创建未返回 ID 时按本次身份反查并收尾，禁止重建或继续建子任务", async () => {
+    const zen = fakeZentao({ executionProducts: [29], unreportedTasks: true });
+    const result = await phaseA("task.create");
+    expect(result.attempts.at(-1)).toMatchObject({
+      capability: "task.create",
+      status: "unknown",
+      taskId: 70,
+    });
+    expect(zen.sends("/executions/60/tasks")).toHaveLength(1);
+    expect(zen.sends("/task/batchCreate")).toHaveLength(0);
+    expect(zen.tasks.get(70)?.status).toBe("closed");
+  });
+
+  it("子任务回读的父编号不符时，仅报告创建结果不明并关闭两条任务", async () => {
+    const zen = fakeZentao({ executionProducts: [29], childParent: 0 });
+    const result = await phaseA("task.create");
+    expect(result.ok).toBe(false);
+    expect(result.attempts.at(-1)).toMatchObject({
+      capability: "task.create",
+      status: "unknown",
+      taskId: 71,
+    });
+    expect(zen.sends("/task/batchCreate")).toHaveLength(1);
+    expect(result.cleanup.slice(0, 2)).toMatchObject([
+      { capability: "task.close", taskId: 71, status: "confirmed" },
+      { capability: "task.close", taskId: 70, status: "confirmed" },
+    ]);
+  });
+
+  it("子任务回执误指父任务时，反查子任务并保留父任务清理记录", async () => {
+    const zen = fakeZentao({ executionProducts: [29], batchReceiptId: 70 });
+    const result = await phaseA("task.create");
+    expect(result.attempts.at(-1)).toMatchObject({
+      status: "unknown",
+      taskId: 71,
+    });
+    expect(result.cleanup.slice(0, 2)).toMatchObject([
+      { capability: "task.close", taskId: 71, status: "confirmed" },
+      { capability: "task.close", taskId: 70, status: "confirmed" },
+    ]);
+    expect(zen.sends("/task/batchCreate")).toHaveLength(1);
+  });
+
+  it.each(["story.linkStory", "requirement.linkStory", "task.close"])(
+    "可独立运行 %s 并回读确认",
+    async (capability) => {
+      const zen = fakeZentao({
+        executionProducts: [29],
+        requirementProduct: 29,
+      });
+      const result = await phaseA(capability);
+      expect(result.ok).toBe(true);
+      expect(result.attempts.at(-1)).toMatchObject({
+        capability,
+        status: "confirmed",
+      });
+      expect(zen.sends("/task/batchCreate")).toHaveLength(0);
+    },
+  );
+});
 
 const stripRoleComment = (spec: string) =>
   spec.replace(/<!-- bzt:v1 [^<>]+ -->/gu, "");
@@ -372,6 +739,8 @@ describe("WP-05 #29 探查闭环", () => {
       );
       expect(zen.sends("/assign")).toHaveLength(1);
       expect([...zen.stories.values()].map(({ status }) => status)).toEqual([
+        "closed",
+        "closed",
         "closed",
         "closed",
         "closed",

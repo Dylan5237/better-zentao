@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Clock } from "../../core/clock.ts";
+import { civilDate } from "../../core/calendar.ts";
 import {
   PROBE_APPROVAL_MAX_TTL_MS,
   PROBE_PRODUCT_ID,
@@ -18,6 +19,10 @@ import {
   hasProbeOwnership,
   parseProbeBaseUrl,
   probeDenied,
+  readProbeExecutions,
+  readProbeExecutionStories,
+  readProbeRequirement,
+  readProbeTask,
 } from "./probe-scope.ts";
 import type { ProbeStoryIdentity, VerifiedOwnership } from "./probe-scope.ts";
 import { getReadClient } from "./read-client.ts";
@@ -81,6 +86,64 @@ const editBody = z
     plan: id.optional(),
   })
   .refine((body) => Object.values(body).some((value) => value !== undefined));
+const linkBody = z.strictObject({ stories: z.tuple([id]) });
+const taskFields = {
+  module: id,
+  story: id,
+  name: requiredText,
+  type: z.literal("devel"),
+  assignedTo: requiredText,
+  pri: z.int().min(1).max(4),
+  estStarted: civilDate,
+  deadline: civilDate,
+  desc: requiredText.refine((text) =>
+    text.startsWith("<!-- bzt:stage=dev -->"),
+  ),
+};
+const taskBody = z.strictObject({ execution: id, ...taskFields });
+const childBody = z.strictObject({
+  module: z.tuple([taskFields.module]),
+  story: z.tuple([taskFields.story]),
+  name: z.tuple([taskFields.name]),
+  type: z.tuple([taskFields.type]),
+  assignedTo: z.tuple([taskFields.assignedTo]),
+  pri: z.tuple([taskFields.pri]),
+  estStarted: z.tuple([taskFields.estStarted]),
+  deadline: z.tuple([taskFields.deadline]),
+  desc: z.tuple([taskFields.desc]),
+});
+const extendedRequests = [
+  z.strictObject({
+    action: z.literal("story.linkExecution"),
+    ...storyRef,
+    candidate: z.literal("v2").optional(),
+    body: linkBody,
+  }),
+  z.strictObject({
+    action: z.enum(["story.linkStory", "requirement.linkStory"]),
+    ...storyRef,
+    body: linkBody,
+  }),
+  z.strictObject({
+    action: z.literal("task.create"),
+    ...storyRef,
+    body: taskBody,
+  }),
+  z.strictObject({
+    action: z.literal("task.create"),
+    ...storyRef,
+    candidate: z.literal("batch"),
+    parent: id,
+    body: childBody,
+  }),
+  z.strictObject({
+    action: z.literal("task.close"),
+    ...storyRef,
+    body: z.strictObject({}),
+  }),
+] as const;
+export type ExtendedProbeRequest = z.input<(typeof extendedRequests)[number]>;
+
 const writeRequest = z.union([
   draftRequest,
   z.strictObject({
@@ -115,6 +178,7 @@ const writeRequest = z.union([
     candidate: z.literal("put"),
     body: z.strictObject({ status: z.literal("active") }),
   }),
+  ...extendedRequests,
 ]);
 type ProbeRequest = z.infer<typeof writeRequest>;
 
@@ -141,6 +205,44 @@ function routeFor(request: ProbeRequest): ProbeRoute {
       objectId: request.id,
     };
   }
+  const { id } = request;
+  switch (request.action) {
+    case "story.linkExecution":
+      return request.candidate === "v2"
+        ? postRoute(
+            `/api.php/v2/execution/linkStory?objectID=${id}`,
+            "/api.php/v2/execution/linkStory",
+            id,
+          )
+        : postRoute(
+            `/api.php/v1/executions/${id}/stories`,
+            "/api.php/v1/executions/{id}/stories",
+            id,
+          );
+    case "story.linkStory":
+    case "requirement.linkStory": {
+      const path = `/api.php/v2/${request.action.split(".")[0]}/linkStory`;
+      return postRoute(`${path}?storyID=${id}`, path, id);
+    }
+    case "task.create":
+      return "candidate" in request
+        ? postRoute(
+            `/api.php/v2/task/batchCreate?executionID=${id}&storyID=${request.body.story[0]}&moduleID=${request.body.module[0]}&taskID=${request.parent}`,
+            "/api.php/v2/task/batchCreate",
+            id,
+          )
+        : postRoute(
+            `/api.php/v1/executions/${id}/tasks`,
+            "/api.php/v1/executions/{id}/tasks",
+            id,
+          );
+    case "task.close":
+      return postRoute(
+        `/api.php/v1/tasks/${id}/close`,
+        "/api.php/v1/tasks/{id}/close",
+        id,
+      );
+  }
 
   const put =
     request.action === "story.edit" ||
@@ -153,6 +255,14 @@ function routeFor(request: ProbeRequest): ProbeRoute {
     pathTemplate: `/api.php/v1/stories/{id}${actionPath}`,
     objectId: request.id,
   };
+}
+
+function postRoute(
+  path: string,
+  pathTemplate: string,
+  objectId: number,
+): ProbeRoute {
+  return { method: "POST", path, pathTemplate, objectId };
 }
 
 function parseWriteRequest(input: unknown): ProbeRequest {
@@ -210,6 +320,7 @@ const receipts = new WeakMap<
   {
     client: ZentaoReadClient;
     created?: ProbeStoryIdentity;
+    taskCreation?: "single" | "batch";
     sessionToken: string;
   }
 >();
@@ -297,6 +408,31 @@ async function assertIdPreflight(
   request: Exclude<ProbeRequest, z.infer<typeof draftRequest>>,
 ): Promise<void> {
   const { client } = options;
+  if (
+    request.action === "task.close" ||
+    request.action === "task.create" ||
+    request.action === "story.linkExecution"
+  ) {
+    if (!client || getReadClient(client).baseUrl !== baseUrl.href)
+      throw probeDenied();
+    await assertExecutionPreflight(options, client, baseUrl, request);
+    return;
+  }
+  if (
+    request.action === "story.linkStory" ||
+    request.action === "requirement.linkStory"
+  ) {
+    if (!client || getReadClient(client).baseUrl !== baseUrl.href)
+      throw probeDenied();
+    await assertRunStory(client, baseUrl, request.body.stories[0]);
+    if (request.action === "requirement.linkStory")
+      await readProbeRequirement(client, request.id);
+    else {
+      if (request.id === request.body.stories[0]) throw probeDenied();
+      await assertRunStory(client, baseUrl, request.id);
+    }
+    return;
+  }
   let expected: ProbeStoryIdentity | undefined;
   if (request.action === "story.assign") {
     if (
@@ -319,6 +455,82 @@ async function assertIdPreflight(
     }
   }
   await assertProbeStoryOwnership(client, baseUrl, request.id, expected);
+}
+
+async function assertRunStory(
+  client: ZentaoReadClient,
+  baseUrl: URL,
+  id: number,
+): Promise<void> {
+  const identity = currentProbeStories.get(client)?.get(id);
+  if (!identity) throw probeDenied();
+  await assertProbeStoryOwnership(client, baseUrl, id, identity);
+}
+
+async function assertExecutionPreflight(
+  options: ProbeWriteContext,
+  client: ZentaoReadClient,
+  baseUrl: URL,
+  request: Extract<
+    ProbeRequest,
+    { action: "task.create" | "task.close" | "story.linkExecution" }
+  >,
+): Promise<void> {
+  const task =
+    request.action === "task.close"
+      ? await readProbeTask(client, request.id)
+      : undefined;
+  const executionId = task?.execution ?? request.id;
+  const { executions } = await readProbeExecutions(client);
+  const execution = executions.find(({ id }) => id === executionId);
+  if (!execution) throw probeDenied();
+  if (task) {
+    if (task.project != null && task.project !== execution.project)
+      throw probeDenied();
+    if (
+      task.module != null &&
+      !hasProbeOwnership(options.ownership, baseUrl, task.module, undefined)
+    )
+      throw probeDenied();
+    if (task.story != null)
+      await assertProbeStoryOwnership(client, baseUrl, task.story);
+  }
+  if (request.action === "story.linkExecution") {
+    await assertRunStory(client, baseUrl, request.body.stories[0]);
+  }
+  if (request.action === "task.create") {
+    const batch = "candidate" in request;
+    const module = batch ? request.body.module[0] : request.body.module;
+    const story = batch ? request.body.story[0] : request.body.story;
+    const assignee = batch
+      ? request.body.assignedTo[0]
+      : request.body.assignedTo;
+    if (
+      (!batch && request.body.execution !== execution.id) ||
+      !hasProbeOwnership(options.ownership, baseUrl, module, undefined) ||
+      options.preflight?.isAssigneeActive(baseUrl.href, assignee) !== true
+    )
+      throw probeDenied();
+    await assertRunStory(client, baseUrl, story);
+    if (
+      !(await readProbeExecutionStories(client, execution.id)).some(
+        ({ id }) => id === story,
+      )
+    )
+      throw probeDenied();
+    if (batch) {
+      const parent = await readProbeTask(client, request.parent);
+      if (
+        parent.execution !== execution.id ||
+        parent.story !== story ||
+        parent.module !== module ||
+        parent.parent !== null ||
+        parent.status === "closed" ||
+        (parent.project != null && parent.project !== execution.project)
+      )
+        throw probeDenied();
+    }
+  }
 }
 
 async function sendApprovedProbeWrite(
@@ -391,6 +603,12 @@ async function sendApprovedProbeWrite(
                 openedBy: getReadClient(client).account,
               }
             : undefined,
+        taskCreation:
+          request.action === "task.create"
+            ? "candidate" in request
+              ? "batch"
+              : "single"
+            : undefined,
         sessionToken,
       });
     }
@@ -426,9 +644,13 @@ const envelope = z.object({
   error: z.unknown().optional(),
   message: z.unknown().optional(),
   story: z.object({ id: z.unknown().optional() }).optional().catch(undefined),
+  task: z.object({ id: z.unknown().optional() }).optional().catch(undefined),
   data: z.object({ id: z.unknown().optional() }).optional().catch(undefined),
   changes: z
-    .object({ objectID: z.unknown().optional() })
+    .object({
+      objectID: z.unknown().optional(),
+      objectList: z.unknown().optional(),
+    })
     .optional()
     .catch(undefined),
 });
@@ -438,6 +660,7 @@ function reportedStoryId(body: z.infer<typeof envelope>): number | undefined {
   for (const input of [
     body.id,
     body.story?.id,
+    body.task?.id,
     body.data?.id,
     body.changes?.objectID,
   ]) {
@@ -478,6 +701,7 @@ function hasRecognizedFailure(body: z.infer<typeof envelope>): boolean {
 export async function readProbeWriteResponse(response: Response): Promise<{
   body: unknown;
   createdStoryId?: number;
+  createdTaskIds?: readonly number[];
   recognizedFailure: boolean;
   sessionToken?: string;
 }> {
@@ -495,6 +719,16 @@ export async function readProbeWriteResponse(response: Response): Promise<{
   const created = receipt?.created;
   const createdStoryId =
     created && parsed.success ? reportedStoryId(parsed.data) : undefined;
+  let createdTaskIds: number[] | undefined;
+  if (receipt?.taskCreation && parsed.success) {
+    if (receipt.taskCreation === "single") {
+      const id = reportedStoryId(parsed.data);
+      if (id !== undefined) createdTaskIds = [id];
+    } else {
+      const list = z.array(zId).safeParse(parsed.data.changes?.objectList);
+      if (list.success) createdTaskIds = [...new Set(list.data)];
+    }
+  }
   if (
     receipt &&
     created &&
@@ -511,6 +745,7 @@ export async function readProbeWriteResponse(response: Response): Promise<{
   return {
     body,
     createdStoryId,
+    createdTaskIds,
     recognizedFailure,
     sessionToken: receipt?.sessionToken,
   };

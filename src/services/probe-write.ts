@@ -13,10 +13,13 @@ import type {
   ProbeWriteScope,
 } from "../api/probe-write.ts";
 import { getStoryDetail, listProductStories } from "../api/story.ts";
+import { listExecutionTasks } from "../api/task.ts";
+import { formatLocalDate } from "../core/calendar.ts";
 import type { Clock } from "../core/clock.ts";
 import { loadConfig, PROBE_PRODUCT_ID } from "../core/config.ts";
 import type { ConfigEnv } from "../core/config.ts";
 import type { StoryDetail } from "../core/dto/story.ts";
+import type { Task, TaskDetail } from "../core/dto/task.ts";
 import { BztError } from "../core/errors.ts";
 import {
   buildStoryHtmlSpec,
@@ -35,11 +38,16 @@ const storyProbes = [
   "story.create.design",
   "story.create.feedbackBy",
 ] as const;
-const executionProbes = ["task.create", "story.linkExecution"] as const;
+const executionProbes = [
+  "story.linkExecution",
+  "task.create",
+  "task.close",
+] as const;
+const relationProbes = ["story.linkStory", "requirement.linkStory"] as const;
 type StoryProbe = (typeof storyProbes)[number];
 type ExecutionProbe = (typeof executionProbes)[number];
-type Probe = StoryProbe | ExecutionProbe;
-type IdRequest = Exclude<ProbeRequest, { action: "story.create" }>;
+type Probe = StoryProbe | ExecutionProbe | (typeof relationProbes)[number];
+type IdRequest = Extract<ProbeRequest, { action: StoryProbe; id: number }>;
 type Session = Awaited<ReturnType<typeof createProbeWriteSession>>;
 
 type WriteCli = {
@@ -73,6 +81,7 @@ interface Attempt {
   readonly route?: string;
   readonly httpStatus?: number;
   readonly storyId?: number;
+  readonly taskId?: number;
   readonly skipped?: boolean;
   readonly fields?: readonly string[];
   readonly readback?: { htmlStructure: boolean; roleTag: boolean };
@@ -103,7 +112,9 @@ function emptyReport(error: string, invalidArgs = false): ProbeReport {
 }
 
 function supportedProbe(value: string | undefined): Probe | undefined {
-  return [...storyProbes, ...executionProbes].find((probe) => probe === value);
+  return [...storyProbes, ...executionProbes, ...relationProbes].find(
+    (probe) => probe === value,
+  );
 }
 
 function validPath(input?: string): boolean {
@@ -298,7 +309,8 @@ async function createDraft(
       state.startedAt,
     ).catch(() => undefined);
     const target = found ?? id;
-    if (target !== undefined) state.created.set(target, body);
+    if (target !== undefined && !state.created.has(target))
+      state.created.set(target, body);
     return {
       ...report,
       storyId: target,
@@ -314,6 +326,8 @@ interface ProbeRun {
   readonly startedAt: number;
   readonly tagFormat: StoryRoleTagFormat;
   readonly created: Map<number, ProbeDraft | undefined>;
+  readonly tasks: Map<number, TaskIdentity>;
+  readonly timezone: string;
   readonly cleanup: Attempt[];
   readonly recordFixture: (
     capability: Probe,
@@ -488,29 +502,55 @@ async function probeAction(
     }
     case "story.edit": {
       const keywords = "WP-05-" + reference;
-      return probeExisting(
+      const plan = state.session.scope?.openPlanIds[0];
+      const spec = buildStoryHtmlSpec(
+        {
+          background: ["WP-30 探查更新正文。\n验证微标签回读。"],
+          scope: ["回读修改后的正文。"],
+        },
+        {
+          maintainer: body.assignedTo,
+          receiver: body.assignedTo,
+          intake: "probe-wp30",
+        },
+        "visible",
+      );
+      const results = await probeExisting(
         state,
         [
           {
             ...target,
             action: capability,
-            body: { title: body.title, keywords },
+            body: { title: body.title, keywords, spec, plan },
           },
         ],
         (story) => {
           const { htmlStructure, roleTag } = storySpecReadback(
             story.spec,
-            body.spec,
-            state.tagFormat,
+            spec,
+            "visible",
           );
           return (
             story.keywords === keywords &&
             story.title === body.title &&
+            (plan === undefined ||
+              (story.plan?.length === 1 && story.plan[0] === plan)) &&
             htmlStructure &&
             roleTag
           );
         },
       );
+      return plan === undefined
+        ? results.map((attempt) =>
+            attempt.status === "confirmed"
+              ? {
+                  ...attempt,
+                  fields: ["plan"],
+                  reason: "#29 无可用未关闭计划，已确认关键词和可见微标签。",
+                }
+              : attempt,
+          )
+        : results;
     }
     case "story.activate":
       return probeExisting(
@@ -567,18 +607,302 @@ function makeDraft(
   };
 }
 
-function executionUnavailable(
-  capability: ExecutionProbe,
-  scope?: ProbeWriteScope,
-): Attempt {
-  return {
-    capability,
-    status: "not_executed",
-    reason:
-      scope?.executionsCount === 0
-        ? "#29 无验证迭代。"
-        : "本命令没有 #29 执行写入配方。",
+function notExecuted(capability: Probe, reason: string): Attempt {
+  return { capability, status: "not_executed", reason };
+}
+
+async function probeRelation(
+  state: ProbeRun,
+  request: Extract<
+    ProbeRequest,
+    {
+      action:
+        "story.linkExecution" | "story.linkStory" | "requirement.linkStory";
+    }
+  >,
+  readback: () => Promise<boolean | undefined>,
+): Promise<Attempt> {
+  const { action: capability } = request;
+  const storyId = request.body.stories[0];
+  let result: Attempt = { capability, storyId, status: "not_executed" };
+  try {
+    if ((await readback()) === true)
+      return { ...result, status: "confirmed", skipped: true };
+    const candidates =
+      request.action === "story.linkExecution"
+        ? [request, { ...request, candidate: "v2" as const }]
+        : [request];
+    for (const candidate of candidates) {
+      const response = await state.session.send(candidate);
+      result = {
+        capability,
+        storyId,
+        route: response.route,
+        httpStatus: response.httpStatus,
+        status: "unknown",
+      };
+      const linked = await readback();
+      if (linked === true && response.accepted) {
+        state.recordFixture(capability, storyId, response);
+        return { ...result, status: "confirmed" };
+      }
+      if (response.httpStatus !== 404 || linked !== false) return result;
+      result = { ...result, status: "failed" };
+    }
+    return result;
+  } catch (error) {
+    return { ...result, reason: errorCode(error) };
+  }
+}
+
+type TaskIdentity = Pick<Task, "name" | "openedBy" | "execution">;
+
+function sameTask(
+  task: TaskIdentity & Pick<Task, "deleted">,
+  expected: TaskIdentity,
+): boolean {
+  return (
+    !task.deleted &&
+    task.name === expected.name &&
+    task.openedBy === expected.openedBy &&
+    task.execution === expected.execution
+  );
+}
+
+async function probeTask(
+  state: ProbeRun,
+  execution: number,
+  storyId: number,
+  draft: ProbeDraft,
+  parent?: number,
+): Promise<Attempt> {
+  const capability = "task.create";
+  const { module, assignedTo } = draft;
+  const date = formatLocalDate(state.startedAt, state.timezone);
+  const fields = {
+    name: `${draft.title} ${parent === undefined ? "父任务" : "子任务"}`,
+    type: "devel" as const,
+    story: storyId,
+    module,
+    assignedTo,
+    pri: 3,
+    estStarted: date,
+    deadline: date,
+    desc: "<!-- bzt:stage=dev -->\n<p>WP-30 #29 探查任务</p>",
   };
+  const identity = { name: fields.name, openedBy: assignedTo, execution };
+  let response: ProbeWriteResponse;
+  try {
+    const target = {
+      action: capability,
+      productId: PROBE_PRODUCT_ID,
+      id: execution,
+    } as const;
+    response = await state.session.send(
+      parent === undefined
+        ? { ...target, body: { ...fields, execution } }
+        : {
+            ...target,
+            candidate: "batch",
+            parent,
+            body: {
+              name: [fields.name],
+              type: [fields.type],
+              story: [storyId],
+              module: [module],
+              assignedTo: [assignedTo],
+              pri: [fields.pri],
+              estStarted: [date],
+              deadline: [date],
+              desc: [fields.desc],
+            },
+          },
+    );
+  } catch (error) {
+    return {
+      capability,
+      storyId,
+      status: "not_executed",
+      reason: errorCode(error),
+    };
+  }
+  if (response.missingFields)
+    return {
+      capability,
+      storyId,
+      status: "not_executed",
+      fields: response.missingFields,
+    };
+  const report = {
+    capability,
+    storyId,
+    route: response.route,
+    httpStatus: response.httpStatus,
+  } as const;
+  const ids = response.taskIds ?? [];
+  const matched: TaskDetail[] = [];
+  for (const id of ids) {
+    // 回执若误指本次已登记的其他任务，保留原任务的清理凭据。
+    if (state.tasks.has(id)) continue;
+    // 先登记回执 ID，清理阶段独立重读并核对创建人和标题。
+    state.tasks.set(id, identity);
+    const task = await state.session.readTask(id).catch(() => undefined);
+    if (task && sameTask(task, identity)) matched.push(task);
+    else if (task) state.tasks.delete(id);
+  }
+  if (ids.length === 1 && matched.length === 1 && response.accepted) {
+    const task = matched[0];
+    if (
+      task &&
+      task.story === storyId &&
+      task.module === module &&
+      task.assignedTo === assignedTo &&
+      task.estStarted === date &&
+      task.deadline === date &&
+      task.parent === (parent ?? null) &&
+      task.desc?.includes("<!-- bzt:stage=dev -->")
+    ) {
+      state.recordFixture(capability, task.id, response);
+      return { ...report, status: "confirmed", taskId: task.id };
+    }
+  }
+  // 结果不明时只反查并收尾，禁止重发创建请求。
+  const found = await listExecutionTasks(state.client, execution).catch(
+    () => undefined,
+  );
+  const recovered =
+    found?.items.filter((task) => sameTask(task, identity)) ?? [];
+  for (const task of recovered) {
+    if (!state.tasks.has(task.id)) state.tasks.set(task.id, identity);
+  }
+  const taskId = recovered[0]?.id ?? matched[0]?.id ?? ids[0];
+  return {
+    ...report,
+    status:
+      response.clearlyRejected &&
+      recovered.length === 0 &&
+      found?.truncated === false
+        ? "failed"
+        : "unknown",
+    taskId,
+    reason: "创建回读未确认，请按探查编号核对任务。",
+  };
+}
+
+async function closeTask(
+  state: ProbeRun,
+  id: number,
+  identity: TaskIdentity,
+): Promise<Attempt> {
+  let report: Attempt = {
+    capability: "task.close",
+    taskId: id,
+    status: "not_executed",
+  };
+  try {
+    const initial = await state.session.readTask(id);
+    if (!sameTask(initial, identity))
+      return { ...report, reason: "无法确认这是本次探查创建的任务。" };
+    if (initial.status === "closed")
+      return { ...report, status: "confirmed", skipped: true };
+    const response = await state.session.send({
+      action: "task.close",
+      productId: PROBE_PRODUCT_ID,
+      id,
+      body: {},
+    });
+    report = {
+      ...report,
+      route: response.route,
+      httpStatus: response.httpStatus,
+      status: "unknown",
+    };
+    const task = await state.session.readTask(id);
+    if (
+      sameTask(task, identity) &&
+      task.status === "closed" &&
+      response.accepted
+    ) {
+      state.recordFixture("task.close", id, response);
+      return { ...report, status: "confirmed" };
+    }
+    return report;
+  } catch (error) {
+    return { ...report, reason: errorCode(error) };
+  }
+}
+
+async function probeExecution(
+  state: ProbeRun,
+  selected: ExecutionProbe | undefined,
+  execution: number,
+  storyId: number,
+  draft: ProbeDraft,
+  disabled: readonly string[],
+  attempts: Attempt[],
+): Promise<void> {
+  if (disabled.includes("story.linkExecution")) {
+    attempts.push(
+      notExecuted(
+        selected ?? "story.linkExecution",
+        "前置执行关联能力已禁用。",
+      ),
+    );
+    return;
+  }
+  const linked = await probeRelation(
+    state,
+    {
+      action: "story.linkExecution",
+      productId: PROBE_PRODUCT_ID,
+      id: execution,
+      body: { stories: [storyId] },
+    },
+    () => state.session.hasExecutionStory(execution, storyId),
+  );
+  attempts.push(linked);
+  if (linked.status !== "confirmed" || selected === "story.linkExecution")
+    return;
+  if (disabled.includes("task.create") || disabled.includes("task.close")) {
+    attempts.push(
+      notExecuted(selected ?? "task.create", "任务创建或清理能力已禁用。"),
+    );
+    return;
+  }
+  const parent = await probeTask(state, execution, storyId, draft);
+  attempts.push(parent);
+  if (
+    parent.status === "confirmed" &&
+    parent.taskId !== undefined &&
+    selected !== "task.close"
+  )
+    attempts.push(
+      await probeTask(state, execution, storyId, draft, parent.taskId),
+    );
+}
+
+async function probeStoryRelation(
+  state: ProbeRun,
+  action: (typeof relationProbes)[number],
+  from: number,
+  to: number,
+): Promise<Attempt> {
+  const type = action === "story.linkStory" ? "story" : "requirement";
+  return probeRelation(
+    state,
+    {
+      action,
+      productId: PROBE_PRODUCT_ID,
+      id: from,
+      body: { stories: [to] },
+    },
+    async () => {
+      const links = await state.session.readStoryLinks(from, type);
+      if (type === "requirement") return links?.includes(to);
+      const reverse = await state.session.readStoryLinks(to, "story");
+      return links?.includes(to) && reverse?.includes(from);
+    },
+  );
 }
 
 async function probeDrafts(
@@ -593,8 +917,19 @@ async function probeDrafts(
   const scope = state.session.scope;
   const module = scope?.moduleIds[0];
   const plan = scope?.openPlanIds[0];
-  if (capability === "task.create" || capability === "story.linkExecution") {
-    attempts.push(executionUnavailable(capability, scope));
+  const execution = scope?.executionIds[0];
+  const executionProbe = executionProbes.find((probe) => probe === capability);
+  if (executionProbe && execution === undefined) {
+    attempts.push(notExecuted(executionProbe, "#29 无可用验证迭代。"));
+    return;
+  }
+  const requirement =
+    (cli.all && !disabled.includes("requirement.linkStory")) ||
+    capability === "requirement.linkStory"
+      ? await state.session.findRequirement()
+      : undefined;
+  if (capability === "requirement.linkStory" && requirement === undefined) {
+    attempts.push(notExecuted(capability, "#29 无可用用户需求。"));
     return;
   }
   const main = capability ?? "story.create";
@@ -615,13 +950,11 @@ async function probeDrafts(
   const variants = [...storyProbes].filter((item) =>
     item.startsWith("story.create."),
   );
-  if (
-    capability?.startsWith("story.create.") === true &&
-    capability !== "story.create"
-  ) {
+  const variant = variants.find((item) => item === capability);
+  if (variant) {
     if (capability === "story.create.plan" && plan === undefined) {
       attempts.push({
-        capability,
+        capability: variant,
         status: "not_executed",
         fields: ["plan"],
         reason: "#29 无可用未关闭计划。",
@@ -631,15 +964,8 @@ async function probeDrafts(
     attempts.push(
       await createDraft(
         state,
-        capability,
-        makeDraft(
-          account,
-          module,
-          reference,
-          capability,
-          state.tagFormat,
-          plan,
-        ),
+        variant,
+        makeDraft(account, module, reference, variant, state.tagFormat, plan),
       ),
     );
     return;
@@ -657,9 +983,7 @@ async function probeDrafts(
   if (created.status !== "confirmed" || created.storyId === undefined) return;
   const actions = cli.all
     ? storyProbes.slice(1, 5)
-    : capability
-      ? [capability]
-      : [];
+    : storyProbes.filter((probe) => probe === capability);
   for (const action of actions) {
     if (disabled.includes(action)) {
       attempts.push({
@@ -680,10 +1004,8 @@ async function probeDrafts(
     attempts.push(...results);
     if (results.at(-1)?.status === "unknown") return;
   }
-  if (!cli.all) return;
-  if (!(await cleanupDraft(state, created.storyId))) return;
-
-  for (const variant of variants) {
+  if (cli.all && !(await cleanupDraft(state, created.storyId))) return;
+  for (const variant of cli.all ? variants : []) {
     if (
       disabled.includes(variant) ||
       (variant === "story.create.plan" && plan === undefined)
@@ -710,9 +1032,103 @@ async function probeDrafts(
     )
       return;
   }
-  attempts.push(
-    ...executionProbes.map((action) => executionUnavailable(action, scope)),
-  );
+  const linkPair =
+    (cli.all && !disabled.includes("story.linkStory")) ||
+    capability === "story.linkStory";
+  const linkRequirement =
+    (cli.all && !disabled.includes("requirement.linkStory")) ||
+    capability === "requirement.linkStory";
+  const useExecution =
+    (cli.all || executionProbe !== undefined) && execution !== undefined;
+  let target = created;
+  let targetDraft = body;
+  if (
+    cli.all &&
+    (useExecution || linkPair || (linkRequirement && requirement !== undefined))
+  ) {
+    targetDraft = makeDraft(
+      account,
+      module,
+      reference + "-links",
+      "story.create",
+      state.tagFormat,
+    );
+    target = await createDraft(state, "story.create", targetDraft);
+    attempts.push(target);
+    if (target.status !== "confirmed") return;
+  }
+  const storyId = target.storyId;
+  if (storyId === undefined) return;
+  if (useExecution) {
+    await probeExecution(
+      state,
+      executionProbe,
+      execution,
+      storyId,
+      targetDraft,
+      disabled,
+      attempts,
+    );
+    const last = attempts.at(-1);
+    if (last?.status === "unknown" || last?.reason === "PERMISSION_DENIED")
+      return;
+  } else if (cli.all) {
+    attempts.push(
+      ...executionProbes.map((probe) => ({
+        ...notExecuted(probe, "#29 无可用验证迭代。"),
+        skipped: true,
+      })),
+    );
+  }
+  if (linkPair) {
+    if (disabled.includes("story.create.design")) {
+      attempts.push(
+        notExecuted("story.linkStory", "设计类测试需求创建已禁用。"),
+      );
+    } else {
+      const peer = await createDraft(
+        state,
+        "story.create.design",
+        makeDraft(
+          account,
+          module,
+          reference + "-pair",
+          "story.create.design",
+          state.tagFormat,
+        ),
+      );
+      attempts.push(peer);
+      if (peer.status !== "confirmed" || peer.storyId === undefined) {
+        attempts.push(
+          notExecuted("story.linkStory", "未确认设计类测试需求创建成功。"),
+        );
+        return;
+      }
+      const linked = await probeStoryRelation(
+        state,
+        "story.linkStory",
+        storyId,
+        peer.storyId,
+      );
+      attempts.push(linked);
+      if (linked.status === "unknown" || linked.reason === "PERMISSION_DENIED")
+        return;
+    }
+  }
+  if (linkRequirement)
+    attempts.push(
+      requirement === undefined
+        ? {
+            ...notExecuted("requirement.linkStory", "#29 无可用用户需求。"),
+            skipped: true,
+          }
+        : await probeStoryRelation(
+            state,
+            "requirement.linkStory",
+            requirement,
+            storyId,
+          ),
+    );
 }
 
 /** docs/06 §7.1 中固定 #29 的探查闭环。 */
@@ -788,6 +1204,10 @@ export async function runProbeWrite({
       timeoutMs: config.zentao.timeoutMs,
       capture: out !== undefined,
       cleanupOnly: cleanupId !== undefined,
+      discoverExecutions:
+        cli.action === "write" &&
+        (cli.all === true ||
+          executionProbes.some((probe) => probe === capability)),
     });
     const run: ProbeRun = {
       client,
@@ -796,6 +1216,8 @@ export async function runProbeWrite({
       tagFormat:
         cli.action === "write" && cli.visibleTag ? "visible" : "comment",
       created: new Map(),
+      tasks: new Map(),
+      timezone: config.timezone,
       cleanup,
       recordFixture(action, id, response) {
         fixtureFailed ||= response.fixtureFailed === true;
@@ -826,6 +1248,13 @@ export async function runProbeWrite({
         reason: errorCode(error),
       });
     } finally {
+      // 子任务晚于父任务创建，按相反顺序关闭并逐个回读。
+      for (const [id, identity] of [...run.tasks].reverse()) {
+        const closed = await closeTask(run, id, identity);
+        run.cleanup.push(closed);
+        if (cli.action === "write" && (capability === "task.close" || cli.all))
+          attempts.push(closed);
+      }
       for (const id of run.created.keys()) await cleanupDraft(run, id);
     }
     if (out !== undefined && outputFiles.length > 0) {
@@ -843,20 +1272,15 @@ export async function runProbeWrite({
       }
     }
     const terminal = new Map(
-      attempts.map((attempt) => [attempt.capability, attempt.status]),
+      attempts.map((attempt) => [attempt.capability, attempt]),
     );
-    const allowedSkipped = [
-      "story.create.plan",
-      "task.create",
-      "story.linkExecution",
-    ];
-    const checked = [...terminal.entries()].every(
-      ([action, status]) =>
+    const checked = [...terminal.values()].every(
+      ({ capability, status, skipped }) =>
         status === "confirmed" ||
         (cli.action === "write" &&
           cli.all === true &&
           status === "not_executed" &&
-          allowedSkipped.includes(action)),
+          (skipped || capability === "story.create.plan")),
     );
     const closed = cleanup.every(({ status }) => status === "confirmed");
     return {

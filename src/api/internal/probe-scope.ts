@@ -1,12 +1,26 @@
 import { z } from "zod";
 import { PROBE_PRODUCT_ID } from "../../core/config.ts";
+import { zId } from "../../core/dto/common.ts";
+import {
+  probeExecutionDto,
+  probeProjectDto,
+} from "../../core/dto/execution.ts";
 import { walkProductPlans } from "../../core/dto/plan.ts";
+import {
+  requirementDetailDtoFor,
+  storySummaryDtoFor,
+} from "../../core/dto/story.ts";
 import { BztError } from "../../core/errors.ts";
 import type { ZentaoReadClient } from "../client.ts";
 import { listProductPlans } from "../plan.ts";
 import { getProductModules } from "../product.ts";
+import { getStoryDetailV2 } from "../story.ts";
+import { getTaskDetail } from "../task.ts";
 import { normalizeZentaoBaseUrl } from "./base-url.ts";
+import type { ReadRequest } from "./http.ts";
+import { paginate } from "./paginate.ts";
 import { getReadClient } from "./read-client.ts";
+import { pageSchema } from "./read-page.ts";
 import { readStoryDetail } from "./story-response.ts";
 
 export function probeDenied(): BztError {
@@ -163,6 +177,7 @@ export async function assertProbeStoryOwnership(
   const story = await readStoryDetail(client, id);
   if (
     story.id !== id ||
+    story.type !== "story" ||
     story.product !== PROBE_PRODUCT_ID ||
     story.deleted ||
     (expected &&
@@ -170,4 +185,161 @@ export async function assertProbeStoryOwnership(
   ) {
     throw probeDenied();
   }
+}
+
+function assertProbeProducts(products: readonly number[]): void {
+  if (
+    !products.includes(PROBE_PRODUCT_ID) ||
+    products.some((id) => id !== PROBE_PRODUCT_ID)
+  )
+    throw probeDenied();
+}
+
+function isOpen(row: { status: string; deleted?: boolean }): boolean {
+  return !row.deleted && (row.status === "wait" || row.status === "doing");
+}
+
+async function readScopePage<T>(
+  client: ZentaoReadClient,
+  request: ReadRequest,
+  schema: z.ZodType<{ items: readonly T[]; total?: number }>,
+  mode: "v1" | "v2" = "v1",
+): Promise<T[]> {
+  const { items, truncated } = await paginate(
+    getReadClient(client).http,
+    request,
+    { mode, pageSize: 100, schema },
+  );
+  if (truncated) throw invalidOwnership();
+  return items;
+}
+
+export async function readProbeExecutions(client: ZentaoReadClient) {
+  const projects = await readScopePage(
+    client,
+    {
+      pathTemplate: "/api.php/v1/products/{id}/projects",
+      params: { id: PROBE_PRODUCT_ID },
+    },
+    pageSchema("projects", probeProjectDto),
+  );
+  const executions: { id: number; project: number }[] = [];
+  const { http } = getReadClient(client);
+  for (const project of projects) {
+    if (project.products !== undefined) assertProbeProducts(project.products);
+    if (!project.multiple || !isOpen(project)) continue;
+    // 执行关联需求时，禅道也会写入父项目的关联记录。
+    if (project.products === undefined) throw probeDenied();
+    const rows = await readScopePage(
+      client,
+      {
+        pathTemplate: "/api.php/v1/projects/{id}/executions",
+        params: { id: project.id },
+      },
+      pageSchema("executions", probeExecutionDto),
+    );
+    for (const row of rows) {
+      if (row.products !== undefined) assertProbeProducts(row.products);
+      if (row.project !== project.id) throw probeDenied();
+      if (!isOpen(row)) continue;
+      const execution = await http.read(
+        {
+          pathTemplate: "/api.php/v1/executions/{id}",
+          params: { id: row.id },
+        },
+        probeExecutionDto,
+      );
+      if (execution.id !== row.id || execution.project !== project.id)
+        throw probeDenied();
+      assertProbeProducts(execution.products ?? []);
+      if (isOpen(execution))
+        executions.push({ id: execution.id, project: project.id });
+    }
+  }
+  return { projectsCount: projects.length, executions };
+}
+
+export async function readProbeExecutionStories(
+  client: ZentaoReadClient,
+  execution: number,
+) {
+  const stories = await readScopePage(
+    client,
+    {
+      pathTemplate: "/api.php/v1/executions/{id}/stories",
+      params: { id: execution },
+    },
+    pageSchema("stories", z.object({ id: zId, product: zId })),
+  );
+  if (stories.some(({ product }) => product !== PROBE_PRODUCT_ID))
+    throw probeDenied();
+  return stories;
+}
+
+export async function readProbeRequirement(
+  client: ZentaoReadClient,
+  id: number,
+) {
+  const { http, timezone } = getReadClient(client);
+  const { story } = await http.read(
+    {
+      pathTemplate: "/api.php/v2/requirement/view",
+      query: { storyID: id },
+      objectId: id,
+    },
+    requirementDetailDtoFor(timezone),
+  );
+  if (
+    story.id !== id ||
+    story.product !== PROBE_PRODUCT_ID ||
+    story.deleted ||
+    story.status === "closed"
+  )
+    throw probeDenied();
+  return story;
+}
+
+export async function findProbeRequirement(client: ZentaoReadClient) {
+  const { timezone } = getReadClient(client);
+  const rows = storySummaryDtoFor(timezone);
+  const requirements = await readScopePage(
+    client,
+    {
+      pathTemplate: "/api.php/v2/product/browse",
+      query: { productID: PROBE_PRODUCT_ID, storyType: "requirement" },
+    },
+    z.union([pageSchema("stories", rows), pageSchema("requirements", rows)]),
+    "v2",
+  );
+  const available = requirements.find(
+    ({ type, status, deleted }) =>
+      type === "requirement" && status !== "closed" && !deleted,
+  );
+  if (available === undefined) return undefined;
+  if (available.product !== PROBE_PRODUCT_ID) throw probeDenied();
+  return (await readProbeRequirement(client, available.id)).id;
+}
+
+export async function readProbeStoryLinks(
+  client: ZentaoReadClient,
+  id: number,
+  type: "story" | "requirement",
+) {
+  if (type === "requirement")
+    return (await readProbeRequirement(client, id)).linkStories;
+  const { story } = await getStoryDetailV2(client, id);
+  if (story.id !== id || story.product !== PROBE_PRODUCT_ID || story.deleted)
+    throw probeDenied();
+  return story.linkStories;
+}
+
+export async function readProbeTask(client: ZentaoReadClient, id: number) {
+  const task = await getTaskDetail(client, id);
+  if (
+    task.id !== id ||
+    task.deleted ||
+    (task.product != null && task.product !== PROBE_PRODUCT_ID)
+  )
+    throw probeDenied();
+  return task;
 }

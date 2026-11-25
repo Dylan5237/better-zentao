@@ -3,12 +3,18 @@ import type { Clock } from "../core/clock.ts";
 import { PROBE_PRODUCT_ID } from "../core/config-checks.ts";
 import type { RequiredFieldsMap } from "../core/dto/metadata.ts";
 import { zCount, zId } from "../core/dto/common.ts";
+import type { TaskDetail } from "../core/dto/task.ts";
 import { BztError } from "../core/errors.ts";
 import type { ZentaoReadClient } from "./client.ts";
 import { createCaptureFixtures } from "./internal/capture-fixture.ts";
 import {
+  findProbeRequirement,
   getProbeOwnershipOptions,
+  readProbeExecutionStories,
+  readProbeExecutions,
   readProbeOwnership,
+  readProbeStoryLinks,
+  readProbeTask,
 } from "./internal/probe-scope.ts";
 import {
   createProbeWriteApproval,
@@ -16,6 +22,7 @@ import {
   readProbeWriteResponse,
   sendAuthenticatedProbeWrite,
 } from "./internal/probe-transport.ts";
+import type { ExtendedProbeRequest } from "./internal/probe-transport.ts";
 import { getReadClient } from "./internal/read-client.ts";
 import { assertSanitizedJson } from "./internal/fixture-sensitivity.ts";
 import { getRequiredFields, listUsers } from "./org.ts";
@@ -39,37 +46,53 @@ export interface ProbeDraft {
   status: "draft";
 }
 
-export type ProbeRequest = { productId: 29 } & (
-  | { action: "story.create"; body: ProbeDraft }
-  | ({ id: number } & (
-      | { action: "story.assign"; body: { assignedTo: string } }
-      | { action: "story.close"; body: { closedReason: "cancel" } }
-      | { action: "story.edit"; body: { title: string; keywords: string } }
-      | { action: "story.comment"; body: { comment: string }; candidate?: "v2" }
-      | {
-          action: "story.activate";
-          body: { comment?: string };
-          candidate?: undefined;
-        }
-      | {
-          action: "story.activate";
-          body: { status: "active" };
-          candidate: "put";
-        }
-    ))
-);
+export type ProbeRequest =
+  | ExtendedProbeRequest
+  | ({ productId: 29 } & (
+      | { action: "story.create"; body: ProbeDraft }
+      | ({ id: number } & (
+          | { action: "story.assign"; body: { assignedTo: string } }
+          | { action: "story.close"; body: { closedReason: "cancel" } }
+          | {
+              action: "story.edit";
+              body: {
+                title: string;
+                keywords: string;
+                spec?: string;
+                plan?: number;
+              };
+            }
+          | {
+              action: "story.comment";
+              body: { comment: string };
+              candidate?: "v2";
+            }
+          | {
+              action: "story.activate";
+              body: { comment?: string };
+              candidate?: undefined;
+            }
+          | {
+              action: "story.activate";
+              body: { status: "active" };
+              candidate: "put";
+            }
+        ))
+    ));
 
 export interface ProbeWriteScope {
   readonly moduleIds: readonly number[];
   readonly openPlanIds: readonly number[];
   readonly projectsCount: number | null;
   readonly executionsCount: number | null;
+  readonly executionIds: readonly number[];
 }
 
 export interface ProbeWriteResponse {
   readonly route: string;
   readonly httpStatus?: number;
   readonly storyId?: number;
+  readonly taskIds?: readonly number[];
   readonly accepted: boolean;
   readonly clearlyRejected: boolean;
   readonly candidateUnavailable?: boolean;
@@ -98,21 +121,30 @@ const reportableFields = new Set([
   "title",
   "type",
   "verify",
+  "execution",
+  "name",
+  "estStarted",
+  "deadline",
+  "desc",
 ]);
 
 function checkRequired(
   request: ProbeRequest,
-  fields: RequiredFieldsMap["story"],
+  fields: RequiredFieldsMap,
   active: ReadonlySet<string>,
 ): readonly string[] {
   const required =
     request.action === "story.create"
-      ? fields.create
+      ? fields.story.create
       : request.action === "story.edit"
-        ? fields.edit
+        ? fields.story.edit
         : request.action === "story.close"
-          ? fields.close
-          : undefined;
+          ? fields.story.close
+          : request.action === "task.create"
+            ? "candidate" in request
+              ? fields.task.batchcreate
+              : fields.task.create
+            : undefined;
   const body: Readonly<Record<string, unknown>> = { ...request.body };
   const missing = (required ?? []).filter((field) => {
     const value = Object.hasOwn(body, field) ? body[field] : undefined;
@@ -168,18 +200,28 @@ export async function createProbeWriteSession(
     timeoutMs: number;
     capture: boolean;
     cleanupOnly: boolean;
+    discoverExecutions: boolean;
   },
 ): Promise<{
   scope?: ProbeWriteScope;
+  findRequirement: () => Promise<number | undefined>;
+  hasExecutionStory: (execution: number, storyId: number) => Promise<boolean>;
+  readStoryLinks: (
+    id: number,
+    type: "story" | "requirement",
+  ) => Promise<readonly number[] | undefined>;
+  readTask: (id: number) => Promise<TaskDetail>;
   send: (request: ProbeRequest) => Promise<ProbeWriteResponse>;
 }> {
   const { baseUrl } = getReadClient(client);
-  const [ownership, links, required, directory] = await Promise.all([
-    options.cleanupOnly ? undefined : readProbeOwnership(client),
-    options.cleanupOnly ? undefined : readProbeProductLinks(client),
-    getRequiredFields(client),
-    options.cleanupOnly ? undefined : listUsers(client),
-  ]);
+  const [ownership, links, required, directory, executionScope] =
+    await Promise.all([
+      options.cleanupOnly ? undefined : readProbeOwnership(client),
+      options.cleanupOnly ? undefined : readProbeProductLinks(client),
+      getRequiredFields(client),
+      options.cleanupOnly ? undefined : listUsers(client),
+      options.discoverExecutions ? readProbeExecutions(client) : undefined,
+    ]);
   if (directory?.truncated) {
     throw new BztError("ZENTAO_SCHEMA_MISMATCH", "人员目录回读不完整。");
   }
@@ -192,15 +234,31 @@ export async function createProbeWriteSession(
   const scope = owned && {
     moduleIds: owned.modules,
     openPlanIds: owned.openPlans,
-    projectsCount: links?.projects ?? links?.projectsCount ?? null,
-    executionsCount: links?.executions ?? links?.executionsCount ?? null,
+    projectsCount:
+      executionScope?.projectsCount ??
+      links?.projects ??
+      links?.projectsCount ??
+      null,
+    executionsCount:
+      executionScope?.executions.length ??
+      links?.executions ??
+      links?.executionsCount ??
+      null,
+    executionIds: executionScope?.executions.map(({ id }) => id) ?? [],
   };
   const isAssigneeActive = (account: string) => active.has(account);
 
   return {
     scope,
+    findRequirement: () => findProbeRequirement(client),
+    hasExecutionStory: async (execution, storyId) =>
+      (await readProbeExecutionStories(client, execution)).some(
+        ({ id }) => id === storyId,
+      ),
+    readStoryLinks: (id, type) => readProbeStoryLinks(client, id, type),
+    readTask: (id) => readProbeTask(client, id),
     async send(request) {
-      const missingFields = checkRequired(request, required.story, active);
+      const missingFields = checkRequired(request, required, active);
       if (missingFields.length)
         return {
           route: "",
@@ -244,12 +302,14 @@ export async function createProbeWriteSession(
       const {
         body,
         createdStoryId: storyId,
+        createdTaskIds: taskIds,
         recognizedFailure,
         sessionToken,
       } = await readProbeWriteResponse(response);
       const candidateUnavailable = httpStatus === 404 || httpStatus === 405;
       const clearlyRejected =
         storyId === undefined &&
+        !taskIds?.length &&
         (candidateUnavailable || (response.ok && recognizedFailure));
       const accepted = response.ok && !recognizedFailure;
       let fixture: SanitizedFixture | undefined;
@@ -295,6 +355,7 @@ export async function createProbeWriteSession(
         route,
         httpStatus,
         storyId,
+        taskIds,
         accepted,
         clearlyRejected,
         candidateUnavailable,

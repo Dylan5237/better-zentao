@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   getProbeOwnershipOptions,
   hasProbeOwnership,
+  readProbeExecutions,
   readProbeOwnership,
 } from "../../src/api/internal/probe-scope.ts";
 import { mockReadClient, readFixture } from "./read-fixture.ts";
@@ -108,4 +109,59 @@ it("WP-05 计划回读截断时不签发归属证据", async () => {
     "code",
     "ZENTAO_SCHEMA_MISMATCH",
   );
+});
+
+it("WP-30 只返回可用多迭代项目中经详情核对的未关闭执行", async () => {
+  const { client, fetch } = mockReadClient((url) => {
+    switch (url.pathname) {
+      case "/zentao/api.php/v1/products/29/projects":
+        return Response.json({
+          projects: [
+            {
+              id: "1",
+              multiple: "1",
+              status: "doing",
+              products: [{ id: "29" }],
+            },
+            { id: 2, multiple: true, status: "closed" },
+            { id: 3, multiple: false, status: "doing" },
+          ],
+          total: 3,
+        });
+      case "/zentao/api.php/v1/projects/1/executions":
+        return Response.json({
+          executions: [
+            { id: "61", project: "1", status: "wait" },
+            { id: 62, project: 1, status: "closed" },
+            { id: 63, project: 1, status: "doing", deleted: "1" },
+          ],
+        });
+      case "/zentao/api.php/v1/executions/61":
+        return Response.json({
+          id: 61,
+          project: 1,
+          status: "wait",
+          products: ["29"],
+        });
+      default:
+        throw new Error("Unexpected fixture path");
+    }
+  });
+  await expect(readProbeExecutions(client)).resolves.toEqual({
+    projectsCount: 3,
+    executions: [{ id: 61, project: 1 }],
+  });
+  expect(fetch).toHaveBeenCalledTimes(4);
+});
+
+it("WP-30 产品无项目时返回空集，不读取其他产品或执行", async () => {
+  const { client, fetch } = mockReadClient((url) => {
+    expect(url.pathname).toBe("/zentao/api.php/v1/products/29/projects");
+    return Response.json({ projects: [], total: 0 });
+  });
+  await expect(readProbeExecutions(client)).resolves.toEqual({
+    projectsCount: 0,
+    executions: [],
+  });
+  expect(fetch).toHaveBeenCalledTimes(2);
 });
