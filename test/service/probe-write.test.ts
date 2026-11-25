@@ -74,7 +74,7 @@ function fakeZentao(
     executionProducts?: number[];
     projectProducts?: number[];
     linkStatus?: number;
-    linkDespite404?: boolean;
+    prelinkedExecution?: boolean;
     requirementProduct?: number;
     unreportedTasks?: boolean;
     childParent?: number;
@@ -208,15 +208,13 @@ function fakeZentao(
           stories: [...executionStories].map((id) => stories.get(id)),
           total: executionStories.size,
         });
-      if (
-        path.includes("/v1/") &&
-        options.linkStatus &&
-        !options.linkDespite404
-      )
-        return respond({}, options.linkStatus);
+      if (options.linkStatus) return respond({}, options.linkStatus);
       if (path.includes("/v2/"))
         expect(url.searchParams.get("objectID")).toBe("60");
-      for (const id of body?.stories as number[]) executionStories.add(id);
+      for (const id of body?.stories as number[]) {
+        expect(stories.get(id)?.status).toBe("active");
+        executionStories.add(id);
+      }
       return respond(
         {},
         path.includes("/v1/") ? (options.linkStatus ?? 201) : 200,
@@ -333,6 +331,7 @@ function fakeZentao(
       const story = makeStory(101 + stories.size, body);
       story.spec = options.normalizeSpec?.(story.spec) ?? story.spec;
       stories.set(story.id, story);
+      if (options.prelinkedExecution) executionStories.add(story.id);
       if (options.uncertainCreate) throw new Error(token);
       return respond(
         {
@@ -490,26 +489,60 @@ describe("WP-30 Phase A", () => {
     }
   });
 
-  it.each([
-    [404, false, 1],
-    [404, true, 0],
-    [503, false, 0],
-  ] as const)(
-    "只有 404 且未关联才试 v2（%i / %s）",
-    async (linkStatus, linkDespite404, fallback) => {
-      const zen = fakeZentao({
-        executionProducts: [29],
-        linkStatus,
-        linkDespite404,
-      });
-      const result = await phaseA("story.linkExecution");
-      expect(zen.sends("/executions/60/stories")).toHaveLength(1);
-      expect(zen.sends("/execution/linkStory")).toHaveLength(fallback);
-      expect(result.attempts.at(-1)?.status).toBe(
-        fallback ? "confirmed" : "unknown",
-      );
-    },
-  );
+  it("story.linkExecution 关联前先激活草稿需求并直连 v2/execution/linkStory", async () => {
+    const zen = fakeZentao({ executionProducts: [29] });
+    const result = await phaseA("story.linkExecution");
+    expect(result.ok).toBe(true);
+    expect(zen.sends("/executions/60/stories")).toHaveLength(0);
+    expect(zen.sends("/execution/linkStory")).toHaveLength(1);
+    const putIndex = zen.entries.findIndex(({ method }) => method === "PUT");
+    const linkIndex = zen.entries.findIndex(
+      ({ method, path }) =>
+        method === "POST" && path.includes("/execution/linkStory"),
+    );
+    expect(putIndex).toBeGreaterThanOrEqual(0);
+    expect(linkIndex).toBeGreaterThan(putIndex);
+    expect(result.attempts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          capability: "story.activate",
+          status: "confirmed",
+        }),
+        expect.objectContaining({
+          capability: "story.linkExecution",
+          status: "confirmed",
+        }),
+      ]),
+    );
+  });
+
+  it("execution/linkStory 返回 503 时仅记录 unknown 不盲目重试", async () => {
+    const zen = fakeZentao({ executionProducts: [29], linkStatus: 503 });
+    const result = await phaseA("story.linkExecution");
+    expect(result.ok).toBe(false);
+    expect(zen.sends("/executions/60/stories")).toHaveLength(0);
+    expect(zen.sends("/execution/linkStory")).toHaveLength(1);
+    expect(result.attempts.at(-1)).toMatchObject({
+      capability: "story.linkExecution",
+      status: "unknown",
+    });
+  });
+
+  it("execution 已包含需求时幂等跳过不再发关联请求", async () => {
+    const zen = fakeZentao({
+      executionProducts: [29],
+      prelinkedExecution: true,
+    });
+    const result = await phaseA("story.linkExecution");
+    expect(result.ok).toBe(true);
+    expect(zen.sends("/execution/linkStory")).toHaveLength(0);
+    expect(zen.sends("/executions/60/stories")).toHaveLength(0);
+    expect(result.attempts.at(-1)).toMatchObject({
+      capability: "story.linkExecution",
+      status: "confirmed",
+      skipped: true,
+    });
+  });
 
   it.each([
     { executionProducts: [29, 42] },

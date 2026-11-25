@@ -620,27 +620,25 @@ async function probeRelation(
   try {
     if ((await readback()) === true)
       return { ...result, status: "confirmed", skipped: true };
-    const candidates =
+    const candidate =
       request.action === "story.linkExecution"
-        ? [request, { ...request, candidate: "v2" as const }]
-        : [request];
-    for (const candidate of candidates) {
-      const response = await state.session.send(candidate);
-      result = {
-        capability,
-        storyId,
-        route: response.route,
-        httpStatus: response.httpStatus,
-        status: "unknown",
-      };
-      const linked = await readback();
-      if (linked === true && response.accepted) {
-        state.recordFixture(capability, storyId, response);
-        return { ...result, status: "confirmed" };
-      }
-      if (response.httpStatus !== 404 || linked !== false) return result;
-      result = { ...result, status: "failed" };
+        ? { ...request, candidate: "v2" as const }
+        : request;
+    const response = await state.session.send(candidate);
+    result = {
+      capability,
+      storyId,
+      route: response.route,
+      httpStatus: response.httpStatus,
+      status: "unknown",
+    };
+    const linked = await readback();
+    if (linked === true && response.accepted) {
+      state.recordFixture(capability, storyId, response);
+      return { ...result, status: "confirmed" };
     }
+    if (response.clearlyRejected && linked === false)
+      return { ...result, status: "failed" };
     return result;
   } catch (error) {
     return { ...result, reason: errorCode(error) };
@@ -842,6 +840,29 @@ async function probeExecution(
     );
     return;
   }
+  if (disabled.includes("story.activate")) {
+    attempts.push(
+      notExecuted(selected ?? "story.linkExecution", "前置激活能力已禁用。"),
+    );
+    return;
+  }
+  // 禅道 22.6 仅允许已激活的研发需求关联执行，关联前先激活草稿需求。
+  const activated = await probeExisting(
+    state,
+    [
+      {
+        id: storyId,
+        productId: PROBE_PRODUCT_ID,
+        action: "story.activate",
+        candidate: "put",
+        body: { status: "active" },
+      },
+    ],
+    (story) => story.status === "active",
+    (story) => story.status === "draft",
+  );
+  attempts.push(...activated);
+  if (activated.at(-1)?.status !== "confirmed") return;
   const linked = await probeRelation(
     state,
     {
