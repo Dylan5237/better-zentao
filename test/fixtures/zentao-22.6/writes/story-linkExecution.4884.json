@@ -1,0 +1,16 @@
+{
+  "endpoint": "POST /api.php/v2/execution/linkStory?objectID=315",
+  "status": 200,
+  "body": {
+    "request": {
+      "stories": [
+        4884
+      ]
+    },
+    "response": {
+      "field_001": "示例文本",
+      "status": "示例文本",
+      "message": "示例文本"
+    }
+  }
+}

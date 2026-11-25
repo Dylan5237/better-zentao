@@ -20,13 +20,13 @@ describe("WP-05 能力注册表（06 §7）", () => {
       "story.assign": "verified",
       "story.edit": "verified",
       "story.activate": "verified",
-      "story.linkExecution": "unverified",
+      "story.linkExecution": "verified",
       "story.close": "verified",
       "story.comment": "verified",
       "requirement.linkStory": "unverified",
-      "story.linkStory": "unverified",
-      "task.create": "unverified",
-      "task.close": "unverified",
+      "story.linkStory": "verified",
+      "task.create": "verified",
+      "task.close": "verified",
       "release.read": "unverified",
       "task.finish": "disabled",
       "bug.create": "disabled",
@@ -35,18 +35,30 @@ describe("WP-05 能力注册表（06 §7）", () => {
     const verified = listCapabilities().filter(
       ({ state }) => state === "verified",
     );
-    expect(verified).toHaveLength(8);
+    expect(verified).toHaveLength(12);
     for (const capability of verified)
       expect(capability.verifiedOn).toBe("22.6");
   });
 
   it("拒绝未验证和已禁用能力，CLI 专用能力只有显式 CLI 才允许", () => {
-    expect(assertCapabilityExecutable("story.create")).toBe(
-      getCapability("story.create"),
-    );
-    expect(() => assertCapabilityExecutable("story.create.plan")).toThrow(
-      expect.objectContaining({ code: "CAPABILITY_UNVERIFIED" }),
-    );
+    for (const id of [
+      "story.create",
+      "story.linkExecution",
+      "story.linkStory",
+      "task.create",
+      "task.close",
+    ]) {
+      expect(assertCapabilityExecutable(id)).toBe(getCapability(id));
+    }
+    for (const id of [
+      "story.create.plan",
+      "requirement.linkStory",
+      "release.read",
+    ]) {
+      expect(() => assertCapabilityExecutable(id)).toThrow(
+        expect.objectContaining({ code: "CAPABILITY_UNVERIFIED" }),
+      );
+    }
     for (const id of ["task.finish", "bug.create"]) {
       expect(() => assertCapabilityExecutable(id, { channel: "cli" })).toThrow(
         expect.objectContaining({ code: "CAPABILITY_DISABLED" }),

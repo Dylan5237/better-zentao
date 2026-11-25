@@ -1,0 +1,10 @@
+{
+  "endpoint": "POST /api.php/v2/task/close?taskID=4873",
+  "status": 200,
+  "body": {
+    "request": {},
+    "response": {
+      "status": "示例文本"
+    }
+  }
+}

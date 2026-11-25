@@ -233,7 +233,7 @@ describe("WP-16 / OperationExecutor", () => {
   });
 
   it.each([
-    ["story.linkExecution", {}, "CAPABILITY_UNVERIFIED"],
+    ["requirement.linkStory", {}, "CAPABILITY_UNVERIFIED"],
     ["bug.create", {}, "CAPABILITY_DISABLED"],
     [
       "story.create",

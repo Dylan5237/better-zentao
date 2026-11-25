@@ -52,6 +52,7 @@ function setup(
     account?: string;
     required?: string;
     disableActivate?: boolean;
+    disableCapabilities?: string[];
   } = {},
 ) {
   let now = Date.UTC(2026, 10, 24);
@@ -69,7 +70,9 @@ function setup(
       30: { designLead: "alice", devLead: "bob" },
     },
     write: {
-      disableCapabilities: options.disableActivate ? ["story.activate"] : [],
+      disableCapabilities:
+        options.disableCapabilities ??
+        (options.disableActivate ? ["story.activate"] : []),
     },
   });
   const store = openLocalStore({ baseUrl, account, dbPath: ":memory:", clock });
@@ -308,7 +311,14 @@ it("AC-06/07 本地配对与回关联可跨服务重启记录", async () => {
   expect(prepared).toMatchObject({
     level: "W2",
     preview: {
-      steps: [{ action: "story.create" }, { action: "story.create" }],
+      steps: [
+        { action: "story.create" },
+        { action: "story.create" },
+        {
+          action: "story.linkStory",
+          fields: { pairFromStep: { value: 2, origin: "derived" } },
+        },
+      ],
     },
   });
   const result = await confirm(prepared.opId);
@@ -331,10 +341,34 @@ it("AC-06/07 本地配对与回关联可跨服务重启记录", async () => {
         toType: "story",
         toId: pair,
         relation: "pairs",
-        origin: "local",
+        origin: "native",
       }),
     );
   }
+
+  const localOnly = setup({ disableCapabilities: ["story.linkStory"] });
+  const fallback = await localOnly.service.createStory({
+    ...input,
+    category: "feature",
+    pair: { product: "产品乙", module: "权限" },
+  });
+  expect(fallback.warnings).toContainEqual(
+    expect.objectContaining({ code: "CAPABILITY_UNVERIFIED" }),
+  );
+  expect(fallback.preview.steps.map(({ action }) => action)).toEqual([
+    "story.create",
+    "story.create",
+  ]);
+  const fallbackResult = await localOnly.confirm(fallback.opId);
+  localOnly.service.recordConfirmed(fallback.opId, fallbackResult);
+  expect(localOnly.store.sourceLinks.listFrom("story", "1001")).toContainEqual(
+    expect.objectContaining({
+      toType: "story",
+      toId: "1002",
+      relation: "pairs",
+      origin: "local",
+    }),
+  );
 });
 
 it("AC-08 跨模块由发起人维护，接收人为目标模块研发主管", async () => {
@@ -357,7 +391,7 @@ it("AC-08 跨模块由发起人维护，接收人为目标模块研发主管", a
     expect.objectContaining({
       toId: "77",
       relation: "derives",
-      origin: "local",
+      origin: "native",
     }),
   );
 });
@@ -723,6 +757,10 @@ it("B4/N11 pair 未指定类别时按 N02 推导为设计类且仅推送一条 N
     {
       action: "story.create.design",
       category: { value: "design", origin: "derived" },
+    },
+    {
+      action: "story.linkStory",
+      category: undefined,
     },
   ]);
   expect(paired.warnings.filter(({ code }) => code === "N02")).toHaveLength(1);

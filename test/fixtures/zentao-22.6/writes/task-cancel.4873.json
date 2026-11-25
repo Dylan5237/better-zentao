@@ -1,0 +1,13 @@
+{
+  "endpoint": "POST /api.php/v2/task/cancel?taskID=4873",
+  "status": 200,
+  "body": {
+    "request": {},
+    "response": {
+      "message": "示例文本",
+      "field_001": true,
+      "field_002": "示例文本",
+      "status": "示例文本"
+    }
+  }
+}
