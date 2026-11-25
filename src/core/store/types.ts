@@ -99,6 +99,78 @@ export interface SeenCursorRecord {
   readonly lastSeenAt: number;
 }
 
+export interface StageRequirementRecord {
+  readonly storyId: number;
+  readonly stage: string;
+  readonly required: boolean;
+  readonly waiverReason: string | null;
+  readonly decidedBy: string;
+  readonly decidedAt: number;
+}
+
+export interface WaiverKey {
+  readonly ruleId: string;
+  readonly objectType: string;
+  readonly objectId: string;
+}
+
+export interface WaiverRecord extends WaiverKey {
+  readonly reason: string;
+  readonly approvedBy: string;
+  readonly at: number;
+}
+
+export type WaiverInput = Omit<WaiverRecord, "objectType"> & {
+  readonly objectType?: string;
+};
+
+export type SnapshotSource = "local" | "imported";
+
+export interface SnapshotRecord {
+  readonly snapId: string;
+  readonly month: string;
+  readonly productId: number;
+  readonly takenAt: number;
+  readonly takenBy: string;
+  readonly source: SnapshotSource;
+}
+
+export interface SnapshotItemInput {
+  readonly storyId: number;
+  readonly planId: number | null;
+  readonly executionId: number | null;
+  readonly progressAtSnap: string;
+}
+
+export interface SnapshotItemRecord extends SnapshotItemInput {
+  readonly snapId: string;
+}
+
+export interface SnapshotWithItems extends SnapshotRecord {
+  readonly items: readonly SnapshotItemRecord[];
+}
+
+export interface NotificationRecord {
+  readonly dedupeKey: string;
+  readonly channel: string;
+  readonly target: string;
+  readonly sentAt: number;
+  readonly state: string;
+}
+
+export interface RescheduleInput {
+  readonly storyId: number;
+  readonly fromMonth: string | null;
+  readonly toMonth: string;
+  readonly reason: string;
+  readonly by: string;
+  readonly at: number;
+}
+
+export interface RescheduleRecord extends RescheduleInput {
+  readonly id: number;
+}
+
 export interface AppliedMigration {
   readonly version: number;
   readonly name: string;

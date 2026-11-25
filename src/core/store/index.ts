@@ -14,9 +14,17 @@ export {
 export type { Migration } from "./migrations.ts";
 export { checkSqlite } from "./sqlite.ts";
 export type {
+  NotificationsRepository,
+  ReschedulesRepository,
+  SnapshotsRepository,
+  StageRequirementsRepository,
+  WaiversRepository,
+} from "./repositories.ts";
+export type {
   AppliedMigration,
   IntakePatch,
   IntakeRecord,
+  NotificationRecord,
   OperationLevel,
   OperationRecord,
   OperationStatus,
@@ -24,10 +32,21 @@ export type {
   OperationStepPatch,
   OperationStepRecord,
   OperationStepState,
+  RescheduleInput,
+  RescheduleRecord,
   SeenCursorRecord,
+  SnapshotItemInput,
+  SnapshotItemRecord,
+  SnapshotRecord,
+  SnapshotSource,
+  SnapshotWithItems,
   SourceLinkKey,
   SourceLinkRecord,
   SourceOrigin,
   SourceRelation,
+  StageRequirementRecord,
   StoryRoleRecord,
+  WaiverInput,
+  WaiverKey,
+  WaiverRecord,
 } from "./types.ts";
