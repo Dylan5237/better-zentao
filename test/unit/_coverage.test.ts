@@ -9,6 +9,7 @@ import * as testing from "../../src/rules/r02-test-handoff.ts";
 import * as acceptance from "../../src/rules/r03-receipt-timeout.ts";
 import * as assignment from "../../src/rules/r04-premature-assignment.ts";
 import * as scope from "../../src/rules/r05-missing-scope.ts";
+import { registerP2Cases } from "./rules-p2-cases.ts";
 
 type Category = "hit" | "non-hit" | "boundary";
 const covered = new Map<string, Set<Category>>();
@@ -358,24 +359,6 @@ describe("WP-12 风险规则", () => {
     ]);
   });
 
-  it("注册表覆盖 WP-12 的每条规则，且每条均有三类实际执行的测试", () => {
-    expect(rules.map(({ id }) => id)).toEqual([
-      "R01",
-      "R02",
-      "R03",
-      "R04",
-      "R05",
-    ]);
-    expect([...covered.keys()].sort()).toEqual(
-      rules.map(({ id }) => id).sort(),
-    );
-    for (const { id } of rules) {
-      expect(covered.get(id), id).toEqual(
-        new Set(["hit", "non-hit", "boundary"]),
-      );
-    }
-  });
-
   it("保留推测证据，并在缺少接口完成时间时保留缺口", () => {
     const tasks = [
       { ...dev, id: 99, deleted: true },
@@ -434,4 +417,20 @@ describe("WP-12 风险规则", () => {
       waived: [],
     });
   });
+});
+
+describe("WP-32 风险规则", () => registerP2Cases(ruleCase));
+
+it("R01–R14 按编号注册，且每条均有三类实际执行的测试", () => {
+  const expected = Array.from(
+    { length: 14 },
+    (_, index) => `R${String(index + 1).padStart(2, "0")}`,
+  );
+  expect(rules.map(({ id }) => id)).toEqual(expected);
+  expect([...covered.keys()].sort()).toEqual(expected);
+  for (const id of expected) {
+    expect(covered.get(id), id).toEqual(
+      new Set(["hit", "non-hit", "boundary"]),
+    );
+  }
 });
