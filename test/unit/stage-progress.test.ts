@@ -24,6 +24,41 @@ describe("docs/04 §3 阶段识别与完成", () => {
         { prefixes: { test: "【前端测试】" } },
       ),
     ).toEqual({ stage: "test", confidence: "confirmed" });
+    expect(
+      detectStage({
+        name: "【设计】实现",
+        type: "devel",
+        desc: "<p>任务说明</p>\n<p>[bzt:stage=dev]</p>",
+      }),
+    ).toEqual({ stage: "dev", confidence: "confirmed" });
+    expect(
+      detectStage({
+        name: "【研发】核对",
+        type: "devel",
+        desc: '<p style="color:#999;font-size:12px">[bzt:stage=test]</p>',
+      }),
+    ).toEqual({ stage: "test", confidence: "confirmed" });
+    expect(
+      detectStage({
+        name: "【设计】实现",
+        type: "devel",
+        desc: "<p>任务说明</p>\n[bzt:stage=dev]",
+      }),
+    ).toEqual({ stage: "dev", confidence: "confirmed" });
+    expect(
+      detectStage({
+        name: "【研发】测试",
+        type: "test",
+        desc: "<p>[bzt:stage=unknown]</p>",
+      }),
+    ).toEqual({ stage: "dev", confidence: "confirmed" });
+    expect(
+      detectStage({
+        name: "普通任务",
+        type: "devel",
+        desc: "<p>[bzt:stage=test]</p><!-- bzt:stage=dev -->",
+      }),
+    ).toEqual({ stage: "dev", confidence: "confirmed" });
   });
 
   it.each([

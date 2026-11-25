@@ -21,6 +21,7 @@ import type { ConfigEnv } from "../core/config.ts";
 import type { StoryDetail } from "../core/dto/story.ts";
 import type { Task, TaskDetail } from "../core/dto/task.ts";
 import { BztError } from "../core/errors.ts";
+import { detectStage } from "../domain/stage.ts";
 import {
   buildStoryHtmlSpec,
   parseStoryRoleTag,
@@ -330,7 +331,7 @@ interface ProbeRun {
   readonly timezone: string;
   readonly cleanup: Attempt[];
   readonly recordFixture: (
-    capability: Probe,
+    capability: Probe | "task.cancel",
     id: number,
     response: ProbeWriteResponse,
   ) => void;
@@ -678,7 +679,10 @@ async function probeTask(
     pri: 3,
     estStarted: date,
     deadline: date,
-    desc: "<!-- bzt:stage=dev -->\n<p>WP-30 #29 探查任务</p>",
+    desc:
+      state.tagFormat === "visible"
+        ? '<p>WP-30 #29 探查任务</p>\n<p style="color:#999;font-size:12px">[bzt:stage=dev]</p>'
+        : "<!-- bzt:stage=dev -->\n<p>WP-30 #29 探查任务</p>",
   };
   const identity = { name: fields.name, openedBy: assignedTo, execution };
   let response: ProbeWriteResponse;
@@ -750,7 +754,7 @@ async function probeTask(
       task.estStarted === date &&
       task.deadline === date &&
       task.parent === (parent ?? null) &&
-      task.desc?.includes("<!-- bzt:stage=dev -->")
+      detectStage({ name: "", desc: task.desc }).stage === "dev"
     ) {
       state.recordFixture(capability, task.id, response);
       return { ...report, status: "confirmed", taskId: task.id };
@@ -795,6 +799,31 @@ async function closeTask(
       return { ...report, reason: "无法确认这是本次探查创建的任务。" };
     if (initial.status === "closed")
       return { ...report, status: "confirmed", skipped: true };
+    if (initial.status !== "done" && initial.status !== "cancel") {
+      // 禅道 22.6 未开始/进行中任务需先取消再关闭。
+      const cancelResponse = await state.session.send({
+        action: "task.close",
+        candidate: "cancel",
+        productId: PROBE_PRODUCT_ID,
+        id,
+        body: {},
+      });
+      report = {
+        ...report,
+        route: cancelResponse.route,
+        httpStatus: cancelResponse.httpStatus,
+        status: "unknown",
+      };
+      const afterCancel = await state.session.readTask(id);
+      if (
+        !sameTask(afterCancel, identity) ||
+        afterCancel.status !== "cancel" ||
+        !cancelResponse.accepted
+      ) {
+        return report;
+      }
+      state.recordFixture("task.cancel", id, cancelResponse);
+    }
     const response = await state.session.send({
       action: "task.close",
       productId: PROBE_PRODUCT_ID,
@@ -815,6 +844,33 @@ async function closeTask(
     ) {
       state.recordFixture("task.close", id, response);
       return { ...report, status: "confirmed" };
+    }
+    if (
+      sameTask(task, identity) &&
+      (task.status === "cancel" || task.status === "done")
+    ) {
+      const v2Response = await state.session.send({
+        action: "task.close",
+        candidate: "v2",
+        productId: PROBE_PRODUCT_ID,
+        id,
+        body: {},
+      });
+      report = {
+        ...report,
+        route: v2Response.route,
+        httpStatus: v2Response.httpStatus,
+        status: "unknown",
+      };
+      const v2Task = await state.session.readTask(id);
+      if (
+        sameTask(v2Task, identity) &&
+        v2Task.status === "closed" &&
+        v2Response.accepted
+      ) {
+        state.recordFixture("task.close", id, v2Response);
+        return { ...report, status: "confirmed" };
+      }
     }
     return report;
   } catch (error) {

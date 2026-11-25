@@ -96,8 +96,10 @@ const taskFields = {
   pri: z.int().min(1).max(4),
   estStarted: civilDate,
   deadline: civilDate,
-  desc: requiredText.refine((text) =>
-    text.startsWith("<!-- bzt:stage=dev -->"),
+  desc: requiredText.refine(
+    (text) =>
+      text.startsWith("<!-- bzt:stage=dev -->") ||
+      /<p[^>]*>\s*\[bzt:stage=dev\]\s*<\/p\s*>$/u.test(text.trim()),
   ),
 };
 const taskBody = z.strictObject({ execution: id, ...taskFields });
@@ -139,7 +141,8 @@ const extendedRequests = [
   z.strictObject({
     action: z.literal("task.close"),
     ...storyRef,
-    body: z.strictObject({}),
+    candidate: z.enum(["cancel", "v2"]).optional(),
+    body: z.strictObject({ comment }),
   }),
 ] as const;
 export type ExtendedProbeRequest = z.input<(typeof extendedRequests)[number]>;
@@ -237,11 +240,23 @@ function routeFor(request: ProbeRequest): ProbeRoute {
             id,
           );
     case "task.close":
-      return postRoute(
-        `/api.php/v1/tasks/${id}/close`,
-        "/api.php/v1/tasks/{id}/close",
-        id,
-      );
+      return request.candidate === "cancel"
+        ? postRoute(
+            `/api.php/v2/task/cancel?taskID=${id}`,
+            "/api.php/v2/task/cancel",
+            id,
+          )
+        : request.candidate === "v2"
+          ? postRoute(
+              `/api.php/v2/task/close?taskID=${id}`,
+              "/api.php/v2/task/close",
+              id,
+            )
+          : postRoute(
+              `/api.php/v1/tasks/${id}/close`,
+              "/api.php/v1/tasks/{id}/close",
+              id,
+            );
   }
 
   const put =

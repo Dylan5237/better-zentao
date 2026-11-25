@@ -79,6 +79,7 @@ function fakeZentao(
     unreportedTasks?: boolean;
     childParent?: number;
     batchReceiptId?: number;
+    v1TaskCloseNoop?: boolean;
   } = {},
 ) {
   const entries: Entry[] = [];
@@ -232,11 +233,13 @@ function fakeZentao(
         pri: 3,
         estStarted: "2027-01-15",
         deadline: "2027-01-15",
-        desc: expect.stringContaining("<!-- bzt:stage=dev -->"),
+        desc: expect.stringContaining("bzt:stage=dev"),
       });
+      const rawDesc = String(body?.desc ?? "");
       tasks.set(70, {
         ...taskDefaults,
         ...body,
+        desc: options.normalizeSpec?.(rawDesc) ?? rawDesc,
         id: 70,
         parent: 0,
         status: "wait",
@@ -258,9 +261,11 @@ function fakeZentao(
           ]),
         ),
       );
+      const rawChildDesc = String(task?.desc ?? "");
       tasks.set(71, {
         ...taskDefaults,
         ...task,
+        desc: options.normalizeSpec?.(rawChildDesc) ?? rawChildDesc,
         id: 71,
         execution: 60,
         parent: options.childParent ?? 70,
@@ -275,11 +280,29 @@ function fakeZentao(
         password,
       });
     }
+    if (path === "/api.php/v2/task/cancel" && method === "POST") {
+      const task = tasks.get(Number(url.searchParams.get("taskID")));
+      if (!task) return respond({}, 404);
+      task.status = "cancel";
+      return respond({ status: "success", password });
+    }
+    if (path === "/api.php/v2/task/close" && method === "POST") {
+      const task = tasks.get(Number(url.searchParams.get("taskID")));
+      if (!task) return respond({}, 404);
+      if (task.status === "cancel" || task.status === "done")
+        task.status = "closed";
+      return respond({ status: "success", password });
+    }
     const taskRoute = /^\/api\.php\/v1\/tasks\/(\d+)(\/close)?$/u.exec(path);
     if (taskRoute) {
       const task = tasks.get(Number(taskRoute[1]));
       if (!task) return respond({}, 404);
-      if (method === "POST") task.status = "closed";
+      if (
+        method === "POST" &&
+        !options.v1TaskCloseNoop &&
+        (task.status === "cancel" || task.status === "done")
+      )
+        task.status = "closed";
       return respond(task);
     }
     const requirement = {
@@ -419,7 +442,7 @@ describe("WP-30 Phase A", () => {
     const out = await mkdtemp(join(tmpdir(), "bzt-wp30-"));
     try {
       const result = await phaseA(undefined, out);
-      expect(result).toMatchObject({ ok: true });
+      expect(result.ok).toBe(true);
       for (const capability of [
         "story.create.plan",
         "story.edit",
@@ -464,6 +487,8 @@ describe("WP-30 Phase A", () => {
         expect.arrayContaining([
           "task-create.70.json",
           "task-create.71.json",
+          "task-cancel.70.json",
+          "task-cancel.71.json",
           "task-close.70.json",
           "task-close.71.json",
         ]),
@@ -634,6 +659,40 @@ describe("WP-30 Phase A", () => {
       expect(zen.sends("/task/batchCreate")).toHaveLength(0);
     },
   );
+
+  it("task.create --visible-tag 在剥离 HTML 注释时仍确认阶段微标签，并按取消后关闭收尾", async () => {
+    const zen = fakeZentao({
+      executionProducts: [29],
+      normalizeSpec: (text) => text.replace(/<!--[\s\S]*?-->/gu, ""),
+    });
+    const result = await runProbeWrite({
+      ...runtime,
+      cli: {
+        action: "write",
+        product: "29",
+        capability: "task.create",
+        visibleTag: true,
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(zen.sends("/task/cancel")).toHaveLength(2);
+    expect(zen.sends("/api.php/v1/tasks/")).toHaveLength(2);
+    expect(zen.tasks.get(70)?.status).toBe("closed");
+    expect(zen.tasks.get(71)?.status).toBe("closed");
+  });
+
+  it("v1 任务关闭未改状态时回退到 v2/task/close 并回读确认", async () => {
+    const zen = fakeZentao({
+      executionProducts: [29],
+      v1TaskCloseNoop: true,
+    });
+    const result = await phaseA("task.close");
+    expect(result.ok).toBe(true);
+    expect(zen.sends("/v2/task/cancel")).toHaveLength(1);
+    expect(zen.sends("/v1/tasks/70/close")).toHaveLength(1);
+    expect(zen.sends("/v2/task/close")).toHaveLength(1);
+    expect(zen.tasks.get(70)?.status).toBe("closed");
+  });
 });
 
 const stripRoleComment = (spec: string) =>

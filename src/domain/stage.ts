@@ -43,16 +43,29 @@ type StageDetection =
 
 type StageTask = Pick<Task, "name"> & Partial<Pick<Task, "type" | "desc">>;
 
+const commentStageTag = /^<!--\s*bzt:stage=([a-z]+)\s*-->$/u;
+const visibleStageTag = /^\s*\[bzt:stage=([a-z]+)\]\s*$/u;
+
 // docs/04 §3.2 同类信号每个阶段只计一次。最高分并列时保留未知。
 export function detectStage(
   task: StageTask,
   evidence: StageEvidence = {},
 ): StageDetection {
-  for (const [fragment] of (task.desc ?? "").matchAll(htmlFragments)) {
-    const marker = /^<!--\s*bzt:stage=([a-z]+)\s*-->$/u.exec(fragment)?.[1];
-    if (marker && isStage(marker))
-      return { stage: marker, confidence: "confirmed" };
+  const desc = task.desc ?? "";
+  let visibleStage: Stage | undefined;
+  for (const match of desc.matchAll(htmlFragments)) {
+    const fragment = match[0];
+    const comment = commentStageTag.exec(fragment)?.[1];
+    if (comment && isStage(comment))
+      return { stage: comment, confidence: "confirmed" };
+    const end = match.index + fragment.length;
+    const fallback =
+      match.groups?.footer ?? (end === desc.length ? fragment : "");
+    const visible = visibleStageTag.exec(fallback)?.[1];
+    if (visible && isStage(visible)) visibleStage = visible;
   }
+  if (visibleStage !== undefined)
+    return { stage: visibleStage, confidence: "confirmed" };
 
   for (const stage of stages) {
     const { prefix } = stageRules[stage];
