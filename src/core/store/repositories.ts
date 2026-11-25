@@ -648,3 +648,10 @@ export class CacheRepository {
     );
   }
 }
+export {
+  NotificationsRepository,
+  ReschedulesRepository,
+  SnapshotsRepository,
+  StageRequirementsRepository,
+  WaiversRepository,
+} from "./p2-repositories.ts";

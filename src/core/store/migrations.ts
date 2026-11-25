@@ -103,9 +103,70 @@ const P1_TABLES_SQL = `
   CREATE INDEX IF NOT EXISTS cache_kv_expires_at ON cache_kv (expires_at);
 `;
 
+const P2_TABLES_SQL = `
+  CREATE TABLE stage_requirements (
+    story_id INTEGER NOT NULL,
+    stage TEXT NOT NULL,
+    required INTEGER NOT NULL CHECK (required IN (0, 1)),
+    waiver_reason TEXT,
+    decided_by TEXT NOT NULL,
+    decided_at INTEGER NOT NULL,
+    PRIMARY KEY (story_id, stage)
+  ) STRICT;
+
+  CREATE TABLE waivers (
+    rule_id TEXT NOT NULL,
+    object_type TEXT NOT NULL DEFAULT 'story',
+    object_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    approved_by TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (rule_id, object_type, object_id)
+  ) STRICT;
+
+  CREATE TABLE snapshots (
+    snap_id TEXT PRIMARY KEY,
+    month TEXT NOT NULL,
+    product_id INTEGER NOT NULL,
+    taken_at INTEGER NOT NULL,
+    taken_by TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN ('local', 'imported'))
+  ) STRICT;
+
+  CREATE TABLE snapshot_items (
+    snap_id TEXT NOT NULL REFERENCES snapshots(snap_id) ON DELETE CASCADE,
+    story_id INTEGER NOT NULL,
+    plan_id INTEGER,
+    execution_id INTEGER,
+    progress_at_snap TEXT NOT NULL,
+    PRIMARY KEY (snap_id, story_id)
+  ) STRICT;
+
+  CREATE TABLE notifications (
+    dedupe_key TEXT PRIMARY KEY,
+    channel TEXT NOT NULL,
+    target TEXT NOT NULL,
+    sent_at INTEGER NOT NULL,
+    state TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE reschedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    story_id INTEGER NOT NULL,
+    from_month TEXT,
+    to_month TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    "by" TEXT NOT NULL,
+    at INTEGER NOT NULL
+  ) STRICT;
+
+  CREATE INDEX reschedules_story_at ON reschedules (story_id, at);
+`;
+
 /** 迁移按 version 升序追加；已发布的迁移不得改名或改写。 */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "001-p1-tables", sql: P1_TABLES_SQL },
+  { version: 2, name: "002-p2-tables", sql: P2_TABLES_SQL },
 ];
 
 const appliedRow = z.object({

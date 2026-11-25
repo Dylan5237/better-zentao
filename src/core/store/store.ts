@@ -10,11 +10,16 @@ import { applyMigrations, listAppliedMigrations } from "./migrations.ts";
 import {
   CacheRepository,
   IntakeRepository,
+  NotificationsRepository,
   OperationStepsRepository,
   OperationsRepository,
+  ReschedulesRepository,
   SeenCursorRepository,
+  SnapshotsRepository,
   SourceLinkRepository,
+  StageRequirementsRepository,
   StoryRoleRepository,
+  WaiversRepository,
 } from "./repositories.ts";
 import { execSql, queryOne, toStoreError } from "./sqlite-support.ts";
 import type { AppliedMigration } from "./types.ts";
@@ -62,6 +67,11 @@ export class LocalStore {
   public readonly storyRoles: StoryRoleRepository;
   public readonly seenCursor: SeenCursorRepository;
   public readonly cache: CacheRepository;
+  public readonly stageRequirements: StageRequirementsRepository;
+  public readonly waivers: WaiversRepository;
+  public readonly snapshots: SnapshotsRepository;
+  public readonly notifications: NotificationsRepository;
+  public readonly reschedules: ReschedulesRepository;
 
   private readonly database: DatabaseSync;
   private readonly clock: Clock;
@@ -88,6 +98,11 @@ export class LocalStore {
       location.instanceHash,
       location.account,
     );
+    this.stageRequirements = new StageRequirementsRepository(database);
+    this.waivers = new WaiversRepository(database);
+    this.snapshots = new SnapshotsRepository(database);
+    this.notifications = new NotificationsRepository(database);
+    this.reschedules = new ReschedulesRepository(database);
   }
 
   /** 幂等迁移入口，返回本次应用的版本数。 */

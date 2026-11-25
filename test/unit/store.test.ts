@@ -12,8 +12,11 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BztError } from "../../src/core/errors.ts";
 import {
+  applyMigrations,
   checkSqlite,
   instanceHashOf,
+  listAppliedMigrations,
+  MIGRATIONS,
   openLocalStore,
   resolveStoreLocation,
   sanitizeAccount,
@@ -367,11 +370,12 @@ describe("WP-10 迁移", () => {
     await expect(checkSqlite()).resolves.toMatch(/^\d+\.\d+\.\d+/u);
   });
 
-  it("首次打开创建 7 张业务表与迁移记录", () => {
+  it("首次打开迁移至 v2，创建 P1 和 P2 表", () => {
     const { store } = open();
-    expect(store.schemaVersion).toBe(1);
+    expect(store.schemaVersion).toBe(2);
     expect(store.appliedMigrations()).toEqual([
       { version: 1, name: "001-p1-tables", appliedAt: START },
+      { version: 2, name: "002-p2-tables", appliedAt: START },
     ]);
 
     const { dbPath } = store.location;
@@ -387,23 +391,83 @@ describe("WP-10 迁移", () => {
           "seen_cursor",
           "cache_kv",
           "schema_migrations",
+          "stage_requirements",
+          "waivers",
+          "snapshots",
+          "snapshot_items",
+          "notifications",
+          "reschedules",
         ]),
       );
     });
+  });
+
+  it("applyMigrations 将空库直接升级至 v2，P2 表使用 STRICT", () => {
+    readDatabase(":memory:", (database) => {
+      expect(applyMigrations(database, testClock().now)).toBe(2);
+      expect(
+        listAppliedMigrations(database).map(({ version }) => version),
+      ).toEqual([1, 2]);
+      const tables = database.prepare("PRAGMA table_list").all();
+      for (const name of [
+        "stage_requirements",
+        "waivers",
+        "snapshots",
+        "snapshot_items",
+        "notifications",
+        "reschedules",
+      ]) {
+        expect(tables).toContainEqual(
+          expect.objectContaining({ name, strict: 1 }),
+        );
+      }
+      expect(
+        database
+          .prepare("PRAGMA index_info('reschedules_story_at')")
+          .all()
+          .map(({ name }) => name),
+      ).toEqual(["story_id", "at"]);
+    });
+  });
+
+  it("v1 有存量数据时只应用 002，重复迁移保留 P1 数据与迁移时间", () => {
+    const dbPath = join(homeDir, "v1.db");
+    const v1 = MIGRATIONS.find(({ version }) => version === 1);
+    if (!v1) throw new Error("缺少 001 迁移。");
+    readDatabase(dbPath, (database) => {
+      database.exec(v1.sql);
+      database.exec(`CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL
+      ) STRICT`);
+      database
+        .prepare("INSERT INTO schema_migrations VALUES (1, ?, ?)")
+        .run(v1.name, START);
+      database
+        .prepare("INSERT INTO story_roles VALUES (42, 'alice', 'bob', ?)")
+        .run(START);
+      expect(tableNames(database)).not.toContain("snapshots");
+      expect(applyMigrations(database, testClock(START + 1).now)).toBe(1);
+      expect(applyMigrations(database, testClock(START + 2).now)).toBe(0);
+    });
+
+    const { store } = open({ dbPath }, testClock(START + 3));
+    expect(store.storyRoles.get(42)).toEqual(storyRole());
+    expect(store.appliedMigrations()).toEqual([
+      { version: 1, name: "001-p1-tables", appliedAt: START },
+      { version: 2, name: "002-p2-tables", appliedAt: START + 1 },
+    ]);
   });
 
   it("迁移可重复执行且不覆盖 applied_at", () => {
     const first = open({}, testClock());
     expect(first.store.migrate()).toBe(0);
     const applied = first.store.appliedMigrations();
-    expect(applied).toHaveLength(1);
-    const appliedAt = applied.at(-1)?.appliedAt;
+    expect(applied).toHaveLength(2);
     first.store.close();
 
     const second = open({}, testClock(START + 60_000));
-    expect(second.store.schemaVersion).toBe(1);
-    expect(second.store.appliedMigrations()).toHaveLength(1);
-    expect(second.store.appliedMigrations().at(-1)?.appliedAt).toBe(appliedAt);
+    expect(second.store.schemaVersion).toBe(2);
+    expect(second.store.appliedMigrations()).toEqual(applied);
     expect(second.store.migrate()).toBe(0);
   });
 
@@ -894,7 +958,7 @@ describe("WP-10 文件持久化与关闭", () => {
       lastSeenAt: START,
     });
     expect(second.cache.get("directory")).toBe(JSON.stringify({ items: [] }));
-    expect(second.appliedMigrations()).toHaveLength(1);
+    expect(second.appliedMigrations()).toHaveLength(2);
   });
 
   it("close 幂等，关闭后操作返回 BztError", () => {
@@ -904,5 +968,299 @@ describe("WP-10 文件持久化与关闭", () => {
     expect(captureError(() => store.operations.get("missing")).code).toBe(
       "INVALID_INPUT",
     );
+  });
+});
+
+describe("P2 本地存储（05 §6）", () => {
+  const stageRequirement = {
+    storyId: 42,
+    stage: "delivery",
+    required: false,
+    waiverReason: "无需培训",
+    decidedBy: "alice",
+    decidedAt: START,
+  } as const;
+  const waiverKey = {
+    ruleId: "R13",
+    objectType: "story",
+    objectId: "42",
+  } as const;
+  const waiver = {
+    ...waiverKey,
+    reason: "客户急用",
+    approvedBy: "bob",
+    at: START,
+  } as const;
+  const snapshot = {
+    snapId: "snap-1",
+    month: "2026-11",
+    productId: 29,
+    takenAt: START,
+    takenBy: "alice",
+    source: "local",
+  } as const;
+  const snapshotItem = {
+    storyId: 42,
+    planId: null,
+    executionId: 9,
+    progressAtSnap: "研发中",
+  } as const;
+  const notification = {
+    dedupeKey: "digest:2026-11-25",
+    channel: "wecom",
+    target: "team",
+    sentAt: START,
+    state: "sent",
+  } as const;
+
+  it("阶段要求按需求和阶段更新，保留布尔值和可空豁免原因", () => {
+    const { stageRequirements } = open().store;
+    expect(stageRequirements.get(42, "delivery")).toBeUndefined();
+    stageRequirements.upsert(stageRequirement);
+    expect(stageRequirements.get(42, "delivery")).toEqual(stageRequirement);
+    const updated = {
+      ...stageRequirement,
+      required: true,
+      waiverReason: null,
+      decidedAt: START + 1,
+    };
+    stageRequirements.upsert(updated);
+    stageRequirements.upsert({ ...stageRequirement, stage: "test" });
+    stageRequirements.upsert({ ...stageRequirement, storyId: 43 });
+    expect(stageRequirements.listByStory(42)).toEqual([
+      updated,
+      { ...stageRequirement, stage: "test" },
+    ]);
+    expect(stageRequirements.delete(42, "delivery")).toBe(true);
+    expect(stageRequirements.delete(42, "delivery")).toBe(false);
+    expect(stageRequirements.get(43, "delivery")).toEqual({
+      ...stageRequirement,
+      storyId: 43,
+    });
+  });
+
+  it("规则豁免默认对象为 story，复合键区分规则和对象类型", () => {
+    const { waivers } = open().store;
+    expect(waivers.get(waiverKey)).toBeUndefined();
+    waivers.upsert({
+      ruleId: "R13",
+      objectId: "42",
+      reason: waiver.reason,
+      approvedBy: "bob",
+      at: START,
+    });
+    expect(waivers.get(waiverKey)).toEqual(waiver);
+    const updated = { ...waiver, reason: "补测已排期", at: START + 1 };
+    const secondRule = { ...waiver, ruleId: "R14" };
+    const release = { ...waiver, objectType: "release" };
+    waivers.upsert(updated);
+    waivers.upsert(secondRule);
+    waivers.upsert(release);
+    expect(waivers.listByObject("story", "42")).toEqual([updated, secondRule]);
+    expect(waivers.listAll()).toHaveLength(3);
+    expect(waivers.get(release)).toEqual(release);
+    expect(waivers.delete(waiverKey)).toBe(true);
+    expect(waivers.delete(waiverKey)).toBe(false);
+    expect(waivers.listByObject("story", "42")).toEqual([secondRule]);
+  });
+
+  it("快照回读明细、按月份与产品列出，并级联删除明细", () => {
+    const { store } = open();
+    const { snapshots } = store;
+    expect(snapshots.getSnapshot("missing")).toBeUndefined();
+    const older = {
+      ...snapshot,
+      snapId: "older",
+      takenAt: START - 1,
+      source: "imported",
+    } as const;
+    const otherMonth = { ...snapshot, snapId: "other-month", month: "2026-10" };
+    const otherProduct = {
+      ...snapshot,
+      snapId: "other-product",
+      productId: 30,
+    };
+    const earlierStory = {
+      ...snapshotItem,
+      storyId: 41,
+      planId: 3,
+      executionId: null,
+    };
+    snapshots.createSnapshotWithItems(snapshot, [snapshotItem, earlierStory]);
+    snapshots.createSnapshotWithItems(older, [snapshotItem]);
+    snapshots.createSnapshotWithItems(otherMonth, []);
+    snapshots.createSnapshotWithItems(otherProduct, []);
+    expect(snapshots.getSnapshot(snapshot.snapId)).toEqual({
+      ...snapshot,
+      items: [
+        { ...earlierStory, snapId: snapshot.snapId },
+        { ...snapshotItem, snapId: snapshot.snapId },
+      ],
+    });
+    expect(snapshots.getSnapshot(otherMonth.snapId)).toEqual({
+      ...otherMonth,
+      items: [],
+    });
+    expect(snapshots.listSnapshotsByMonthAndProduct("2026-11", 29)).toEqual([
+      snapshot,
+      older,
+    ]);
+    expect(snapshots.deleteSnapshot(snapshot.snapId)).toBe(true);
+    expect(snapshots.deleteSnapshot(snapshot.snapId)).toBe(false);
+    expect(snapshots.getSnapshot(snapshot.snapId)).toBeUndefined();
+
+    readDatabase(store.location.dbPath, (database) => {
+      expect(
+        database.prepare("SELECT snap_id FROM snapshot_items").all(),
+      ).toEqual([{ snap_id: older.snapId }]);
+    });
+  });
+
+  it("快照任一明细写入失败时回滚整笔，可用同一 ID 重试", () => {
+    const { snapshots } = open().store;
+    expect(
+      captureError(() =>
+        snapshots.createSnapshotWithItems(snapshot, [
+          snapshotItem,
+          snapshotItem,
+        ]),
+      ).code,
+    ).toBe("INVALID_INPUT");
+    expect(snapshots.getSnapshot(snapshot.snapId)).toBeUndefined();
+    snapshots.createSnapshotWithItems(snapshot, [snapshotItem]);
+    expect(
+      captureError(() => snapshots.createSnapshotWithItems(snapshot, [])).code,
+    ).toBe("INVALID_INPUT");
+    expect(snapshots.getSnapshot(snapshot.snapId)?.items).toEqual([
+      { ...snapshotItem, snapId: snapshot.snapId },
+    ]);
+  });
+
+  it("SV-12 同库两个连接按 dedupe_key 防重，通知时间范围左闭右开", () => {
+    const first = open().store;
+    const second = open().store;
+    expect(second.notifications.get(notification.dedupeKey)).toBeUndefined();
+    expect(first.notifications.recordIfAbsent(notification)).toBe(true);
+    expect(
+      second.notifications.recordIfAbsent({
+        ...notification,
+        sentAt: START + 1,
+        state: "retry",
+      }),
+    ).toBe(false);
+    expect(second.notifications.get(notification.dedupeKey)).toEqual(
+      notification,
+    );
+    const next = { ...notification, dedupeKey: "event:42", sentAt: START + 1 };
+    first.notifications.recordIfAbsent(next);
+    first.notifications.recordIfAbsent({
+      ...next,
+      dedupeKey: "before",
+      sentAt: START - 1,
+    });
+    expect(second.notifications.listBySentDateRange(START, START + 1)).toEqual([
+      notification,
+    ]);
+    expect(second.notifications.listBySentDateRange(START, START + 2)).toEqual([
+      notification,
+      next,
+    ]);
+    expect(second.notifications.listBySentDateRange(START, START)).toEqual([]);
+  });
+
+  it("同一需求多次挪月按时间顺序保留历史，同一时刻按追加顺序", () => {
+    const { reschedules } = open().store;
+    const first = {
+      storyId: 42,
+      fromMonth: null,
+      toMonth: "2026-10",
+      reason: "首次排期",
+      by: "alice",
+      at: START,
+    };
+    const second = {
+      ...first,
+      fromMonth: "2026-10",
+      toMonth: "2026-11",
+      reason: "需求依赖",
+      at: START + 1,
+    };
+    const third = {
+      ...second,
+      fromMonth: "2026-11",
+      toMonth: "2026-12",
+      reason: "容量调整",
+    };
+    const other = { ...first, storyId: 43 };
+    reschedules.append(second);
+    reschedules.append(first);
+    reschedules.append(third);
+    reschedules.append(other);
+    expect(reschedules.listByStory(42)).toEqual([
+      { ...first, id: 2 },
+      { ...second, id: 1 },
+      { ...third, id: 3 },
+    ]);
+    expect(reschedules.listByStory(44)).toEqual([]);
+    expect(reschedules.listByMonthRange("2026-11", "2026-12")).toEqual([
+      { ...second, id: 1 },
+      { ...third, id: 3 },
+    ]);
+    expect(reschedules.listByMonthRange("2026-10", "2026-10")).toEqual([
+      { ...first, id: 2 },
+      { ...other, id: 4 },
+    ]);
+  });
+
+  it("S02 P2 数据按实例与账号的默认库路径隔离", () => {
+    const first = open().store;
+    const otherAccount = open({ account: "bob" }).store;
+    const otherInstance = open({
+      baseUrl: "https://other.example.test/zentao",
+    }).store;
+    expect(
+      new Set(
+        [first, otherAccount, otherInstance].map(
+          ({ location }) => location.dbPath,
+        ),
+      ).size,
+    ).toBe(3);
+
+    first.stageRequirements.upsert(stageRequirement);
+    first.waivers.upsert(waiver);
+    first.snapshots.createSnapshotWithItems(snapshot, [snapshotItem]);
+    first.notifications.recordIfAbsent(notification);
+    first.reschedules.append({
+      storyId: 42,
+      fromMonth: "2026-10",
+      toMonth: "2026-11",
+      reason: "需求依赖",
+      by: "alice",
+      at: START,
+    });
+    first.close();
+    const reopened = open().store;
+    expect(reopened.stageRequirements.get(42, "delivery")).toEqual(
+      stageRequirement,
+    );
+    expect(reopened.waivers.get(waiverKey)).toEqual(waiver);
+    expect(reopened.snapshots.getSnapshot(snapshot.snapId)?.items).toHaveLength(
+      1,
+    );
+    expect(reopened.notifications.get(notification.dedupeKey)).toEqual(
+      notification,
+    );
+    expect(reopened.reschedules.listByStory(42)).toHaveLength(1);
+
+    for (const isolated of [otherAccount, otherInstance]) {
+      expect(isolated.stageRequirements.listByStory(42)).toEqual([]);
+      expect(isolated.waivers.listAll()).toEqual([]);
+      expect(isolated.snapshots.getSnapshot(snapshot.snapId)).toBeUndefined();
+      expect(
+        isolated.notifications.get(notification.dedupeKey),
+      ).toBeUndefined();
+      expect(isolated.reschedules.listByStory(42)).toEqual([]);
+      expect(isolated.notifications.recordIfAbsent(notification)).toBe(true);
+    }
   });
 });
