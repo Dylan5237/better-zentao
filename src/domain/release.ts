@@ -9,7 +9,7 @@ import type { Story } from "../core/dto/story.ts";
 import type { Task } from "../core/dto/task.ts";
 import { completionRate, type FeatureProgress } from "./progress.ts";
 import type { StageSummary } from "./stage.ts";
-import { selectLeafTasks, type LeafCountTask } from "./task.ts";
+import { isTaskFinished, selectLeafTasks, type LeafCountTask } from "./task.ts";
 
 type ReleaseBug = Pick<Bug, "id" | "status" | "severity" | "deleted">;
 
@@ -93,6 +93,7 @@ export function summarizeRelease(input: ReleaseInput) {
   const progressGroups = new Map<FeatureProgress, number[]>();
   const testIncompleteStoryIds: number[] = [];
   const testEvidenceMissingStoryIds: number[] = [];
+  let activeStoryCount = 0;
   const blockedStoryIds = new Set<number>();
   const bugs = new Map<number, ReleaseBug>();
   const lateLeafTasks: { storyId: number; taskId: number; deadline: string }[] =
@@ -106,22 +107,27 @@ export function summarizeRelease(input: ReleaseInput) {
     const group = progressGroups.get(story.progress);
     if (group) group.push(story.id);
     else progressGroups.set(story.progress, [story.id]);
-    if (
-      story.tasksComplete === false ||
-      story.stages.test?.status !== "completed"
-    ) {
-      testIncompleteStoryIds.push(story.id);
-      blockedStoryIds.add(story.id);
+    const cancelled = story.progress === "已取消";
+    if (!cancelled) {
+      activeStoryCount++;
+      if (
+        story.tasksComplete === false ||
+        story.stages.test?.status !== "completed"
+      ) {
+        testIncompleteStoryIds.push(story.id);
+        blockedStoryIds.add(story.id);
+      }
+      if (story.tasksComplete === false)
+        testEvidenceMissingStoryIds.push(story.id);
     }
-    if (story.tasksComplete === false)
-      testEvidenceMissingStoryIds.push(story.id);
     for (const bug of story.bugs) {
       if (bug.deleted || bug.status === "closed") continue;
       bugs.set(bug.id, bug);
-      if (isSerious(bug)) blockedStoryIds.add(story.id);
+      if (!cancelled && isSerious(bug)) blockedStoryIds.add(story.id);
     }
     if (releaseDate) {
       for (const task of selectLeafTasks(story.tasks)) {
+        if (isTaskFinished(task.status)) continue;
         const deadline = civilDate.safeParse(task.deadline).data;
         if (deadline && deadline > releaseDate)
           lateLeafTasks.push({ storyId: story.id, taskId: task.id, deadline });
@@ -159,8 +165,8 @@ export function summarizeRelease(input: ReleaseInput) {
       storyIds: ids,
     })),
     testCompletionRate: completionRate(
-      storyIds.size - testIncompleteStoryIds.length,
-      storyIds.size,
+      activeStoryCount - testIncompleteStoryIds.length,
+      activeStoryCount,
     ),
     testIncompleteStoryIds,
     testEvidenceMissingStoryIds,

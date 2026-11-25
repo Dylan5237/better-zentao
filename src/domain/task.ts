@@ -16,7 +16,8 @@ interface TimeContext {
 type TaskTimeStatus =
   "completed" | "unscheduled" | "overdue" | "due_today" | "due_soon" | "normal";
 
-function isFinished(status: Task["status"]): boolean {
+// docs/04 §4.2、§4.8 终态任务不属于当前到期风险。
+export function isTaskFinished(status: Task["status"]): boolean {
   return status === "done" || status === "closed" || status === "cancel";
 }
 
@@ -53,7 +54,7 @@ export function taskTimeStatus(
 ): { readonly status: TaskTimeStatus; readonly historicallyLate: boolean } {
   const { today, calendar, timezone, dueSoonWorkdays = 3 } = context;
   const deadline = civilDate.safeParse(task.deadline).data;
-  if (isFinished(task.status)) {
+  if (isTaskFinished(task.status)) {
     const historicallyLate =
       deadline !== undefined &&
       task.finishedDate != null &&
@@ -115,7 +116,7 @@ function taskParticipants(
     name: directory?.get(account),
     active,
   });
-  const finished = isFinished(task.status);
+  const finished = isTaskFinished(task.status);
   if (task.mode !== "multi" || !task.team?.length) {
     if (!task.assignedTo) return [];
     return [
@@ -131,7 +132,7 @@ function taskParticipants(
   return [...members].map(([account, status]) =>
     participant(
       account,
-      finished ? false : status == null ? null : !isFinished(status),
+      finished ? false : status == null ? null : !isTaskFinished(status),
     ),
   );
 }
@@ -148,7 +149,7 @@ function childrenFinished(
     seen.add(task.id);
     const descendants = children.get(task.id);
     if (descendants) queue.push(...descendants);
-    else if (!isFinished(task.status)) return false;
+    else if (!isTaskFinished(task.status)) return false;
   }
   return true;
 }
@@ -185,7 +186,7 @@ export function summarizeLeafWork(
     const participants = taskParticipants(task, context.directory);
     if (
       task.mode === "multi" &&
-      !isFinished(task.status) &&
+      !isTaskFinished(task.status) &&
       (!task.team?.length || participants.some(({ active }) => active === null))
     )
       gaps.push({ kind: "team", taskId: task.id });

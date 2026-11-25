@@ -91,4 +91,24 @@ describe("docs/03 N07 默认日期（AC-43/46）", () => {
       ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
     }
   });
+
+  it.each([
+    [
+      "feature",
+      "delivery",
+      { estStarted: "2026-02-30", deadline: "2026-12-10" },
+    ],
+    ["feature", "delivery", { estStarted: "2026-12-08", deadline: "" }],
+    ["design", "handoff", { estStarted: "2026/12/08", deadline: "2026-12-10" }],
+    ["design", "handoff", { estStarted: "2026-12-08", deadline: "2026-13-01" }],
+  ] as const)(
+    "拒绝 %s 末端阶段 %s 的非法用户日期 %j",
+    (category, stage, dates) => {
+      expect(() =>
+        planStageDates(category, stageDefaults, "2026-11-26", calendar, {
+          [stage]: dates,
+        }),
+      ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
+    },
+  );
 });

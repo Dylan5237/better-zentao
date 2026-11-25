@@ -171,14 +171,67 @@ describe("docs/04 §4.6 本月研发队列（AC-54）", () => {
     expect(mainPoolIds).toHaveLength(10);
   });
 
-  it("只在最后七个工作日的窗口标出有叶子且均未开始的需求", () => {
+  it("只在最后七个工作日的窗口标出未拆解或阶段均未开始的需求", () => {
     expect(ids(classifyMonthlyDevQueue(monthly).monthEndWarnings)).toEqual([
-      2, 10,
+      1, 2, 10,
     ]);
     for (const today of ["2026-11-18", "2026-12-01"])
       expect(
         classifyMonthlyDevQueue({ ...monthly, today }).monthEndWarnings,
       ).toEqual([]);
+  });
+
+  it("月底预警跳过取消的叶子，在研需求须有至少一个有效叶子", () => {
+    const result = classifyMonthlyDevQueue({
+      ...monthly,
+      planStoryIds: [1, 2, 3, 4],
+      iterationStoryIds: [1, 2, 3, 4],
+      previousSnapshotStoryIds: [],
+      stories: [
+        story(1, "待接收", { tasks: [task(11, "cancel")] }),
+        story(2, "研发中", {
+          tasks: [
+            task(21, "wait"),
+            task(22, "cancel"),
+            { ...task(23, "closed"), closedReason: "cancel" },
+          ],
+        }),
+        story(3, "研发中", { tasks: [task(31, "cancel")] }),
+        story(4, "待接收", { tasks: [task(41, "doing")] }),
+      ],
+    });
+    expect(ids(result.monthEndWarnings)).toEqual([1, 2]);
+  });
+
+  it("保留结构缺口标记与主桶互斥，已完成和已取消需求仅保留在主池", () => {
+    const result = classifyMonthlyDevQueue({
+      ...monthly,
+      planStoryIds: [1, 3, 4],
+      iterationStoryIds: [2, 5, 6, 7],
+      previousSnapshotStoryIds: [],
+      stories: [
+        story(1, "待接收"),
+        story(2, "研发中", { planKind: "legacyRelease" }),
+        story(3, "已完成"),
+        story(4, "已取消"),
+        story(5, "已完成"),
+        story(6, "已取消"),
+        story(7, "研发中", { planKind: "l3" }),
+      ],
+    });
+    expect(result).toMatchObject({
+      buckets: {
+        toReceive: [{ id: 1, planNoIteration: true, iterationNoPlan: false }],
+        inDev: [
+          { id: 2, planNoIteration: false, iterationNoPlan: true },
+          { id: 7, planNoIteration: false, iterationNoPlan: false },
+        ],
+        planNoIteration: [],
+        iterationNoPlan: [],
+      },
+      unbucketedStoryIds: [3, 4, 5, 6],
+      mainPoolIds: [1, 3, 4, 2, 5, 6, 7],
+    });
   });
 
   it("缺快照时使用已还原的遗留 ID，有空快照时保留真实空集合", () => {
@@ -251,6 +304,26 @@ describe("docs/03 N13 承诺快照（AC-65）", () => {
     expect(compareCommitmentSnapshot([], current)).toMatchObject({
       snapshotAvailable: true,
       inserted: [1, 3, 4, 8, 9],
+    });
+  });
+
+  it("去除挪月原因首尾空白，空原因不作为挪月证据", () => {
+    expect(
+      compareCommitmentSnapshot(
+        [1, 2, 5],
+        current,
+        new Map([
+          [1, " \t "],
+          [2, " 等接口 "],
+          [5, ""],
+        ]),
+      ),
+    ).toMatchObject({
+      fulfilled: [1],
+      carriedOver: [
+        { id: 2, reason: "等接口" },
+        { id: 5, reason: null },
+      ],
     });
   });
 });

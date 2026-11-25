@@ -55,10 +55,14 @@ describe("docs/04 §4.8 版本就绪（AC-62/63）", () => {
         task(103, "2026-12-01"),
         task(104, null),
         { ...task(105, "2026-12-02"), isParent: true },
+        { ...task(106, "2026-12-02"), status: "done" },
+        { ...task(107, "2026-12-02"), status: "closed" },
+        { ...task(108, "2026-12-02"), status: "cancel" },
       ],
       bugs: [
         { id: 21, severity: 2, status: "active" },
         { id: 22, severity: 1, status: "resolved" },
+        { id: 20, severity: 1, status: "active" },
         { id: 23, severity: 1, status: "closed" },
         { id: 24, severity: 1, status: "active", deleted: true },
         { id: 25, severity: 3, status: "active" },
@@ -91,10 +95,11 @@ describe("docs/04 §4.8 版本就绪（AC-62/63）", () => {
       testIncompleteStoryIds: [1],
       lateLeafTasks: [{ storyId: 1, taskId: 102, deadline: "2026-12-02" }],
       openSeriousBugs: [
+        { id: 20, severity: 1, status: "active" },
         { id: 22, severity: 1, status: "resolved" },
         { id: 21, severity: 2, status: "active" },
       ],
-      openBugs: [{ id: 22 }, { id: 21 }, { id: 25 }],
+      openBugs: [{ id: 20 }, { id: 22 }, { id: 21 }, { id: 25 }],
       gate: "blocked",
       flags: [],
     });
@@ -199,6 +204,42 @@ describe("docs/04 §4.8 版本就绪（AC-62/63）", () => {
     ).toMatchObject({
       gate: "blocked",
       testIncompleteStoryIds: [1],
+      flags: [],
+    });
+  });
+
+  it("已取消需求保留在进展分组，测试缺口与关联严重 Bug 不阻塞发布", () => {
+    const completed = story(1, {
+      progress: "待验收",
+      stages: { test: { status: "completed" } },
+    });
+    const cancelled = story(2, {
+      progress: "已取消",
+      bugs: [{ id: 21, severity: 1, status: "active" }],
+    });
+    const cancelledWithMissingTasks = story(3, {
+      progress: "已取消",
+      stages: {},
+      tasksComplete: false,
+    });
+    expect(
+      summarizeRelease({
+        ...context,
+        ...sources,
+        today: "2026-12-02",
+        stories: [completed, cancelled, cancelledWithMissingTasks],
+      }),
+    ).toMatchObject({
+      storyIds: [1, 2, 3],
+      progressGroups: [
+        { progress: "待验收", storyIds: [1] },
+        { progress: "已取消", storyIds: [2, 3] },
+      ],
+      testCompletionRate: { numerator: 1, denominator: 1, rate: 1 },
+      testIncompleteStoryIds: [],
+      testEvidenceMissingStoryIds: [],
+      openSeriousBugs: cancelled.bugs,
+      gate: "ready",
       flags: [],
     });
   });

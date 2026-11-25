@@ -1,5 +1,6 @@
 import {
   addWorkdays,
+  civilDate,
   nextWorkday,
   type WorkCalendar,
 } from "../core/calendar.ts";
@@ -54,6 +55,16 @@ export function planStageDates(
   calendar: WorkCalendar,
   userDates: StageDatesInput = {},
 ) {
+  for (const [stage, dates] of Object.entries(userDates)) {
+    for (const field of ["estStarted", "deadline"] as const) {
+      const value = dates?.[field];
+      if (value !== undefined && !civilDate.safeParse(value).success)
+        throw new BztError(
+          "INVALID_INPUT",
+          `阶段 ${stage} 的 ${field} 日期不合法。`,
+        );
+    }
+  }
   const rules: Readonly<Partial<Record<Stage, StageRule>>> =
     stageDefaults[category];
   const planned = new Map<Stage, StageDates>();

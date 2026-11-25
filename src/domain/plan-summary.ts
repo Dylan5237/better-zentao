@@ -134,7 +134,11 @@ interface MonthlyDevQueueInput {
   readonly historyCarryOverStoryIds?: readonly number[];
 }
 
-type QueueStory = PlanStory & { readonly carriedOver: boolean };
+type QueueStory = PlanStory & {
+  readonly carriedOver: boolean;
+  readonly planNoIteration: boolean;
+  readonly iterationNoPlan: boolean;
+};
 const inDev = new Set<FeatureProgress>(["研发中", "待测试", "测试中"]);
 
 // docs/04 §4.6、docs/09 AC-54 先按进展放入主桶，遗留标记独立于主池归属。
@@ -179,31 +183,37 @@ export function classifyMonthlyDevQueue(input: MonthlyDevQueueInput) {
     }
     const current = currentIds.has(id);
     const { progress } = story;
-    const carriedOver =
-      carryOverIds.has(id) && progress !== "已完成" && progress !== "已取消";
-    const item = { ...story, carriedOver };
+    const finished = progress === "已完成" || progress === "已取消";
+    const inPlan = planIds.has(id);
+    const inIteration = iterationIds.has(id);
+    const item = {
+      ...story,
+      carriedOver: !finished && carryOverIds.has(id),
+      planNoIteration: !finished && inPlan && !inIteration,
+      iterationNoPlan:
+        !finished && inIteration && !inPlan && story.planKind !== "l3",
+    };
     if (current && progress === "未就绪") notReady.push(item);
     else if (current && progress === "待接收") buckets.toReceive.push(item);
     else if (current && inDev.has(progress)) buckets.inDev.push(item);
-    else if (carriedOver) buckets.carriedOver.push(item);
-    else if (planIds.has(id) && !iterationIds.has(id))
-      buckets.planNoIteration.push(item);
-    else if (
-      iterationIds.has(id) &&
-      !planIds.has(id) &&
-      story.planKind !== "l3"
-    )
-      buckets.iterationNoPlan.push(item);
+    else if (item.carriedOver) buckets.carriedOver.push(item);
+    else if (item.planNoIteration) buckets.planNoIteration.push(item);
+    else if (item.iterationNoPlan) buckets.iterationNoPlan.push(item);
     else if (current) unbucketedStoryIds.push(id);
   }
   const monthEndWarnings =
     today.slice(0, 7) === month && isInLastWorkdaysOfMonth(today, calendar)
-      ? [...buckets.toReceive, ...buckets.inDev].filter(({ tasks }) => {
-          const leaves = selectLeafTasks(tasks);
-          return (
-            leaves.length > 0 && leaves.every(({ status }) => status === "wait")
-          );
-        })
+      ? [...buckets.toReceive, ...buckets.inDev].filter(
+          ({ tasks, progress }) => {
+            const leaves = selectLeafTasks(tasks).filter(
+              (task) => !isCancelledTask(task),
+            );
+            return (
+              (progress === "待接收" || leaves.length > 0) &&
+              leaves.every(({ status }) => status === "wait")
+            );
+          },
+        )
       : [];
   return {
     mainPoolIds,
@@ -239,7 +249,7 @@ export function compareCommitmentSnapshot(
   const unknownStoryIds: number[] = [];
   for (const id of snapshot) {
     const story = current.get(id);
-    const reason = rescheduleReasons.get(id) ?? null;
+    const reason = rescheduleReasons.get(id)?.trim() || null;
     if (reason) carriedOver.push({ id, reason });
     else if (!story) unknownStoryIds.push(id);
     else if (story.progress === "已完成") fulfilled.push(id);
