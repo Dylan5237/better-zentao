@@ -42,7 +42,9 @@ type ObjectType = Hit["objectType"];
 type Gaps = ScanWorkflowRisksOutput["gaps"];
 type Waiver = NonNullable<RuleInput["waivers"]>[number];
 const severityOrder = ["info", "low", "medium", "high"] as const;
-const registered = new Set<string>(rules.map(({ id }) => id));
+// WP-32 注册纯规则。巡检的数据采集仍只支持 P1。
+const serviceRules = rules.filter(({ id }) => id <= "R05");
+const registered = new Set<string>(serviceRules.map(({ id }) => id));
 const waiverRows = z.array(
   z.strictObject({
     ruleId: z.enum(["R01", "R02", "R03", "R04", "R05"]),
@@ -146,7 +148,7 @@ export class RiskService {
     const now = clock();
     const today = formatLocalDate(now, config.timezone);
     const month = scanMonth(scope.month, today);
-    const selected = rules.filter(
+    const selected = serviceRules.filter(
       ({ id }) =>
         config.rules[id].enabled &&
         (requested === undefined || requested.includes(id)),
@@ -506,9 +508,10 @@ export class RiskService {
           level,
           basis: "规则命中使用了推测的阶段或流程证据。",
         });
-      const limit = hit.threshold
-        ? `（${hit.threshold.source === "default" ? "默认" : "已确认配置"}阈值：${hit.threshold.workdays} 个工作日）`
-        : "";
+      const limit =
+        hit.threshold && "workdays" in hit.threshold
+          ? `（${hit.threshold.source === "default" ? "默认" : "已确认配置"}阈值：${hit.threshold.workdays} 个工作日）`
+          : "";
       hits.push({
         rule: hit.ruleId,
         severity: hit.severity,
