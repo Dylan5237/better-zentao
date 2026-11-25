@@ -34,11 +34,7 @@ import { walkProductPlans, type ProductPlan } from "../core/dto/plan.ts";
 import type { Story, StoryDetail } from "../core/dto/story.ts";
 import type { Task } from "../core/dto/task.ts";
 import { BztError } from "../core/errors.ts";
-import type {
-  LocalStore,
-  SnapshotWithItems,
-  WaiverRecord,
-} from "../core/store/index.ts";
+import type { LocalStore, SnapshotWithItems } from "../core/store/index.ts";
 import {
   isDevExecutionInMonth,
   isInLastWorkdaysOfMonth,
@@ -57,7 +53,7 @@ import {
 } from "../domain/progress.ts";
 import { summarizeRelease } from "../domain/release.ts";
 import { resolveStoryRoles } from "../domain/roles.ts";
-import { detectStage, summarizeStages, type Stage } from "../domain/stage.ts";
+import { detectStage, summarizeStages } from "../domain/stage.ts";
 import {
   isCancelledTask,
   isTaskFinished,
@@ -66,6 +62,13 @@ import {
 } from "../domain/task.ts";
 import { evaluateRules, type RuleInput } from "../rules/index.ts";
 import { DirectoryService } from "./directory.ts";
+import {
+  cachedWaiverEntries,
+  foldRuleWaivers,
+  foldStageRequirements,
+  readJsonNote,
+  resolveReleaseWaiver,
+} from "./structured-notes.ts";
 
 interface ManagementOptions {
   client: ZentaoReadClient;
@@ -85,7 +88,7 @@ interface ManagementOptions {
   >;
   calendar?: WorkCalendar;
   directory?: Pick<DirectoryService, "resolveTeam"> &
-    Partial<Pick<DirectoryService, "lookupAccounts">>;
+    Partial<Pick<DirectoryService, "listAccountNames">>;
 }
 
 type PlanData = GetPlanProgressOutput["data"];
@@ -114,32 +117,6 @@ const rescheduleNote = z.strictObject({
   toMonth: monthText,
   reason: z.string().trim().min(1),
 });
-const waiverNote = z.strictObject({
-  rule: z.literal("R13"),
-  version: z.string().trim().min(1).optional(),
-  reason: z.string().trim().min(1),
-});
-const metaNote = z.object({
-  stageRequirements: z
-    .record(z.string(), z.object({ required: z.boolean() }))
-    .optional(),
-});
-
-function structuredNote<T>(
-  kind: string,
-  comment: string,
-  schema: z.ZodType<T>,
-) {
-  const prefix = `[bzt:${kind} v1 `;
-  if (!comment.startsWith(prefix) || !comment.endsWith("]")) return undefined;
-  try {
-    const value: unknown = JSON.parse(comment.slice(prefix.length, -1));
-    return schema.safeParse(value).data;
-  } catch {
-    return undefined;
-  }
-}
-
 function historyReasons(
   details: readonly StoryDetail[],
   from: string,
@@ -152,7 +129,7 @@ function historyReasons(
     );
     for (const { actor, action, comment } of ordered) {
       if (!actor || action.toLowerCase() !== "commented") continue;
-      const note = structuredNote(
+      const note = readJsonNote(
         "reschedule",
         comment?.trim() ?? "",
         rescheduleNote,
@@ -253,7 +230,8 @@ class ManagementRead {
     number,
     Promise<{ items: Bug[]; truncated: boolean } | undefined>
   >();
-  private readonly people = new Map<string, string>();
+  private people = new Map<string, string>();
+  private peopleLoad?: Promise<void>;
   private readonly productsById = new Map<number, ProductScope>();
 
   constructor(readonly options: ManagementOptions) {
@@ -561,22 +539,21 @@ class ManagementRead {
 
   async loadPeople(evidence: readonly StoryEvidence[]) {
     const directory = this.options.directory;
-    if (!directory?.lookupAccounts) return;
-    const accounts = new Set(
-      evidence.flatMap(({ owner, roles }) =>
-        [owner, roles.maintainer, roles.receiver].filter(
-          (account): account is string => Boolean(account),
-        ),
-      ),
-    );
-    if (!accounts.size) return;
-    const result = await this.read("users", () =>
-      directory.lookupAccounts?.([...accounts]),
-    );
-    for (const { source, reason } of result?.gaps ?? [])
-      this.gap(source, reason);
-    for (const [account, realname] of result?.people ?? [])
-      this.people.set(account, realname);
+    if (
+      !directory?.listAccountNames ||
+      !evidence.some(
+        ({ owner, roles }) => owner || roles.maintainer || roles.receiver,
+      )
+    )
+      return;
+    this.peopleLoad ??= this.read("users", () =>
+      directory.listAccountNames?.(),
+    ).then((result) => {
+      if (!result) return;
+      this.people = result.people;
+      for (const { source, reason } of result.gaps) this.gap(source, reason);
+    });
+    await this.peopleLoad;
   }
 
   storyItem(evidence: StoryEvidence, plan?: ProductPlan): StoryItem {
@@ -709,26 +686,30 @@ async function storyEvidence(
   options: { detail?: boolean; bugs?: readonly Bug[] } = {},
 ) {
   const { config, store } = state.options;
-  const required: Partial<Record<Stage, boolean>> = {};
-  for (const stage of featureStages)
-    required[stage] = config.stageDefaults.feature[stage].required;
   const cached = await state.read(
-    `stageRequirements:${row.id}`,
+    "stageRequirements:" + row.id,
     () => store?.stageRequirements?.listByStory(row.id) ?? [],
+  );
+  const initialRequirements = foldStageRequirements(
+    config.stageDefaults.feature,
+    cached,
   );
   const knownStages = summarizeStages(stageInputs(known, config)).stages;
   const needsWaiver = featureStages.some(
-    (stage) => required[stage] && knownStages[stage]?.status === "cancelled",
+    (stage) =>
+      initialRequirements[stage] && knownStages[stage]?.status === "cancelled",
   );
   const shouldRead =
     options.detail ||
+    row.status === "active" ||
     !known.length ||
     needsWaiver ||
     Boolean(cached?.length) ||
     (row.status === "closed" &&
       featureStages.some(
         (stage) =>
-          required[stage] && knownStages[stage]?.status !== "completed",
+          initialRequirements[stage] &&
+          knownStages[stage]?.status !== "completed",
       ));
   const detail = await (shouldRead
     ? state.detail(row.id)
@@ -775,41 +756,22 @@ async function storyEvidence(
   );
   if (incompleteTree || inspect.some((id) => !taskMap.has(id)))
     state.gap(`story:${row.id}:tasks`, "需求关联任务或父子关系读取不完整。");
-  for (const waiver of cached ?? []) {
-    const stage = featureStages.find((name) => name === waiver.stage);
-    if (stage) required[stage] = waiver.required;
-  }
   const actions = [...(detail?.actions ?? [])].sort(
     (a, b) => (a.date ?? 0) - (b.date ?? 0) || a.id - b.id,
   );
-  for (const action of actions) {
-    if (action.action.toLowerCase() !== "commented" || !action.actor) continue;
-    const comment = action.comment?.trim() ?? "";
-    const settings = structuredNote(
-      "meta",
-      comment,
-      metaNote,
-    )?.stageRequirements;
-    for (const stage of featureStages) {
-      const requirement = settings?.[stage];
-      if (requirement) required[stage] = requirement.required;
-    }
-    const meta =
-      /^\[bzt:meta v1\]\s+stage\.([a-z]+)=(true|false)\s+\|\s+reason=\S[^\r\n]*$/u.exec(
-        comment,
-      );
-    const stage = featureStages.find((name) => name === meta?.[1]);
-    if (stage) required[stage] = meta?.[2] === "true";
-  }
+  const required = foldStageRequirements(
+    config.stageDefaults.feature,
+    cached,
+    actions,
+  );
   const stageTasks = stageInputs(rows, config);
   const stages = summarizeStages(stageTasks);
   const summary = {
     ...stages,
     tasksComplete: tasksComplete && !incompleteTree,
   };
-  const module =
-    config.modules[`${row.product}/${row.module}`] ??
-    config.moduleDefaults[row.product];
+  const module = config.modules[candidate.product + ":" + candidate.module];
+  const fallback = config.moduleDefaults[candidate.product];
   const stored = store?.storyRoles
     ? await state.read(`storyRoles:${row.id}`, () => {
         try {
@@ -823,7 +785,10 @@ async function storyEvidence(
     : undefined;
   const roles = resolveStoryRoles({
     story: candidate,
-    module,
+    module: {
+      maintainer: module?.designLead ?? fallback?.designLead,
+      devLead: module?.devLead ?? fallback?.devLead,
+    },
     ...(stored ? { stored } : {}),
   });
   // docs/04 §4.4。测试任务完成后，严重 Bug 仍可阻止需求退出测试阶段。
@@ -991,70 +956,6 @@ async function releaseWaivers(
     waivers ?? [],
     version,
   );
-}
-
-export function resolveReleaseWaiver(
-  config: Pick<TeamConfig, "versionTag" | "roles">,
-  row: Pick<StoryRow, "id" | "keywords" | "lastEditedDate">,
-  actions: NonNullable<StoryDetail["actions"]>,
-  waivers: readonly WaiverRecord[],
-  version: string,
-) {
-  const prefix = config.versionTag.keywordPrefix;
-  const versionTags =
-    row.keywords
-      ?.split(/[\s,，、;；]+/u)
-      .filter((tag) => tag.startsWith(prefix)) ?? [];
-  const belongsToCurrentVersion = (at: number | null) =>
-    versionTags.length === 1 &&
-    versionTags[0] === `${prefix}${version}` &&
-    at != null &&
-    row.lastEditedDate != null &&
-    at >= row.lastEditedDate;
-  const shared = actions
-    .flatMap(({ actor, action, comment, date }) => {
-      if (
-        !actor ||
-        action.toLowerCase() !== "commented" ||
-        !config.roles.PM?.includes(actor)
-      )
-        return [];
-      const text = comment?.trim() ?? "";
-      const note = structuredNote("waiver", text, waiverNote);
-      if (
-        note &&
-        (note.version === version ||
-          (note.version === undefined && belongsToCurrentVersion(date)))
-      )
-        return [{ approvedBy: actor, reason: note.reason }];
-      const entry =
-        /^\[bzt:waiver v1\]\s+rule=R13\s+\|\s+version=([^\s|]+)\s+\|\s+approvedBy=([^\s|]+)\s+\|\s+reason=(\S[^\r\n]*)$/u.exec(
-          text,
-        );
-      return entry?.[1] === version && entry[2] === actor && entry[3]?.trim()
-        ? [{ approvedBy: actor, reason: entry[3] }]
-        : [];
-    })
-    .at(-1);
-  // 本地表没有版本列。当前唯一标签与编辑时间必须同时支持例外归属。
-  const local = waivers.find(
-    ({ ruleId, approvedBy, reason, at }) =>
-      ruleId === "R13" &&
-      config.roles.PM?.includes(approvedBy) &&
-      reason.trim() &&
-      belongsToCurrentVersion(at),
-  );
-  const waiver = shared ?? local;
-  return waiver
-    ? [
-        {
-          storyId: row.id,
-          version,
-          approvedBy: waiver.approvedBy,
-          reason: bounded(waiver.reason, 500),
-        },
-      ]
-    : [];
 }
 
 export class ManagementService {
@@ -1630,18 +1531,14 @@ export class ManagementService {
           [],
       );
       const ruleInput: RuleInput = {
-        waivers: (waivers ?? []).flatMap(({ ruleId, approvedBy, reason }) =>
-          ruleId === "R05" || ruleId === "R06"
-            ? [
-                {
-                  ruleId,
-                  by: approvedBy,
-                  reason,
-                  objectType: "story",
-                  objectId: row.id,
-                },
-              ]
-            : [],
+        waivers: foldRuleWaivers(
+          "story",
+          row.id,
+          cachedWaiverEntries(waivers ?? []),
+          {
+            actions: item.actions,
+            approvers: [...(config.roles.PM ?? []), item.roles.maintainer],
+          },
         ),
         story: item.detail,
         tasksComplete,

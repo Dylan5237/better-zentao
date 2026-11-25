@@ -419,15 +419,14 @@ export class DirectoryService {
     return { account, realname, roles };
   }
 
-  async lookupAccounts(accounts: readonly string[]) {
+  async listAccountNames() {
     const state: ReadState = { gaps: [] };
-    const requested = new Set(accounts);
     const rows = await readRows(state, "users", () =>
       listUsers(this.options.client),
     );
     const people = new Map(
       rows.items.flatMap(({ account, realname, deleted }) =>
-        account && !deleted && requested.has(account)
+        account && !deleted
           ? [[account, realname] satisfies [string, string]]
           : [],
       ),

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   scanWorkflowRisksInputSchema,
   scanWorkflowRisksOutputSchema,
@@ -507,6 +507,149 @@ it("WP-38 巡检连接 R06–R14 的数据源、豁免与必需阶段", async ()
     expect(
       fetch.mock.calls.some(([url]) => String(url).includes("/releases")),
     ).toBe(false);
+  } finally {
+    store.close();
+  }
+});
+
+it("WP-38 跨机从需求动作还原 JSON 豁免和阶段要求，按评论时间折叠", async () => {
+  const store = openLocalStore({
+    baseUrl,
+    account: "acct_fixture",
+    dbPath: ":memory:",
+    clock,
+  });
+  const testDone = { ...task, id: 13, name: "【测试】查询", type: "test" };
+  const detail = {
+    ...story,
+    plan: "",
+    actions: [
+      {
+        id: 3,
+        action: "commented",
+        actor: "acct_pm",
+        date: "2026-11-22 12:00:00",
+        comment:
+          '<p>[bzt:meta v1 {"stageRequirements":{"acceptance":{"required":false}}}]</p>',
+      },
+      {
+        id: 2,
+        action: "commented",
+        actor: "acct_pm",
+        date: "2026-11-21 12:00:00",
+        comment: "[bzt:meta v1] stage.acceptance=true | reason=旧口径",
+      },
+      {
+        id: 1,
+        action: "commented",
+        actor: "acct_lead",
+        date: "2026-11-20 12:00:00",
+        comment: '[bzt:waiver v1 {"rule":"R06","reason":"迁移例外"}]',
+      },
+      {
+        id: 4,
+        action: "commented",
+        actor: "acct_dev",
+        date: "2026-11-23 12:00:00",
+        comment: '[bzt:waiver v1 {"rule":"R06","reason":"无权覆盖"}]',
+      },
+    ],
+  };
+  try {
+    const { service } = setup(
+      {
+        "/api.php/v1/stories/31": detail,
+        "/api.php/v1/products/29/plans": { plans: [] },
+        "/api.php/v1/executions/7/tasks": { tasks: [task, testDone] },
+      },
+      {
+        store,
+        config: teamConfigSchema.parse({
+          ...config,
+          rules: { R06: { enabled: true }, R11: { enabled: true } },
+        }),
+      },
+    );
+    const scope = { product: "29" };
+    const scan = await service.scanWorkflowRisks({ scope, rules: ["R06"] });
+    expect(scan.data.summary).toEqual([]);
+    expect(scan.data.hits).toMatchObject([
+      {
+        rule: "R06",
+        waived: { by: "acct_lead", reason: "迁移例外", untrusted: true },
+      },
+    ]);
+    expect(
+      (await service.scanWorkflowRisks({ scope, rules: ["R11"] })).data.hits,
+    ).toEqual([]);
+    expect(store.waivers.listByObject("story", "31")).toEqual([]);
+    expect(store.stageRequirements.listByStory(31)).toEqual([]);
+  } finally {
+    store.close();
+  }
+});
+
+it.each(["unavailable", "truncated", "complete"])(
+  "WP-38 活跃需求的 R09/R14 只在 Bug 分页完整时判定可关闭（%s）",
+  async (bugs) => {
+    const tasks = [
+      task,
+      { ...task, id: 13, name: "【测试】查询", type: "test" },
+      { ...task, id: 14, name: "【验收】查询" },
+    ];
+    const { service } = setup(
+      {
+        "/api.php/v1/executions/7/tasks": { tasks },
+        "/api.php/v1/products/29/bugs":
+          bugs === "unavailable"
+            ? new Response(null, { status: 403 })
+            : { bugs: [], ...(bugs === "truncated" ? { total: 1 } : {}) },
+      },
+      {
+        config: teamConfigSchema.parse({
+          ...config,
+          rules: {
+            R09: { enabled: true },
+            R14: { enabled: true, olderThanDays: 0 },
+          },
+        }),
+      },
+    );
+    const result = await service.scanWorkflowRisks({
+      scope: { product: "29" },
+      rules: ["R09", "R14"],
+    });
+    if (bugs === "complete") {
+      expect(result.completeness).toBe("complete");
+      expect(new Set(result.data.hits.map(({ rule }) => rule))).toEqual(
+        new Set(["R09", "R14"]),
+      );
+    } else {
+      expect(result.completeness).toBe("partial");
+      expect(result.gaps).toContainEqual(
+        expect.objectContaining({ source: "bugs:29" }),
+      );
+      expect(result.data.hits).toEqual([]);
+    }
+  },
+);
+
+it("WP-38 巡检保留本地读取的编程异常", async () => {
+  const failure = new TypeError("fixture fault");
+  const store = openLocalStore({
+    baseUrl,
+    account: "acct_fixture",
+    dbPath: ":memory:",
+    clock,
+  });
+  try {
+    vi.spyOn(store.cache, "get").mockImplementation(() => {
+      throw failure;
+    });
+    const { service } = setup({}, { store });
+    await expect(
+      service.scanWorkflowRisks({ scope: {}, rules: ["R02"] }),
+    ).rejects.toBe(failure);
   } finally {
     store.close();
   }

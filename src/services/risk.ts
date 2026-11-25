@@ -40,7 +40,12 @@ import {
   type RuleContext,
   type RuleInput,
 } from "../rules/index.ts";
-import { resolveReleaseWaiver } from "./management.ts";
+import {
+  cachedWaiverEntries,
+  foldRuleWaivers,
+  foldStageRequirements,
+  resolveReleaseWaiver,
+} from "./structured-notes.ts";
 import { DirectoryService } from "./directory.ts";
 
 interface RiskOptions {
@@ -110,13 +115,8 @@ async function read<T>(gaps: Gaps, source: string, load: () => T | Promise<T>) {
   try {
     return await load();
   } catch (error) {
-    gaps.push({
-      source,
-      reason:
-        error instanceof BztError
-          ? "读取失败（" + error.code + "）。"
-          : "读取失败。",
-    });
+    if (!(error instanceof BztError)) throw error;
+    gaps.push({ source, reason: "读取失败（" + error.code + "）。" });
     return undefined;
   }
 }
@@ -595,14 +595,12 @@ export class RiskService {
           devLead: moduleConfig?.devLead ?? defaults?.devLead,
         },
       };
-      const { receiver } = resolveStoryRoles({ story, ...roles });
-      const waivers = await this.waivers(
-        "story",
-        story.id,
-        gaps,
-        story.actions,
-      );
-      const overrides = p2
+      const { receiver, maintainer } = resolveStoryRoles({ story, ...roles });
+      const waivers = await this.waivers("story", story.id, gaps, {
+        actions: story.actions,
+        approvers: [...(config.roles.PM ?? []), maintainer],
+      });
+      const overrides = stageRules
         ? await read(
             gaps,
             "stageRequirements:" + story.id,
@@ -611,13 +609,13 @@ export class RiskService {
               [],
           )
         : [];
-      const required = {
-        test: config.stageDefaults.feature.test.required,
-        interface: config.stageDefaults.feature.interface.required,
-        ...Object.fromEntries(
-          (overrides ?? []).map(({ stage, required }) => [stage, required]),
-        ),
-      };
+      const required = foldStageRequirements(
+        story.category === "design"
+          ? config.stageDefaults.design
+          : config.stageDefaults.feature,
+        overrides,
+        story.actions,
+      );
       const stageTasks = linked.map((task) => ({
         ...task,
         evidence: { prefixes: config.naming.taskPrefix },
@@ -1067,26 +1065,15 @@ export class RiskService {
     type: ObjectType,
     id: number,
     gaps: Gaps,
-    actions?: StoryDetail["actions"],
+    sourceComments?: Parameters<typeof foldRuleWaivers>[3],
   ): Promise<Waiver[]> {
     const { store } = this.options;
-    const byRule = new Map<Waiver["ruleId"], Waiver>();
     const local = await read(
       gaps,
       "waivers:" + type + ":" + id,
       () => store?.waivers?.listByObject(type, String(id)) ?? [],
     );
-    for (const { ruleId, approvedBy, reason } of local ?? []) {
-      const rule = registered.get(ruleId);
-      if (rule)
-        byRule.set(rule, {
-          ruleId: rule,
-          objectType: type,
-          objectId: id,
-          by: approvedBy,
-          reason,
-        });
-    }
+    const entries = cachedWaiverEntries(local ?? []);
     const source = `waivers:${type}:${id}`;
     const cached = store
       ? await read(gaps, source, () => store.cache.get(`risk:${source}`))
@@ -1094,30 +1081,11 @@ export class RiskService {
     if (cached !== undefined) {
       try {
         const rows = waiverRows.parse(JSON.parse(cached));
-        for (const row of rows)
-          byRule.set(row.ruleId, { ...row, objectType: type, objectId: id });
+        entries.push(...rows);
       } catch {
         gaps.push({ source, reason: "本地规则豁免记录格式无效。" });
       }
     }
-    // docs/04 §2、docs/07 §4.7：只接受登记人自己发布的结构化豁免。
-    const approvers = this.options.config.roles.PM ?? [];
-    const comments = [...(actions ?? [])].sort(
-      (a, b) => (a.date ?? 0) - (b.date ?? 0) || a.id - b.id,
-    );
-    for (const { action, actor, comment } of comments) {
-      if (action.toLowerCase() !== "commented" || !actor || !comment) continue;
-      const match =
-        /^\[bzt:waiver v1\]\s+rule=(R0[1-5])\s+\|\s+approvedBy=([^\s|]+)\s+\|\s+reason=(\S[^\r\n]*)$/u.exec(
-          comment.trim(),
-        );
-      if (!match || match[2] !== actor || !approvers.includes(actor)) continue;
-      const [row] = waiverRows.parse([
-        { ruleId: match[1], by: match[2], reason: match[3] },
-      ]);
-      if (row)
-        byRule.set(row.ruleId, { ...row, objectType: type, objectId: id });
-    }
-    return [...byRule.values()];
+    return foldRuleWaivers(type, id, entries, sourceComments);
   }
 }

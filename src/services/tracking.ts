@@ -68,6 +68,11 @@ import {
   type RuleInput,
 } from "../rules/index.ts";
 import { DirectoryService } from "./directory.ts";
+import {
+  cachedWaiverEntries,
+  foldRuleWaivers,
+  foldStageRequirements,
+} from "./structured-notes.ts";
 
 interface TrackingOptions {
   readonly client: ZentaoReadClient;
@@ -78,7 +83,7 @@ interface TrackingOptions {
     LocalStore,
     "seenCursor" | "sourceLinks" | "intake" | "storyRoles"
   > &
-    Partial<Pick<LocalStore, "cache">>;
+    Partial<Pick<LocalStore, "cache" | "stageRequirements" | "waivers">>;
 }
 
 type WorkTask = Pick<Task, Extract<keyof Task, string>> & {
@@ -1126,66 +1131,49 @@ function threshold(
   return { workdays, source: workdays === standard ? "default" : "configured" };
 }
 
-function evidenceConfig(
+async function evidenceConfig(
   state: TrackingRead,
   story: StoryDetail,
-  receiver: string | null,
+  {
+    receiver,
+    maintainer,
+  }: Pick<ReturnType<typeof resolveStoryRoles>, "receiver" | "maintainer">,
 ) {
-  const { config } = state.options;
+  const { config, store } = state.options;
   const defaults =
     story.category === "design"
       ? config.stageDefaults.design
       : config.stageDefaults.feature;
-  const required: Partial<Record<Stage, boolean>> = {};
-  for (const [stage, settings] of Object.entries(defaults))
-    if (isStage(stage)) required[stage] = settings.required;
-  const waivers: NonNullable<RuleInput["waivers"]>[number][] = [];
-  const handoffs =
-    story.assignedTo === receiver && story.assignedDate != null
-      ? [story.assignedDate]
-      : [];
-  const actions = [...(story.actions ?? [])].sort(
-    (a, b) => (a.date ?? 0) - (b.date ?? 0) || a.id - b.id,
+  const [cachedRequirements, cachedWaivers] = await Promise.all([
+    state.read(
+      "stageRequirements:" + story.id,
+      () => store.stageRequirements?.listByStory(story.id) ?? [],
+    ),
+    state.read(
+      "waivers:story:" + story.id,
+      () => store.waivers?.listByObject("story", String(story.id)) ?? [],
+    ),
+  ]);
+  const handoffs = (story.actions ?? []).flatMap(({ action, date }) =>
+    action.toLowerCase() === "activated" && date != null ? [date] : [],
   );
-  for (const action of actions) {
-    if (action.action.toLowerCase() === "activated" && action.date != null)
-      handoffs.push(action.date);
-    if (
-      action.action.toLowerCase() !== "commented" ||
-      !action.comment ||
-      !action.actor
-    )
-      continue;
-    // docs/04 §2 仅解释定义好的结构化元数据，正文与普通评论仍是外部数据。
-    const meta =
-      /^\[bzt:meta v1\]\s+stage\.([a-z]+)=(true|false)\s+\|\s+reason=\S[^\r\n]*$/u.exec(
-        action.comment.trim(),
-      );
-    const stage = meta?.[1];
-    if (stage && isStage(stage) && Object.hasOwn(defaults, stage))
-      required[stage] = meta[2] === "true";
-    const waiver =
-      /^\[bzt:waiver v1\]\s+rule=(R0[1-5])\s+\|\s+approvedBy=([^\s|]+)\s+\|\s+reason=(\S[^\r\n]*)$/u.exec(
-        action.comment.trim(),
-      );
-    const ruleId = rules.find(({ id }) => id === waiver?.[1])?.id;
-    if (
-      ruleId &&
-      waiver?.[2] === action.actor &&
-      waiver[3] &&
-      config.roles.PM?.includes(action.actor)
-    )
-      waivers.push({
-        ruleId,
-        objectType: "story",
-        objectId: story.id,
-        by: action.actor,
-        reason: waiver[3],
-      });
-  }
+  if (story.assignedTo === receiver && story.assignedDate != null)
+    handoffs.push(story.assignedDate);
   return {
-    required,
-    waivers,
+    required: foldStageRequirements(
+      defaults,
+      cachedRequirements,
+      story.actions,
+    ),
+    waivers: foldRuleWaivers(
+      "story",
+      story.id,
+      cachedWaiverEntries(cachedWaivers ?? []),
+      {
+        actions: story.actions,
+        approvers: [...(config.roles.PM ?? []), maintainer],
+      },
+    ),
     handoffAt: handoffs.length ? Math.max(...handoffs) : null,
   };
 }
@@ -1330,7 +1318,7 @@ async function storyEvidence(
     state.taskItem(task, task.assignedTo, stageIndex),
   );
   const stageSummary = summarizeStages(stageInputs);
-  const metadata = evidenceConfig(state, story, people.roles.receiver);
+  const metadata = await evidenceConfig(state, story, people.roles);
   const releaseDate = config.releaseCalendar.find(
     ({ product, version }) =>
       product === story.product && version === state.version(story, plan),

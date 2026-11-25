@@ -4,6 +4,7 @@ import { getMonthlyDevQueueOutputSchema } from "../../src/contracts/tools/get_mo
 import { parseZentaoDateTime } from "../../src/core/calendar.ts";
 import { teamConfigSchema } from "../../src/core/config.ts";
 import { openLocalStore } from "../../src/core/store/index.ts";
+import { DirectoryService } from "../../src/services/directory.ts";
 import { ManagementService } from "../../src/services/management.ts";
 import { mockReadClient } from "../contract/read-fixture.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
@@ -87,6 +88,7 @@ const bug = {
 };
 
 function setup({
+  teamConfig = config,
   stories = [story],
   planned = stories.filter(({ plan }) => plan === "22"),
   tasks = [testTask],
@@ -94,7 +96,9 @@ function setup({
   bugs = [bug],
   failure,
   store,
+  useDirectory = false,
 }: {
+  teamConfig?: typeof config;
   stories?: (typeof story & {
     actions?: unknown[];
     closedReason?: string;
@@ -107,6 +111,7 @@ function setup({
   bugs?: (typeof bug)[];
   failure?: "tasks" | "truncated";
   store?: ReturnType<typeof openLocalStore>;
+  useDirectory?: boolean;
 } = {}) {
   const { client, fetch: requests } = mockReadClient((url) => {
     const path = url.pathname.replace("/zentao", "");
@@ -127,6 +132,26 @@ function setup({
           role: "dev",
           dept: 0,
         },
+      },
+      "/api.php/v2/users": {
+        users: [
+          {
+            id: 1,
+            account: "dev",
+            realname: "研发负责人",
+            role: "dev",
+            dept: 0,
+            deleted: false,
+          },
+          {
+            id: 2,
+            account: "peer",
+            realname: "跨产品同事",
+            role: "dev",
+            dept: 0,
+            deleted: false,
+          },
+        ],
       },
       "/api.php/v1/executions": { executions },
       "/api.php/v1/products/29/plans": { plans: [plan] },
@@ -161,10 +186,19 @@ function setup({
   return {
     service: new ManagementService({
       client,
-      config,
+      config: teamConfig,
       clock,
       baseUrl,
       ...(store ? { store } : {}),
+      ...(useDirectory
+        ? {
+            directory: new DirectoryService({
+              client,
+              config: teamConfig,
+              clock,
+            }),
+          }
+        : {}),
     }),
     requests,
   };
@@ -626,4 +660,57 @@ it("WP-38 父子需求均有直属任务时，计划和发布分母只计算子�
     testIncompleteStoryIds: [31],
   });
   expect(release.hints?.join()).toContain("父需求及其直属任务不计入");
+});
+
+it("WP-38 跨产品需求共享一次人员目录读取，巡检消费禅道豁免评论", async () => {
+  const main = {
+    ...story,
+    linkStories: "42",
+    actions: [
+      {
+        id: 1,
+        actor: "module_owner",
+        action: "commented",
+        date: "2026-11-25 10:00:00",
+        comment: '[bzt:waiver v1 {"rule":"R05","reason":"允许旧记录"}]',
+      },
+    ],
+  };
+  const { service, requests } = setup({
+    teamConfig: teamConfigSchema.parse({
+      ...config,
+      modules: { "29:2": { name: "查询模块", designLead: "module_owner" } },
+    }),
+    useDirectory: true,
+    stories: [
+      main,
+      {
+        ...story,
+        id: 42,
+        product: 30,
+        plan: "",
+        executions: [],
+        assignedTo: "peer",
+      },
+    ],
+  });
+  const result = await service.getPlanProgress({
+    view: "iteration",
+    product: "29",
+    execution: "7",
+  });
+  expect(result.data).toMatchObject({
+    complianceByOwner: [],
+    crossProduct: [
+      {
+        stories: [
+          { id: 31, currentOwner: { account: "dev", realname: "研发负责人" } },
+          { id: 42, currentOwner: { account: "peer", realname: "跨产品同事" } },
+        ],
+      },
+    ],
+  });
+  expect(
+    requests.mock.calls.filter(([url]) => String(url).includes("/v2/users")),
+  ).toHaveLength(1);
 });

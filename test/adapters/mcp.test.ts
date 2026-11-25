@@ -8,6 +8,8 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { createZentaoReadClient } from "../../src/api/client.ts";
+import { createZentaoGateway } from "../../src/services/zentao-gateway.ts";
 import { createMcpServer } from "../../src/adapters/mcp/server.ts";
 import { instanceHashOf } from "../../src/core/store/index.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
@@ -170,6 +172,7 @@ function fakeZentao(
     p2?: boolean;
     pairedProducts?: boolean;
     loseTaskReceipt?: boolean;
+    ignorePlanWrite?: boolean;
     failNotify?: boolean;
   } = {},
 ) {
@@ -303,7 +306,12 @@ function fakeZentao(
         return Response.json(stories.get(storyId));
       }
       if (Number.isFinite(storyId) && method === "PUT") {
-        stories.set(storyId, { ...stories.get(storyId), ...body });
+        const { plan, ...edits } = body;
+        stories.set(storyId, {
+          ...stories.get(storyId),
+          ...edits,
+          ...(options.ignorePlanWrite || plan === undefined ? {} : { plan }),
+        });
         return Response.json(stories.get(storyId));
       }
       if (route === "/api.php/v2/action/comment") {
@@ -1219,4 +1227,64 @@ it("WP-38 / AC-06 提需的配对与衍生来源都通过真实网关双向回�
       .prepare("SELECT origin FROM source_links WHERE relation = 'pairs'")
       .all(),
   ).toEqual([{ origin: "native" }, { origin: "native" }]);
+});
+
+it("WP-38 网关回读未生效的计划变更时保留 unknown", async () => {
+  const { writes } = fakeZentao({ p2: true, ignorePlanWrite: true });
+  const { call } = await connect(configuredEnv([], true));
+  const preview = await call("reschedule_story", {
+    storyIds: [31],
+    toMonth: "2026-12",
+    reason: "下月排期",
+  });
+  const { opId } = z.object({ opId: z.string() }).parse(preview.value);
+  now += 4_000;
+  expect(
+    await call("confirm_operation", { opId, previewAck: true }),
+  ).toMatchObject({
+    value: {
+      status: "unknown",
+      steps: [
+        { action: "story.edit", state: "unknown" },
+        { action: "story.comment", state: "pending" },
+      ],
+    },
+  });
+  expect(writes).toEqual([
+    { method: "PUT", route: "/api.php/v1/stories/31", body: { plan: 22 } },
+  ]);
+});
+
+it("WP-38 网关拒绝通过计划编辑同时改写需求标题", async () => {
+  const { writes } = fakeZentao({ p2: true });
+  const gateway = createZentaoGateway({
+    client: createZentaoReadClient({
+      baseUrl,
+      account: "alice",
+      password,
+      clock,
+      logSink: () => undefined,
+    }),
+    account: "alice",
+    instanceVersion: "22.6",
+    storyRoles: { get: () => ({}) },
+  });
+  await expect(
+    gateway.write({
+      opId: "fixture",
+      seq: 1,
+      id: 31,
+      step: {
+        type: "story",
+        action: "story.edit",
+        id: 31,
+        product: 29,
+        fields: {
+          plan: { value: 22, origin: "user" },
+          title: { value: "越权改写", origin: "user" },
+        },
+      },
+    }),
+  ).rejects.toMatchObject({ code: "CAPABILITY_UNVERIFIED" });
+  expect(writes).toEqual([]);
 });
