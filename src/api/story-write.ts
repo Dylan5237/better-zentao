@@ -35,11 +35,24 @@ const assignBody = z.strictObject({
   comment: z.string().optional(),
 });
 const activateBody = z.strictObject({ status: z.literal("active") });
-const editBody = z.strictObject({
-  title: text.optional(),
-  keywords: z.string(),
+const editBody = z
+  .strictObject({
+    title: text.optional(),
+    keywords: z.string().optional(),
+    plan: id.optional(),
+  })
+  .refine(({ keywords, plan }) => keywords !== undefined || plan !== undefined);
+const closeBody = z.strictObject({
+  closedReason: z.enum([
+    "done",
+    "cancel",
+    "duplicate",
+    "postponed",
+    "willnotdo",
+  ]),
+  comment: z.string().optional(),
 });
-const closeBody = z.strictObject({ closedReason: z.literal("cancel") });
+const linkBody = z.strictObject({ stories: z.tuple([id]) });
 const commentBody = z.strictObject({ comment: text });
 const discardedDeleteReceipt = z.unknown().transform(() => undefined);
 
@@ -179,6 +192,25 @@ export async function writeStory(
           body: parse(closeBody, fields),
         },
         storyWriteReceiptDto,
+      );
+    case "story.linkStory":
+      return http.write(
+        {
+          ...opLog,
+          method: "POST",
+          pathTemplate: "/api.php/v2/story/linkStory",
+          objectId,
+          query: { storyID: objectId },
+          body: parse(
+            linkBody.refine(({ stories }) => stories[0] !== objectId),
+            fields,
+          ),
+          allowReceiptMessage: true,
+        },
+        // The relation endpoint acknowledges the request without returning an object ID.
+        z
+          .object({ status: z.literal("success") })
+          .transform(() => ({ id: objectId })),
       );
     case "story.comment":
       return http.write(
