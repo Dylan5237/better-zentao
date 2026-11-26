@@ -1,4 +1,4 @@
-import { skeletonBlock, skeletonTable, skeletonText } from "./skeleton.js";
+import { skeletonBlock, skeletonRows, skeletonText } from "./skeleton.js";
 
 function add(parent, tag, className) {
   const node = parent.ownerDocument.createElement(tag);
@@ -26,15 +26,56 @@ export function progressTrack(doc) {
   return withClass(skeletonBlock(doc), "management-skel-track");
 }
 
-export function queueTable(doc) {
-  return withClass(skeletonTable(doc, 4, 4), "vp-table-scroll management-skel-queue-table");
+function tableFrame(doc, columns, className) {
+  const wrap = element(doc, `table-wrap ${className}`);
+  const table = add(wrap, "table", "bzt-table");
+  const headings = add(add(table, "thead", ""), "tr", "");
+  for (const label of columns) add(headings, "th", "").textContent = label;
+  const body = add(table, "tbody", "");
+  return { wrap, body };
+}
+
+export function queueTable(doc, columns, selectable) {
+  const { wrap, body } = tableFrame(
+    doc,
+    columns,
+    "vp-table-scroll management-skel-queue-table",
+  );
+  for (let i = 0; i < 4; i++) {
+    const row = add(body, "tr", "");
+    const identity = add(
+      add(row, "td", ""),
+      "div",
+      "ledger-title-row management-skel-ledger-title",
+    );
+    if (selectable)
+      identity.append(withClass(skeletonBlock(doc), "management-skel-check"));
+    identity.append(skeletonBlock(doc, "short"), skeletonBlock(doc));
+    add(row, "td", "").append(skeletonBlock(doc, "short"));
+    add(row, "td", "").append(skeletonBlock(doc, "chip"));
+    const actions = add(add(row, "td", ""), "div", "row-actions is-end");
+    actions.append(skeletonBlock(doc, "button"));
+    if (selectable) actions.append(skeletonBlock(doc, "button"));
+  }
+  return wrap;
 }
 
 export function scheduleMatrix(doc, self) {
-  const wrap = element(doc, "table-wrap vp-table-scroll management-skel-matrix");
+  const wrap = element(
+    doc,
+    "table-wrap vp-table-scroll management-skel-matrix",
+  );
   const table = add(wrap, "table", "bzt-table heatmap-table");
   const head = add(add(table, "thead", ""), "tr", "");
-  const columns = [self ? "本人" : "成员", "第 1 周", "第 2 周", "第 3 周", "第 4 周", "逾期", "未排期"];
+  const columns = [
+    self ? "本人" : "成员",
+    "第 1 周",
+    "第 2 周",
+    "第 3 周",
+    "第 4 周",
+    "逾期",
+    "未排期",
+  ];
   for (const [index, label] of columns.entries()) {
     const header = add(head, "th", "");
     header.textContent = label;
@@ -47,7 +88,9 @@ export function scheduleMatrix(doc, self) {
     add(add(row, "td", ""), "div", "member-cell").append(skeletonText(doc));
     for (let week = 0; week < 4; week++) {
       const cell = add(row, "td", "heat-td");
-      add(cell, "div", "heat-cell management-skel-heat").append(skeletonText(doc));
+      add(cell, "div", "heat-cell management-skel-heat").append(
+        skeletonText(doc),
+      );
     }
     for (let i = 0; i < 2; i++)
       add(row, "td", "").append(skeletonBlock(doc, "chip"));
@@ -60,22 +103,31 @@ export function scheduleMatrix(doc, self) {
   return wrap;
 }
 
-function itemList(doc, className, count, { chips = 0, action = "button", lines = 1 } = {}) {
-  const list = element(doc, `item-list vp-scroll ${className}`);
-  for (let i = 0; i < count; i++) {
-    const row = add(list, "div", "item-row");
+function itemList(
+  doc,
+  className,
+  count,
+  { chips = 0, action = "button", lines = 1 } = {},
+) {
+  const list = skeletonRows(doc, count, (row) => {
     const main = add(row, "div", "item-row-main");
     const title = add(main, "div", "item-row-title");
-    for (let chip = 0; chip < chips; chip++) title.append(skeletonBlock(doc, "chip"));
+    for (let chip = 0; chip < chips; chip++)
+      title.append(skeletonBlock(doc, "chip"));
     title.append(skeletonBlock(doc, "title"));
-    if (lines) add(main, "div", "item-row-sub").append(skeletonText(doc, lines));
+    if (lines)
+      add(main, "div", "item-row-sub").append(skeletonText(doc, lines));
     if (action) row.append(skeletonBlock(doc, action));
-  }
+  });
+  list.className = `item-list vp-scroll ${className}`;
   return list;
 }
 
 export function recommendations(doc) {
-  return itemList(doc, "management-skel-recommendations", 3, { chips: 1, action: undefined });
+  return itemList(doc, "management-skel-recommendations", 3, {
+    chips: 1,
+    action: null,
+  });
 }
 
 export function riskList(doc) {
@@ -97,10 +149,16 @@ export function metricRing(doc) {
 }
 
 export function l3Groups(doc) {
-  const groups = element(doc, "l3-bars is-two-col vp-scroll management-skel-l3");
+  const groups = element(
+    doc,
+    "l3-bars is-two-col vp-scroll management-skel-l3",
+  );
   for (let i = 0; i < 4; i++) {
     const tile = add(groups, "div", "l3-tile");
-    add(tile, "div", "l3-tile-head").append(skeletonBlock(doc, "title"), skeletonBlock(doc, "short"));
+    add(tile, "div", "l3-tile-head").append(
+      skeletonBlock(doc, "title"),
+      skeletonBlock(doc, "short"),
+    );
     tile.append(progressTrack(doc), skeletonText(doc, 1));
   }
   return groups;
@@ -116,12 +174,19 @@ export function pairedProgress(doc) {
   return list;
 }
 
-export function iterationMetrics(doc) {
-  return skeletonTable(doc, 5, 1);
+export function iterationMetrics(doc, columns) {
+  const { wrap, body } = tableFrame(doc, columns, "management-skel-iteration");
+  const row = add(body, "tr", "");
+  for (const [i] of columns.entries())
+    add(row, "td", "").append(skeletonBlock(doc, i < 2 ? "short" : "text"));
+  return wrap;
 }
 
 export function commitmentList(doc) {
-  return itemList(doc, "management-skel-commitment", 5, { action: "chip", lines: 0 });
+  return itemList(doc, "management-skel-commitment", 5, {
+    action: "chip",
+    lines: 0,
+  });
 }
 
 export function assistantReply(doc) {

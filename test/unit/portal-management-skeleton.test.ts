@@ -125,7 +125,9 @@ class ElementStub {
 function context(role: string, actions: string[]) {
   const controller = new AbortController();
   const requests: Array<ReturnType<typeof Promise.withResolvers<unknown>>> = [];
-  const call = vi.fn((_tool: string, _input: Record<string, unknown>) => {
+  const call = vi.fn<
+    (tool: string, input: Record<string, unknown>) => Promise<unknown>
+  >(() => {
     const request = Promise.withResolvers<unknown>();
     requests.push(request);
     return request.promise;
@@ -219,6 +221,34 @@ describe("本地门户管理页异步占位", () => {
     expect(busy(root)).toHaveLength(0);
   });
 
+  it("试算表单校验阻止在途推荐覆盖输入错误", async () => {
+    const root = new ElementStub("main");
+    const ctx = context("RM", ["get_member_schedule"]);
+    renderSchedule(root, ctx, {
+      tab: "matrix",
+      newTask: { estimateHours: 5 },
+    });
+    const form = root.withClass("management-suggest")[0];
+    const estimate = form?.all((node) => node.tag === "input")[0];
+    if (!form || !estimate) throw new Error("未找到试算表单");
+    estimate.value = "0";
+    form.emit("submit");
+    await showPlaceholders();
+    expect(root.textContent).toContain("请填写大于 0 的预估工时");
+    expect(root.withClass("management-skel-recommendations")).toHaveLength(0);
+    ctx.requests[0]?.resolve(
+      report({
+        members: [],
+        suggestions: [{ reason: "这是上一次试算的推荐" }],
+      }),
+    );
+    await finishRequests();
+    expect(root.textContent).toContain("暂无可展示的成员排期");
+    expect(root.textContent).toContain("请填写大于 0 的预估工时");
+    expect(root.textContent).not.toContain("这是上一次试算的推荐");
+    expect(busy(root)).toHaveLength(0);
+  });
+
   it("门禁保留固定卡片和审批入口，快速失败不会出现占位", async () => {
     const root = new ElementStub("main");
     const ctx = context("PM", ["get_plan_progress", "set_story_meta"]);
@@ -230,6 +260,29 @@ describe("本地门户管理页异步占位", () => {
     await showPlaceholders();
     expect(root.textContent).toContain("暂无可读取版本");
     expect(root.withClass("management-skel-gate-copy")).toHaveLength(0);
+    expect(busy(root)).toHaveLength(0);
+  });
+
+  it("发布门禁等待真实版本结果时呈现中性大卡和两个清单", async () => {
+    const root = new ElementStub("main");
+    const ctx = context("QA", ["get_plan_progress"]);
+    renderReleaseRisks(root, ctx, { version: "V1.0" });
+    await showPlaceholders();
+    expect(root.withClass("management-skel-gate-copy")).toHaveLength(1);
+    expect(root.withClass("management-skel-gate-list")).toHaveLength(2);
+    expect(root.withClass("is-pending")).toHaveLength(2);
+    ctx.requests[0]?.resolve(
+      report({
+        view: "release",
+        version: "V1.0",
+        gate: "ready",
+        testCompletionRate: { numerator: 1, denominator: 1, rate: 1 },
+        waivers: [],
+      }),
+    );
+    await finishRequests();
+    expect(root.textContent).toContain("V1.0 发布门禁：绿灯通过");
+    expect(root.withClass("management-skel-gate-list")).toHaveLength(0);
     expect(busy(root)).toHaveLength(0);
   });
 

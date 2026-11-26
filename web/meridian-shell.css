@@ -94,6 +94,10 @@ dialog:not([open]) {
   min-height: 0;
   overflow: auto;
 }
+/* Anchor the form while query results change the dialog's natural height. */
+.portal-dialog:has(.view-results) {
+  margin-block: 9dvh auto;
+}
 .management-drawer-body {
   display: flex;
   flex-direction: column;
@@ -114,18 +118,76 @@ dialog:not([open]) {
   background: var(--bg-surface);
   color: var(--ink-primary);
 }
-.sk-startup .sk-lines { margin-top: 22px; gap: 17px; }
-.sk-query { display: grid; min-width: 0; gap: 15px; }
-.sk-command { display: flex; align-items: center; gap: 9px; }
-.sk-command .sk-avatar { width: 15px; height: 15px; }
-.sk-command .sk-text { max-width: 62%; }
-.sk-role-stack { position: relative; }
-.sk-role-overlay { position: absolute; inset: 0; pointer-events: none; }
-.sk-role-stack:has(.sk-role-options) > fieldset { visibility: hidden; }
-.sk-role-overlay .sk-role-options { margin: 0; height: 100%; padding-top: 10px; }
-.sk-role-options .sk-avatar { width: 17px; height: 17px; }
-.sk-nav-slot:empty { display: none; }
-.sk-nav-slot .sk-chip { display: block; width: 21px; height: 15px; }
+.sk-startup .sk-lines {
+  margin-top: 22px;
+  gap: 17px;
+}
+@media (scripting: none) {
+  #startup {
+    display: none;
+  }
+}
+.sk-query {
+  display: grid;
+  min-width: 0;
+  gap: 15px;
+}
+.sk-command {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.sk-command .sk-avatar {
+  width: 15px;
+  height: 15px;
+}
+.sk-command .sk-text {
+  max-width: 62%;
+}
+.sk-role-stack {
+  position: relative;
+  display: flow-root;
+  margin-top: 20px;
+}
+.sk-role-stack > .role-options {
+  margin-top: 0;
+}
+.role-setup .notice:empty {
+  display: none;
+}
+.login-page .login-status {
+  display: block;
+  min-block-size: 1.5em;
+  margin: 0.6rem 0 0;
+}
+.sk-role-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.sk-role-stack:has(.sk-role-options) > fieldset {
+  visibility: hidden;
+}
+.sk-role-overlay .sk-role-options {
+  margin: 0;
+  height: 100%;
+  padding-top: 10px;
+}
+.sk-role-options .sk-avatar {
+  width: 17px;
+  height: 17px;
+}
+.sk-nav-slot:empty {
+  display: none;
+}
+.sk-nav-slot .sk-chip {
+  display: block;
+  width: 21px;
+  height: 15px;
+}
+#as-of .sk-short {
+  width: 54px;
+}
 .login-panel form,
 .role-setup .role-options {
   padding-top: 10px;

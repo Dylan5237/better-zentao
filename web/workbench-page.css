@@ -102,6 +102,108 @@
   list-style: disc;
 }
 
+.workbench-skeleton .kpi-num,
+.workbench-skeleton .kpi-foot,
+.workbench-skeleton .item-row-title {
+  display: flex;
+  align-items: center;
+  min-height: 1.5em;
+}
+
+.workbench-skeleton .kpi-num {
+  min-height: 1.1em;
+}
+
+.workbench-skeleton .kpi-num .sk-value {
+  height: 0.82em;
+}
+
+.workbench-skeleton .bzt-badge .sk-short {
+  width: 3ch;
+}
+
+.workbench-skeleton .zt-tab-count .sk-short,
+.workbench-skeleton .filter-pill-btn .sk-short {
+  width: 1.8ch;
+}
+
+.workbench-skeleton .row-actions .sk-button {
+  height: 28px;
+}
+
+.workbench-skeleton .workbench-pending-control {
+  display: inline-flex;
+  align-items: center;
+}
+
+.workbench-skeleton :is(.hybrid-reset-btn, .zt-reset-btn) .sk-text {
+  width: 2em;
+}
+
+.workbench-skeleton .rd-group-header .sk-short {
+  width: 7em;
+}
+
+.workbench-skeleton .rd-group-header,
+.workbench-skeleton .fb-story-meta {
+  min-height: 1.55em;
+}
+
+.workbench-skeleton .fb-story-top .sk-title {
+  min-width: 0;
+}
+
+.workbench-skeleton .viz-step-node .viz-step-dot {
+  width: 24px;
+  height: 24px;
+  border: 0;
+}
+
+.workbench-skeleton .viz-step-node .viz-step-label {
+  height: 1.2em;
+}
+
+.workbench-skeleton .traffic-lamp {
+  width: 14px;
+  height: 14px;
+}
+
+.workbench-pending-gate-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.workbench-skeleton .workbench-pending-bar {
+  width: 100%;
+  height: 6px;
+}
+
+.workbench-skeleton .l3-dist-wrap .workbench-pending-bar {
+  height: 8px;
+}
+
+.workbench-skeleton .workbench-pending-plan-rate {
+  width: 10em;
+  height: 20px;
+}
+
+.workbench-skeleton .l3-dist-legend .sk-chip {
+  width: 4.5em;
+  height: 1.55em;
+}
+
+.workbench-skeleton .zt-table .workbench-native-title {
+  min-width: 16ch;
+}
+
+.workbench-skeleton .zt-table td .sk-block {
+  min-width: 2ch;
+}
+
+.workbench-pending-native-summary {
+  width: 18em;
+}
+
 @media (max-width: 1140px), (max-height: 619px) {
   .workbench-home .vp-grid-2 {
     display: grid;

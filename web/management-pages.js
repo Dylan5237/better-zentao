@@ -24,6 +24,14 @@ const queueBuckets = [
   ["planNoIteration", "④ 有计划未排迭代", "需拆解挂入迭代"],
   ["iterationNoPlan", "⑤ 有迭代缺 L3 计划", "需补挂月度计划"],
 ];
+const queueColumns = ["需求标题", "接收研发主管", "当前进展", "操作"];
+const iterationColumns = [
+  "研发迭代",
+  "需求数",
+  "拆解及时率",
+  "进行中逾期占比",
+  "测试流转中位耗时",
+];
 
 const gateStates = {
   ready: ["pass", "绿灯通过，可以发布"],
@@ -283,12 +291,15 @@ function loading(output, ctx, load, draw, pending) {
     output.replaceChildren();
     const placeholders = [];
     const finish = () => {
-      for (const stop of placeholders) stop();
+      for (const stop of placeholders.splice(0)) stop();
       if (finishPrevious === finish) finishPrevious = undefined;
     };
     finishPrevious = finish;
     const mount = (target, scene) => {
-      const stop = beginSkeleton(target, scene, { signal: ctx.signal, current });
+      const stop = beginSkeleton(target, scene, {
+        signal: ctx.signal,
+        current,
+      });
       placeholders.push(stop);
       return stop;
     };
@@ -457,7 +468,7 @@ function showDecompose(parent, ctx, selection, close) {
 function storyTable(parent, rows, ctx, selected, changed, chooseOne) {
   table(
     parent,
-    ["需求标题", "接收研发主管", "当前进展", "操作"],
+    queueColumns,
     rows,
     (tr, story) => {
       const name = add(add(tr, "td"), "div", undefined, "ledger-title-row");
@@ -508,8 +519,12 @@ function storyTable(parent, rows, ctx, selected, changed, chooseOne) {
 }
 
 function drawQueue(toolbar, output, ctx, report, query, mount) {
-  const { buckets, counts, notReady = [], monthEndWarnings = [] } =
-    report?.data ?? {};
+  const {
+    buckets,
+    counts,
+    notReady = [],
+    monthEndWarnings = [],
+  } = report?.data ?? {};
   if (report) {
     showGaps(output, report);
     ctx.setBadge?.("schedule", partial(report) ? 0 : buckets.toReceive.length);
@@ -527,7 +542,9 @@ function drawQueue(toolbar, output, ctx, report, query, mount) {
   const mayDecompose = canDecompose(ctx);
   const allBucketRows = Math.max(
     1,
-    buckets ? queueBuckets.reduce((sum, [id]) => sum + buckets[id].length, 0) : 0,
+    buckets
+      ? queueBuckets.reduce((sum, [id]) => sum + buckets[id].length, 0)
+      : 0,
   );
   let updateSelection;
   let batch;
@@ -621,7 +638,9 @@ function drawQueue(toolbar, output, ctx, report, query, mount) {
     }
     const rows = buckets?.[id];
     if (mount)
-      mount(add(body, "div", undefined, "management-pending-table"), queueTable);
+      mount(add(body, "div", undefined, "management-pending-table"), (doc) =>
+        queueTable(doc, queueColumns, selectable),
+      );
     else if (rows.length)
       storyTable(
         body,
@@ -1072,7 +1091,8 @@ function matrix(parent, ctx, initial, tabs) {
       if (!suggestions) return;
       acceptSuggestions = true;
       suggestions.replaceChildren();
-      if (input.newTask) finishSuggestions = mount(suggestions, recommendations);
+      if (input.newTask)
+        finishSuggestions = mount(suggestions, recommendations);
       else add(suggestions, "p", "填写预估工时后试算。", "empty-inline");
     },
   );
@@ -1997,7 +2017,8 @@ function progressRing(parent, rate, tone) {
 function planMetric(parent, label, metric, hint, tone, mount) {
   const tile = add(parent, "div", undefined, "kpi-card is-ring-kpi");
   const body = add(tile, "div", undefined, "kpi-ring-body");
-  if (mount) mount(add(body, "div", undefined, "viz-ring management-ring"), metricRing);
+  if (mount)
+    mount(add(body, "div", undefined, "viz-ring management-ring"), metricRing);
   else progressRing(body, metric?.rate, tone);
   const copy = add(body, "div", undefined, "kpi-ring-text");
   add(copy, "div", label, "kpi-label");
@@ -2095,7 +2116,7 @@ function iterationPanels(left, right, ctx, iteration, mount) {
   );
   badge(head, "叶子任务口径");
   if (mount) {
-    mount(add(body, "div"), iterationMetrics);
+    mount(add(body, "div"), (doc) => iterationMetrics(doc, iterationColumns));
     return;
   }
   if (!iteration?.executionIds?.length) {
@@ -2109,25 +2130,20 @@ function iterationPanels(left, right, ctx, iteration, mount) {
     );
     return;
   }
-  table(
-    body,
-    ["研发迭代", "需求数", "拆解及时率", "进行中逾期占比", "测试流转中位耗时"],
-    [iteration],
-    (tr, row) => {
-      add(tr, "td", reference(row.executionIds));
-      add(tr, "td", `${row.storyIds.length} 条`, "tabular");
-      add(tr, "td", rateText(row.decompositionTimeliness), "tabular");
-      add(tr, "td", rateText(row.overdueRate), "tabular");
-      add(
-        tr,
-        "td",
-        row.testCycleMedianWorkdays == null
-          ? "暂无样本"
-          : `${row.testCycleMedianWorkdays} 工作日 · ${row.testCycleSampleSize} 个样本`,
-        "tabular",
-      );
-    },
-  );
+  table(body, iterationColumns, [iteration], (tr, row) => {
+    add(tr, "td", reference(row.executionIds));
+    add(tr, "td", `${row.storyIds.length} 条`, "tabular");
+    add(tr, "td", rateText(row.decompositionTimeliness), "tabular");
+    add(tr, "td", rateText(row.overdueRate), "tabular");
+    add(
+      tr,
+      "td",
+      row.testCycleMedianWorkdays == null
+        ? "暂无样本"
+        : `${row.testCycleMedianWorkdays} 工作日 · ${row.testCycleSampleSize} 个样本`,
+      "tabular",
+    );
+  });
 }
 
 function drawPlans(output, ctx, reports, mount) {

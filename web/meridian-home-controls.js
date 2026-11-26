@@ -207,15 +207,30 @@ export function filterControls(
   const bar = add(parent, "div", undefined, prefix + "-filter-bar");
   const tallyClass = native ? "zt-count-pill" : "hybrid-hit-badge";
   if (pending) {
-    const search = add(bar, "span", undefined, prefix + "-input workbench-pending-control");
+    const search = add(
+      bar,
+      "span",
+      undefined,
+      prefix + "-input workbench-pending-control",
+    );
     pendingBlock(search, "text");
     for (const { label } of fields) {
-      const select = add(bar, "span", undefined, prefix + "-select workbench-pending-control");
+      const select = add(
+        bar,
+        "span",
+        undefined,
+        prefix + "-select workbench-pending-control",
+      );
       select.style.setProperty("width", `calc(${label.length}ic + 24px)`);
       pendingBlock(select, "text");
     }
     pendingBlock(add(bar, "span", undefined, tallyClass), "chip");
-    const reset = add(bar, "span", undefined, prefix + "-reset-btn workbench-pending-control");
+    const reset = add(
+      bar,
+      "span",
+      undefined,
+      prefix + "-reset-btn workbench-pending-control",
+    );
     pendingBlock(reset, "text");
     return;
   }

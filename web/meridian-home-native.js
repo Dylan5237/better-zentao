@@ -12,6 +12,7 @@ import {
   filterControls,
   go,
   limited,
+  pendingBlock,
   person,
   progressTitle,
   storyAction,
@@ -612,7 +613,12 @@ const createTabs = {
   PJ: projectTabs,
 };
 
-export function renderNativeWorkbench(parent, ctx, reads) {
+export function renderNativeWorkbench(
+  parent,
+  ctx,
+  reads,
+  { activeTab = 0, selectTab } = {},
+) {
   const tabs = createTabs[ctx.role.id](ctx, reads);
   const shell = add(
     parent,
@@ -630,11 +636,21 @@ export function renderNativeWorkbench(parent, ctx, reads) {
     const control = button(
       navigation,
       undefined,
-      () => switchTab(i),
+      () => {
+        if (!ctx.current()) return;
+        selectTab?.(i);
+        switchTab(i);
+      },
       "zt-tab-btn",
     );
     add(control, "span", tab.label);
-    add(control, "span", count(tab.source, tab.rows.length), "zt-tab-count");
+    const tally = add(
+      control,
+      "span",
+      ctx.pending ? undefined : count(tab.source, tab.rows.length),
+      "zt-tab-count",
+    );
+    if (ctx.pending) pendingBlock(tally, "short");
     return control;
   });
   function switchTab(active) {
@@ -661,6 +677,7 @@ export function renderNativeWorkbench(parent, ctx, reads) {
       placeholder: "检索编号 / 标题 / 关键词…",
       native: true,
       unit: "条",
+      pending: ctx.pending,
     });
     const wrap = add(content, "div", undefined, "table-wrap vp-table-scroll");
     const table = add(wrap, "table", undefined, "bzt-table zt-table");
@@ -670,13 +687,25 @@ export function renderNativeWorkbench(parent, ctx, reads) {
     const body = add(table, "tbody");
     if (footer || action?.[1]) {
       const foot = add(content, "div", undefined, "zt-foot-bar");
-      add(foot, "div", footer);
+      const summary = add(foot, "div", footer);
+      if (ctx.pending && !footer && ctx.role.id === "PM")
+        pendingBlock(summary, "text", "workbench-pending-native-summary");
       if (action)
         button(
           add(foot, "div", undefined, "row-actions"),
           ...action,
           "btn-secondary btn-xs",
         );
+    }
+    if (ctx.pending) {
+      for (let i = 0; i < 5; i++) {
+        const row = add(body, "tr");
+        for (const [label, , className] of columns) {
+          const cell = add(row, "td", undefined, className);
+          pendingBlock(cell, label === "操作" ? "chip" : "text");
+        }
+      }
+      return;
     }
     function refresh() {
       const visible = rows.filter((row) => filters.matches(row));
@@ -702,5 +731,5 @@ export function renderNativeWorkbench(parent, ctx, reads) {
     }
     refresh();
   }
-  switchTab(0);
+  switchTab(activeTab);
 }

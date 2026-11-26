@@ -835,6 +835,8 @@ function mountPortal(
   let reviewAccount;
   const meetingRecords = new Map();
   const badges = new Map();
+  const badgeRevisions = new Map();
+  let readRevision = 0;
 
   let editingRoles = false;
   let pendingLaunch;
@@ -927,6 +929,7 @@ function mountPortal(
     nav.replaceChildren();
     badgeReads?.abort();
     badges.clear();
+    badgeRevisions.clear();
     if (reviewAccount !== identity?.account) {
       meetingRecords.clear();
       reviewAccount = identity?.account;
@@ -1058,8 +1061,14 @@ function mountPortal(
       status.textContent = "";
       status.hidden = reloading;
       const finish = reloading
-        ? beginSkeleton(overlaySlot, (doc) => roleOptionsSkeleton(doc, controls.length), {current: () => form.isConnected})
-        : beginSkeleton(status, (doc) => skeletonBlock(doc, "short"), {current: () => form.isConnected});
+        ? beginSkeleton(
+            overlaySlot,
+            (doc) => roleOptionsSkeleton(doc, controls.length),
+            { current: () => form.isConnected },
+          )
+        : beginSkeleton(status, (doc) => skeletonBlock(doc, "short"), {
+            current: () => form.isConnected,
+          });
       try {
         await action();
       } catch (error) {
@@ -1172,12 +1181,16 @@ function mountPortal(
     }
   }
 
-  function setBadge(id, count) {
+  function setBadge(id, count, revision = ++readRevision) {
+    if ((badgeRevisions.get(id) ?? 0) > revision) return;
     const target = Array.from(nav.querySelectorAll("[data-view]")).find(
       (el) => el.dataset.view === id,
     );
-    if (!target || target.disabled || badges.get(id) === count) return;
+    if (!target || target.disabled) return;
+    badgeRevisions.set(id, revision);
+    if (badges.get(id) === count) return;
     badges.set(id, count);
+    target.querySelector(".sk-nav-slot")?.remove();
     target.querySelector(".nav-badge")?.remove();
     if (Number.isSafeInteger(count) && count > 0)
       target.append(
@@ -1190,12 +1203,12 @@ function mountPortal(
       );
   }
 
-  function countFromReport(tool, input, report) {
+  function countFromReport(tool, input, report, revision) {
     if (!report?.ok || report.completeness !== "complete" || !report.data)
       return;
     const data = report.data;
     if (tool === "get_monthly_dev_queue" && !input.team && !input.month)
-      setBadge("schedule", data.counts?.toReceive);
+      setBadge("schedule", data.counts?.toReceive, revision);
     if (
       tool === "scan_workflow_risks" &&
       !input.rules &&
@@ -1203,7 +1216,11 @@ function mountPortal(
       !Object.keys(input.scope ?? {}).length &&
       !report.truncated
     )
-      setBadge("release-risks", data.hits?.filter((hit) => !hit.waived).length);
+      setBadge(
+        "release-risks",
+        data.hits?.filter((hit) => !hit.waived).length,
+        revision,
+      );
     if (
       tool === "query_stories" &&
       !input.who &&
@@ -1219,13 +1236,14 @@ function mountPortal(
             (total, n) => total + n,
             0,
           ),
+          revision,
         );
       if (
         input.category === "design" &&
         input.progress?.length === 1 &&
         input.progress[0] === "待移交"
       )
-        setBadge("stories", data.countsByProgress["待移交"] ?? 0);
+        setBadge("stories", data.countsByProgress["待移交"] ?? 0, revision);
     }
   }
   async function readNavCounts(ctx) {
@@ -1340,7 +1358,7 @@ function mountPortal(
   }
 
   function runView(render, content, ctx, initial) {
-    Promise.resolve()
+    return Promise.resolve()
       .then(() => ctx.current() && render(content, ctx, initial))
       .catch((error) => {
         if (ctx.current())
@@ -1372,11 +1390,12 @@ function mountPortal(
       if (accountChanged(error)) void restore("登录账号已切换，已刷新工作台。");
     }
     const call = async (name, input) => {
+      const revision = ++readRevision;
       try {
         const result = await scope.call(name, input);
         if (scope.current()) {
           shell.date(result.scope?.asOf);
-          countFromReport(name, input, result);
+          countFromReport(name, input, result, revision);
         }
         return result;
       } catch (error) {
@@ -1462,7 +1481,16 @@ function mountPortal(
       "review-board": (content, ctx) =>
         renderReview(content, ctx, meetingRecords),
     }[id];
-    runView(renderer, workspace, viewContext(page.signal), initial);
+    const ctx = viewContext(page.signal);
+    const asOf = byId("as-of");
+    const finishDate =
+      id === "workbench" && !asOf.textContent
+        ? beginSkeleton(asOf, (doc) => skeletonBlock(doc, "short"), {
+            signal: ctx.signal,
+            current: () => ctx.current() && !asOf.textContent,
+          })
+        : undefined;
+    void runView(renderer, workspace, ctx, initial).finally(finishDate);
   }
 
   function openTool(tool, initial = {}, options = {}) {
@@ -1499,7 +1527,11 @@ function mountPortal(
       busy = true;
       submit.disabled = true;
       refresh.disabled = true;
-      const finish = beginSkeleton(results, (doc) => querySkeleton(doc, tool, input), ctx);
+      const finish = beginSkeleton(
+        results,
+        (doc) => querySkeleton(doc, tool, input),
+        ctx,
+      );
       try {
         const result = await call(tool, input);
         if (!ctx.current()) return;
@@ -1558,7 +1590,9 @@ function mountPortal(
     if (loginButton.disabled) return;
     loginButton.disabled = true;
     loginStatus.textContent = "";
-    const finish = beginSkeleton(loginStatus, (doc) => skeletonBlock(doc, "short"));
+    const finish = beginSkeleton(loginStatus, (doc) =>
+      skeletonBlock(doc, "short"),
+    );
     try {
       await session.login(accountInput.value.trim(), passwordInput.value, {
         baseUrl: baseUrlInput.disabled ? undefined : baseUrlInput.value.trim(),
@@ -1638,7 +1672,9 @@ if (typeof document !== "undefined") {
       ),
     )
     .catch(() => {
-      document.getElementById("startup").textContent =
-        "无法加载工作台。请重新构建并启动本机服务。";
+      const startup = document.getElementById("startup");
+      startup.removeAttribute("aria-label");
+      startup.setAttribute("role", "alert");
+      startup.textContent = "无法加载工作台。请重新构建并启动本机服务。";
     });
 }

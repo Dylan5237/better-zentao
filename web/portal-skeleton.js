@@ -1,22 +1,31 @@
-import { skeletonBlock, skeletonTable, skeletonText } from "./skeleton.js";
+import {
+  skeletonBlock,
+  skeletonCard,
+  skeletonTable,
+  skeletonText,
+} from "./skeleton.js";
 
 const queryShapes = {
-  resolve_context: [8, 5],
   get_my_work: [0, 6],
   get_team_work: [3, 9],
-  get_member_schedule: [0, 7],
-  query_stories: [4, 8],
-  get_story_progress: [4, 8],
-  scan_workflow_risks: [4, 6],
-  get_operation: [1, 5],
-  get_monthly_dev_queue: [7, 10],
+  get_member_schedule: [0, 6],
+  query_stories: [4, 7],
+  get_story_progress: [6, 4],
+  scan_workflow_risks: [4, 8],
+  get_monthly_dev_queue: [7, 9],
 };
-const planShapes = { plan: [4, 8], release: [7, 3], iteration: [6, 8], commitment: [4, 2] };
+const planShapes = {
+  plan: [4, 10],
+  release: [7, 3],
+  iteration: [6, 8],
+  commitment: [3, 2],
+};
 
 export function querySkeleton(doc, tool, input) {
-  const [metrics, columns] = tool === "get_plan_progress"
-    ? (planShapes[input.view] ?? planShapes.plan)
-    : queryShapes[tool];
+  const [metrics, columns] =
+    tool === "get_plan_progress"
+      ? (planShapes[input.view] ?? planShapes.plan)
+      : queryShapes[tool];
   const root = doc.createElement("div");
   root.className = "sk-query";
   root.append(skeletonText(doc, 1));
@@ -26,14 +35,15 @@ export function querySkeleton(doc, tool, input) {
     const grid = doc.createElement("div");
     grid.className = "metrics";
     for (let i = 0; i < metrics; i++) {
-      const item = doc.createElement("div");
-      item.className = "metric";
-      item.append(skeletonText(doc, 2));
-      grid.append(item);
+      grid.append(skeletonCard(doc, skeletonBlock(doc, "short"), "metric"));
     }
     root.append(grid);
   }
-  root.append(skeletonTable(doc, columns));
+  const weeklyColumns =
+    tool === "get_member_schedule" && input.bucket !== "day" && input.weeks;
+  const taskList = tool === "get_story_progress" && input.view === "dev";
+  const count = weeklyColumns ? Math.min(input.weeks, 12) + 2 : columns;
+  root.append(skeletonTable(doc, taskList ? 8 : count));
   return root;
 }
 

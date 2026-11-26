@@ -1,5 +1,7 @@
 ﻿import { icon } from "./meridian-icons.js";
 import { roleGuide } from "./review-content.js";
+import { beginSkeleton } from "./skeleton.js";
+import { commandSkeleton } from "./portal-skeleton.js";
 
 const groups = [
   ["biz", "业务", "业务侧", ["FB"]],
@@ -254,16 +256,16 @@ export function createMeridianShell({
       })),
       { name: "账号与职责", group: "账号", sym: "Users", run: showAccount },
     ];
-    function paint(rows, q, notice = "") {
-      list.replaceChildren();
+    function paint(target, rows, { showEmpty, notice, offset = 0 } = {}) {
+      target.replaceChildren();
       let lastGroup;
       for (const [i, item] of rows.entries()) {
         if (lastGroup !== item.group) {
-          list.append(el("div", "cmd-group-label", item.group));
+          target.append(el("div", "cmd-group-label", item.group));
           lastGroup = item.group;
         }
         const b = btn(
-          "cmd-item" + (i === focus ? " is-active" : ""),
+          "cmd-item" + (i + offset === focus ? " is-active" : ""),
           null,
           () => {
             dialog.close();
@@ -275,10 +277,10 @@ export function createMeridianShell({
         sym.append(icon(item.sym, 15));
         left.append(sym, el("span", "cmd-item-label", item.name));
         b.append(left);
-        list.append(b);
+        target.append(b);
       }
-      if (notice || (!rows.length && q))
-        list.append(el("div", "cmd-empty", notice || "没有匹配结果"));
+      if (notice || (!rows.length && showEmpty))
+        target.append(el("div", "cmd-empty", notice || "没有匹配结果"));
     }
     function update() {
       clearTimeout(timer);
@@ -288,7 +290,7 @@ export function createMeridianShell({
       const q = input.value.trim(),
         rows = collected.filter((i) => i.name.includes(q));
       if (!q || !session.role.actions.includes("query_stories")) {
-        paint(rows, q);
+        paint(list, rows, { showEmpty: Boolean(q) });
         return;
       }
       const id = /^#?(\d+)$/.exec(q);
@@ -299,36 +301,37 @@ export function createMeridianShell({
           sym: "Layers",
           run: () => openStory(Number(id[1])),
         });
-        paint(rows, q);
+        paint(list, rows);
         return;
       }
-      paint(rows, "");
+      paint(list, rows);
       const remote = el("div");
       list.append(remote);
+      const finish = beginSkeleton(remote, commandSkeleton, {
+        signal: controller.signal,
+      });
+      finishSearch = finish;
       timer = setTimeout(async () => {
-        const finish = beginSkeleton(remote, commandSkeleton, {signal: controller.signal});
-        finishSearch = finish;
         try {
           const report = await ctx.call("query_stories", {
             keyword: q,
             limit: 8,
           });
           if (request !== revision || controller.signal.aborted) return;
-          for (const story of report.data?.items ?? [])
-            rows.push({
-              name: "#" + story.id + " " + story.title,
-              group: "需求",
-              sym: "Layers",
-              run: () => openStory(story.id),
-            });
-          paint(
-            rows,
-            q,
-            report.completeness === "partial" ? "部分需求未能读取" : "",
-          );
+          const hits = (report.data?.items ?? []).map((story) => ({
+            name: "#" + story.id + " " + story.title,
+            group: "需求",
+            sym: "Layers",
+            run: () => openStory(story.id),
+          }));
+          paint(remote, hits, {
+            offset: rows.length,
+            showEmpty: rows.length === 0,
+            notice: report.completeness === "partial" ? "部分需求未能读取" : "",
+          });
         } catch {
           if (request === revision && !controller.signal.aborted)
-            paint(rows, q, "需求检索暂不可用");
+            paint(remote, [], { notice: "需求检索暂不可用" });
         } finally {
           finish();
         }
@@ -454,5 +457,3 @@ export function createMeridianShell({
     clear: () => activePopup?.close(),
   };
 }
-import { beginSkeleton } from "./skeleton.js";
-import { commandSkeleton } from "./portal-skeleton.js";

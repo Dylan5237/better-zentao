@@ -524,7 +524,10 @@ const script = String.raw`
 
 export function renderTeamConfigEditorHtml(input: ConfigEditorData): string {
   const data = prepareConfigEditorData(input);
-  const skeletonCss = readFileSync(new URL("../../../../web/skeleton.css", import.meta.url), "utf8");
+  const skeletonCss = readFileSync(
+    new URL("../../../../web/skeleton.css", import.meta.url),
+    "utf8",
+  );
   const scriptHash = createHash("sha256").update(script).digest("base64");
   const json = JSON.stringify({ ...data, configKeys: teamConfigKeys })
     .replaceAll("<", "\\u003c")

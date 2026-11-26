@@ -251,6 +251,125 @@
   align-items: center;
 }
 
+.management-page .bucket-num[aria-busy="true"],
+.management-page .kpi-num[aria-busy="true"] {
+  min-height: 1.1em;
+}
+
+.management-skel-bucket-value.sk-block {
+  height: 1em;
+}
+
+.management-page .kpi-num > .sk-value {
+  width: 4.8ch;
+  height: 0.95em;
+}
+
+.management-skel-track.sk-block {
+  display: block;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+}
+
+.bucket-meter > .management-skel-track.sk-block,
+.kpi-ratio-bar > .management-skel-track.sk-block {
+  height: 100%;
+}
+
+.management-pending-table {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.management-pending-table > .table-wrap {
+  width: 100%;
+}
+
+.management-skel-ledger-title > .sk-short {
+  flex: 0 0 4ch;
+}
+
+.management-skel-ledger-title > .sk-text:last-child {
+  flex: 1 1 8rem;
+}
+
+.management-skel-check.sk-block {
+  flex: 0 0 1rem;
+  height: 1rem;
+}
+
+.management-skel-matrix .member-cell > .sk-lines {
+  width: 100%;
+}
+
+.management-skel-matrix .th-sub {
+  min-width: 3rem;
+}
+
+.management-skel-heat {
+  background: var(--bg-subtle);
+}
+
+.management-skel-heat > .sk-lines {
+  justify-items: center;
+}
+
+.management-skel-risk-list .item-row-title > .sk-title,
+.management-skel-recommendations .item-row-title > .sk-title {
+  flex: 1 1 6rem;
+}
+
+.management-gate-intro[aria-busy="true"] {
+  flex: 1;
+  min-width: 0;
+  min-height: 2.6rem;
+}
+
+.management-page .viz-ring[aria-busy="true"],
+.management-skel-ring.sk-block {
+  width: 58px;
+  height: 58px;
+}
+
+.management-skel-ring.sk-block {
+  --ring-placeholder: var(
+    --skeleton-fill,
+    color-mix(in srgb, var(--ink-secondary) 17%, var(--bg-subtle))
+  );
+  display: grid;
+  place-items: center;
+  border: 5px solid var(--ring-placeholder);
+  background: transparent;
+}
+
+.management-skel-ring::after {
+  content: "";
+  width: 24px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--ring-placeholder);
+}
+
+.management-skel-pairs .pair-compare-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.management-drawer-body .chat-bubble.is-bot[aria-busy="true"] {
+  width: min(27rem, 90%);
+  min-height: 5.6em;
+}
+
+.management-drawer-body .chat-bubble.is-bot:empty {
+  visibility: hidden;
+}
+
+.management-skel-reply > .sk-button {
+  margin-top: 8px;
+}
+
 @media (max-width: 1140px), (max-height: 619px) {
   .management-tab-body {
     overflow: visible;

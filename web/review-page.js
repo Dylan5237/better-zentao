@@ -1,3 +1,5 @@
+import { assistantReply } from "./management-skeleton.js";
+import { icon } from "./meridian-icons.js";
 import {
   decisions,
   norms,
@@ -6,7 +8,7 @@ import {
   steps,
   walkthrough,
 } from "./review-content.js";
-import { icon } from "./meridian-icons.js";
+import { beginSkeleton } from "./skeleton.js";
 
 const sections = [
   ["workbench", "工作台"],
@@ -610,7 +612,7 @@ const route = (reply, label, view, initial) => ({
   initial,
 });
 
-async function respondTo(text, ctx) {
+async function respondTo(text, ctx, read) {
   const business = ctx.role.id === "FB";
   const storyId = Number(
     /(?:#|需求\s*)\s*(\d+)/u.exec(text)?.[1] ?? /^\d+$/u.exec(text)?.[0],
@@ -620,7 +622,7 @@ async function respondTo(text, ctx) {
     storyId > 0 &&
     may(ctx, "get_story_progress")
   ) {
-    const result = await ctx.call("get_story_progress", { storyId });
+    const result = await read("get_story_progress", { storyId });
     const { story, progress, people } = result?.data ?? {};
     if (!result?.ok || !story || !progress)
       return { reply: "当前职责的读取范围内未找到这条需求。" };
@@ -662,7 +664,7 @@ async function respondTo(text, ctx) {
   }
   if (/风险|卡点|逾期/u.test(text) && may(ctx, "scan_workflow_risks")) {
     const mine = ["DM", "DS", "RD", "QA"].includes(ctx.role.id);
-    const result = await ctx.call("scan_workflow_risks", {
+    const result = await read("scan_workflow_risks", {
       scope: mine ? { mine: true } : {},
     });
     const hits = result?.data?.hits?.filter(({ waived }) => !waived);
@@ -770,17 +772,28 @@ export function renderShortcuts(container, ctx) {
     scroll.scrollTop = scroll.scrollHeight;
   }
   async function showReply(text, example) {
+    if (!ctx.current()) return;
     stream.hidden = false;
     const turn = add(stream, "div", undefined, "agent-turn");
     add(turn, "div", text, "chat-bubble is-user");
     const bot = add(turn, "div", undefined, "chat-bubble is-bot");
-    const copy = add(bot, "p");
-    if (!example) copy.textContent = "正在处理…";
+    const read = async (tool, args) => {
+      const finish = beginSkeleton(bot, assistantReply, {
+        signal: ctx.signal,
+        current: ctx.current,
+      });
+      scrollToLatest();
+      try {
+        return await ctx.call(tool, args);
+      } finally {
+        finish();
+      }
+    };
     scrollToLatest();
     try {
-      const reply = example ?? (await respondTo(text, ctx));
+      const reply = example ?? (await respondTo(text, ctx, read));
       if (!ctx.current()) return;
-      copy.textContent = reply.reply;
+      add(bot, "p", reply.reply);
       if (reply.label)
         button(
           bot,
@@ -795,8 +808,9 @@ export function renderShortcuts(container, ctx) {
         );
       scrollToLatest();
     } catch (error) {
-      if (ctx.current())
-        copy.textContent = error?.message || "禅道查询未成功，请重试。";
+      if (!ctx.current()) return;
+      add(bot, "p", error?.message || "禅道查询未成功，请重试。");
+      scrollToLatest();
     }
   }
 

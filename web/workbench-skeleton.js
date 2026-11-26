@@ -2,7 +2,7 @@ import { add, pendingBlock } from "./meridian-home-controls.js";
 
 export function pendingItems(
   list,
-  { group = false, tag = false, actions = 1 } = {},
+  { group = false, tag = false, actions = 1, actionKind = "button" } = {},
 ) {
   for (let i = 0; i < 4; i++) {
     if (group && i % 2 === 0)
@@ -15,7 +15,7 @@ export function pendingItems(
     pendingBlock(add(main, "span", undefined, "item-row-sub"), "text");
     if (actions) {
       const controls = add(row, "div", undefined, "row-actions");
-      for (let j = 0; j < actions; j++) pendingBlock(controls, "button");
+      for (let j = 0; j < actions; j++) pendingBlock(controls, actionKind);
     }
   }
 }
@@ -36,14 +36,24 @@ export function pendingFeedback(list) {
       pendingBlock(step, "avatar", "viz-step-dot");
       pendingBlock(step, "short", "viz-step-label");
     }
-    const meta = add(card, "div", undefined, "fb-story-meta workbench-feedback-meta");
+    const meta = add(
+      card,
+      "div",
+      undefined,
+      "fb-story-meta workbench-feedback-meta",
+    );
     pendingBlock(meta, "text");
   }
 }
 
 export function pendingDistribution(parent, legendItems, summary = false) {
   pendingBlock(parent, "text", "viz-stacked-bar workbench-pending-bar");
-  const legend = add(parent, "div", undefined, summary ? "l3-dist-legend" : "l3-tile-meta");
+  const legend = add(
+    parent,
+    "div",
+    undefined,
+    summary ? "l3-dist-legend" : "l3-tile-meta",
+  );
   for (let i = 0; i < legendItems; i++) pendingBlock(legend, "chip");
 }
 

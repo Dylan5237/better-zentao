@@ -1,31 +1,37 @@
 // A host owns one pending read. A late response must never remove its successor.
 const pending = new WeakMap();
 export function beginSkeleton(host, scene, { signal, current } = {}) {
-  pending.get(host)?.();
   if (signal?.aborted || (current && !current())) return () => {};
-  let node;
+  const previous = pending.get(host);
+  const visible = Boolean(previous?.node);
+  previous?.finish();
+  const request = { finish, node: undefined };
+  let timer;
   host.setAttribute("aria-busy", "true");
-  const timer = setTimeout(() => {
+  function show() {
     if (current && !current()) {
       finish();
       return;
     }
-    node = scene(host.ownerDocument);
+    const node = scene(host.ownerDocument);
     node.setAttribute("aria-hidden", "true");
     node.setAttribute("inert", "");
+    request.node = node;
     host.replaceChildren(node);
-  }, 120);
+  }
   function finish() {
-    if (pending.get(host) !== finish) return;
+    if (pending.get(host) !== request) return;
     clearTimeout(timer);
     signal?.removeEventListener("abort", finish);
-    node?.remove?.();
+    request.node?.remove?.();
     if (host.removeAttribute) host.removeAttribute("aria-busy");
     else host.setAttribute("aria-busy", "false");
     pending.delete(host);
   }
-  pending.set(host, finish);
+  pending.set(host, request);
   signal?.addEventListener("abort", finish, { once: true });
+  if (visible) show();
+  else timer = setTimeout(show, 120);
   return finish;
 }
 
@@ -41,27 +47,31 @@ export function skeletonBlock(doc, kind = "text") {
 export function skeletonText(doc, lines = 2) {
   const group = element(doc, "div", "sk-lines");
   for (let i = 0; i < lines; i++)
-    group.append(skeletonBlock(doc, i === lines - 1 && lines > 1 ? "short" : "text"));
+    group.append(
+      skeletonBlock(doc, i === lines - 1 && lines > 1 ? "short" : "text"),
+    );
   return group;
 }
-export function skeletonRows(doc, count = 4) {
+export function skeletonRows(doc, count = 4, draw) {
   const list = element(doc, "div", "sk-rows");
   for (let i = 0; i < count; i++) {
     const row = element(doc, "div", "item-row sk-row");
-    row.append(skeletonText(doc), skeletonBlock(doc, "chip"));
+    if (draw) draw(row);
+    else row.append(skeletonText(doc), skeletonBlock(doc, "chip"));
     list.append(row);
   }
   return list;
 }
-export function skeletonCard(doc, content) {
-  const card = element(doc, "div", "vp-card sk-card");
+export function skeletonCard(doc, content, className = "vp-card") {
+  const card = element(doc, "div", className + " sk-card");
   card.append(skeletonBlock(doc, "title"), content ?? skeletonRows(doc));
   return card;
 }
 export function skeletonTable(doc, columns = 4, rows = 4) {
   const wrap = element(doc, "div", "table-wrap sk-table");
   const table = element(doc, "table", "data-table");
-  const head = element(doc, "thead"), body = element(doc, "tbody");
+  const head = element(doc, "thead"),
+    body = element(doc, "tbody");
   function row(section, tag) {
     const tr = element(doc, "tr");
     for (let i = 0; i < columns; i++) {

@@ -152,7 +152,14 @@ function card(parent, title, { subtitle, grouped = false } = {}) {
   return { panel, header, copy };
 }
 
-function metric(parent, pending, label, value, hint, { click, tone } = {}) {
+function metric(
+  parent,
+  pending,
+  label,
+  value,
+  hint,
+  { click, tone, pendingHint = false } = {},
+) {
   const node = add(
     parent,
     click ? "button" : "div",
@@ -170,11 +177,10 @@ function metric(parent, pending, label, value, hint, { click, tone } = {}) {
     pending ? undefined : value,
     tone ? `kpi-num tabular workbench-${tone}` : "kpi-num tabular",
   );
+  if (pending) pendingBlock(measure, "value");
   const foot = add(node, "div", undefined, "kpi-foot");
-  if (pending) {
-    pendingBlock(measure, "value");
-    pendingBlock(foot, "text");
-  } else {
+  if (pending && pendingHint) pendingBlock(foot, "text");
+  else {
     add(foot, "span", hint);
     if (click) addIcon(foot, "ArrowRight", 13);
   }
@@ -826,6 +832,7 @@ function renderDevelopmentLead(
     "组内在研需求",
     count(queue, sameScope ? queue.data?.counts?.inDev : undefined),
     sameScope ? "已排期进入研发或测试阶段" : "需确认主管团队范围",
+    { pendingHint: true },
   );
   addMetric(
     "团队逾期任务（仅叶子）",
@@ -1045,15 +1052,10 @@ function renderDeveloper(parent, ctx, { work, personalTasks }) {
         ? undefined
         : attentionTone(overdue),
   });
-  addMetric(
-    "今日到期",
-    count(source, total("due_today")),
-    "今日到期不算逾期",
-    {
-      click: () => select("due_today"),
-      tone: "warn",
-    },
-  );
+  addMetric("今日到期", count(source, total("due_today")), "今日到期不算逾期", {
+    click: () => select("due_today"),
+    tone: "warn",
+  });
   addMetric(
     "临近截止 / 未排期",
     count(source, soon),
@@ -1086,7 +1088,9 @@ function renderDeveloper(parent, ctx, { work, personalTasks }) {
     copy,
     filterTypes.map(([id, label, total]) => [
       id,
-      ctx.pending ? label : `${label} (${count(id === "new" ? work : source, total)})`,
+      ctx.pending
+        ? label
+        : `${label} (${count(id === "new" ? work : source, total)})`,
     ]),
     active,
     select,
@@ -1117,7 +1121,8 @@ function renderDeveloper(parent, ctx, { work, personalTasks }) {
     ],
     search: taskSearch,
     empty: "当前筛选条件下暂无待办任务。",
-    pendingRows: (items) => pendingItems(items, { group: true, tag: true, actions: 2 }),
+    pendingRows: (items) =>
+      pendingItems(items, { group: true, tag: true, actions: 2 }),
     include: (row) =>
       active === "all" ||
       (active === "new"
@@ -1177,33 +1182,40 @@ function releaseGate(parent, ctx, product, report) {
   const [state, description] = status ?? ["", "门禁待核对"];
   const hero = add(parent, "section", undefined, "gate-hero " + state);
   const left = add(hero, "div", undefined, "gate-hero-left");
-  add(
-    left,
-    "span",
-    undefined,
-    "traffic-lamp " + (state || "workbench-lamp-unknown"),
-  ).setAttribute("aria-hidden", "true");
-  const copy = add(left, "div");
   const title = product ? "发布门禁" : "版本发布体检";
   const remaining = data?.workdaysUntilRelease;
   const date = data?.releaseDate
     ? `（${data.releaseDate}${Number.isFinite(remaining) && remaining >= 0 ? `，剩 ${remaining} 个工作日` : ""}）`
     : "";
-  add(
-    copy,
-    "strong",
-    data ? `${data.version} ${title}${date}：${description}` : title,
-  );
-  add(
-    copy,
-    "p",
-    data
-      ? `未完测试 ${count(report, data.testIncompleteStoryIds?.length, " 条")} · 高危 Bug ${count(report, data.openSeriousBugs?.length, " 条")}`
-      : planner
-        ? "选定产品和版本后核对未完成测试、高优 Bug 与例外记录。"
-        : "查看与您相关的测试和 Bug 风险。",
-    "gate-sub",
-  );
+  if (ctx.pending && report) {
+    pendingBlock(left, "avatar", "traffic-lamp");
+    const copy = add(left, "div", undefined, "workbench-pending-gate-copy");
+    pendingBlock(copy, "title");
+    pendingBlock(add(copy, "p", undefined, "gate-sub"), "text");
+  } else {
+    add(
+      left,
+      "span",
+      undefined,
+      "traffic-lamp " + (state || "workbench-lamp-unknown"),
+    ).setAttribute("aria-hidden", "true");
+    const copy = add(left, "div");
+    add(
+      copy,
+      "strong",
+      data ? `${data.version} ${title}${date}：${description}` : title,
+    );
+    add(
+      copy,
+      "p",
+      data
+        ? `未完测试 ${count(report, data.testIncompleteStoryIds?.length, " 条")} · 高危 Bug ${count(report, data.openSeriousBugs?.length, " 条")}`
+        : planner
+          ? "选定产品和版本后核对未完成测试、高优 Bug 与例外记录。"
+          : "查看与您相关的测试和 Bug 风险。",
+      "gate-sub",
+    );
+  }
   const label = planner
     ? product
       ? "查看发布门禁"
@@ -1233,7 +1245,7 @@ function renderTesting(parent, ctx, { work, gate }) {
   ]) {
     const { panel, header } = card(grid, title);
     const rows = unique(tasks).filter(({ isParent }) => !isParent);
-    const tally = badge(header, "", imminent ? "primary" : "success");
+    const tally = resultBadge(header, ctx, imminent ? "primary" : "success");
     filteredList(panel, ctx, {
       rows,
       source: work,
@@ -1260,6 +1272,8 @@ function renderTesting(parent, ctx, { work, gate }) {
       search: taskSearch,
       placeholder: "检索测试任务 / #ID…",
       empty: imminent ? "暂无即将转测的待排期任务" : "暂无新近转入待测的任务",
+      pendingRows: (items) =>
+        pendingItems(items, { actions: imminent ? 0 : 1, actionKind: "chip" }),
       onCount: (total) => {
         tally.textContent = count(work, total, " 项");
       },
@@ -1336,7 +1350,16 @@ function renderProduct(parent, ctx, { plan, gate }) {
     `${monthName(plan)}各模块 L3 计划完成度`,
   );
   const report = plan.data;
-  if (report) {
+  if (ctx.pending) {
+    const badges = add(header, "div", undefined, "row-actions");
+    pendingBlock(badges, "chip", "workbench-pending-plan-rate");
+    pendingBlock(badges, "chip", "workbench-pending-plan-rate");
+    pendingDistribution(
+      add(panel, "div", undefined, "l3-dist-wrap"),
+      planStatuses.length,
+      true,
+    );
+  } else if (report) {
     const badges = add(header, "div", undefined, "row-actions");
     badge(
       badges,
@@ -1362,6 +1385,7 @@ function renderProduct(parent, ctx, { plan, gate }) {
     placeholder: "检索 L3 模块…",
     empty: "当前筛选条件下暂无匹配的 L3 模块计划。",
     contentClass: "l3-bars is-two-col vp-scroll",
+    pendingRows: pendingPlanTiles,
     display: (items, group) => {
       const row = add(
         items,
@@ -1419,9 +1443,8 @@ function renderProject(parent, ctx, { risks, commitment }) {
   const snapshotScope = partial
     ? { ...commitment, completeness: "partial" }
     : commitment;
-  const measures = add(parent, "div", undefined, "kpi-grid-3");
-  metric(
-    measures,
+  const addMetric = metricGrid(parent, 3, ctx.pending);
+  addMetric(
     "高危阻断卡点",
     count(risks, high),
     "任务逾期 / 测试断档 / 发布门禁",
@@ -1433,8 +1456,7 @@ function renderProject(parent, ctx, { risks, commitment }) {
           : attentionTone(high),
     },
   );
-  metric(
-    measures,
+  addMetric(
     `${monthName(commitment)}承诺基线`,
     count(snapshotScope, baseline, " 条"),
     baseline === undefined
@@ -1444,10 +1466,10 @@ function renderProject(parent, ctx, { risks, commitment }) {
         : "依据月初快照",
     {
       click: go(ctx, "release-risks", "plans"),
+      pendingHint: true,
     },
   );
-  metric(
-    measures,
+  addMetric(
     "已留痕顺延 / 挪月",
     count(snapshotScope, recorded, " 条"),
     "仅统计有原因记录的顺延",
@@ -1504,6 +1526,7 @@ function renderProject(parent, ctx, { risks, commitment }) {
       ].join(" "),
     placeholder: "检索风险、规则或对接人…",
     empty: "当前没有发现匹配的待处理卡点。",
+    pendingRows: (items) => pendingItems(items, { tag: true }),
     display: (items, hit) => {
       const severity = riskSeverities.get(hit.severity);
       const ref = `#${hit.object.id} ${hit.object.title}`;
@@ -1658,7 +1681,14 @@ function homeQueries(ctx, profile, selectedTeam) {
   return reads;
 }
 
-function showEvidence(parent, reads) {
+function evidenceSkeleton(parent, className, height) {
+  const block = add(parent, "div", undefined, className);
+  if (height) block.style.setProperty("min-height", `${height}px`);
+  pendingBlock(block, "title");
+  return block;
+}
+
+function showEvidence(parent, reads, pending = false) {
   const notes = [];
   const gaps = [];
   let observed;
@@ -1680,14 +1710,11 @@ function showEvidence(parent, reads) {
     }
   }
   if (gaps.length || notes.length) {
-    const evidence = add(
-      parent,
-      "details",
-      undefined,
-      gaps.length
-        ? "bzt-alert tone-warn workbench-evidence"
-        : "workbench-evidence page-sub",
-    );
+    const className = gaps.length
+      ? "bzt-alert tone-warn workbench-evidence"
+      : "workbench-evidence page-sub";
+    if (pending) return evidenceSkeleton(parent, className);
+    const evidence = add(parent, "details", undefined, className);
     add(
       evidence,
       "summary",
@@ -1696,6 +1723,7 @@ function showEvidence(parent, reads) {
     if (observed) add(evidence, "p", "数据时间 " + observed);
     const entries = add(evidence, "ul");
     for (const note of new Set([...gaps, ...notes])) add(entries, "li", note);
+    return evidence;
   }
 }
 
@@ -1761,46 +1789,94 @@ export async function renderWorkbench(container, ctx) {
   const teams = ctx.role.id === "RM" ? (ctx.developmentTeams ?? []) : [];
   const initialTeam = teams[0]?.id;
   let generation = 0;
+  let activeTab = 0;
+  let teamNote;
+  const evidenceByTeam = new Map();
+  function showTeam(team) {
+    if (teamNote)
+      teamNote.textContent =
+        "当前视角：" + teams.find(({ id }) => id === team).name;
+  }
   if (initialTeam) {
     const toolbar = add(root, "div", undefined, "toolbar-row");
-    const teamNote = add(
-      toolbar,
-      "p",
-      "当前视角：" + teams[0].name,
-      "toolbar-note",
-    );
+    teamNote = add(toolbar, "p", "当前视角：" + teams[0].name, "toolbar-note");
     pills(
       toolbar,
       teams.map(({ id, name }) => [id, name]),
       initialTeam,
-      (team) => {
-        teamNote.textContent =
-          "当前视角：" + teams.find(({ id }) => id === team).name;
-        void load(team);
-      },
+      (team) => void load(team),
       "segmented-tabs",
     );
   }
   const body = add(root, "div", undefined, "workbench-body");
+  function renderContent(parent, context, reads, team) {
+    if (mode === "zentao")
+      renderNativeWorkbench(parent, context, reads, {
+        activeTab,
+        selectTab: (next) => {
+          activeTab = next;
+        },
+      });
+    else profile.render(parent, context, reads, team);
+  }
   async function load(team) {
+    if (!ctx.current()) return;
     const version = ++generation;
-    body.replaceChildren();
-    add(body, "p", "正在读取工作台数据…", "page-sub").setAttribute(
-      "role",
-      "status",
+    const current = () => ctx.current() && version === generation;
+    const queries = homeQueries(ctx, profile, team);
+    const sources = Object.fromEntries(
+      queries.map(([key, source]) => [key, { source }]),
     );
-    const reads = Object.fromEntries(
+    const reads = { ...sources };
+    const finish = beginSkeleton(
+      body,
+      (doc) => {
+        const scene = doc.createElement("div");
+        scene.className = "workbench-body workbench-skeleton";
+        renderContent(
+          scene,
+          { ...ctx, pending: true, setBadge: undefined },
+          sources,
+          team,
+        );
+        const previous = evidenceByTeam.get(team);
+        if (!showEvidence(scene, reads, true)) {
+          if (previous)
+            evidenceSkeleton(scene, previous.className, previous.height);
+          else if (ctx.role.id === "DM" && mode !== "zentao")
+            evidenceSkeleton(
+              scene,
+              "bzt-alert workbench-evidence workbench-pending-note",
+            );
+        }
+        showTeam(team);
+        return scene;
+      },
+      { signal: ctx.signal, current },
+    );
+    try {
       await Promise.all(
-        homeQueries(ctx, profile, team).map((input) => read(ctx, input)),
-      ),
-    );
-    if (!ctx.current() || version !== generation) return;
-    body.replaceChildren();
-    if (mode === "zentao") renderNativeWorkbench(body, ctx, reads);
-    else profile.render(body, ctx, reads, team);
-    showEvidence(body, reads);
-    if (ctx.role.id === "DM" && mode !== "zentao")
-      showDesignReminder(body, ctx, reads);
+        queries.map(async (input) => {
+          const [key, result] = await read(ctx, input);
+          reads[key] = result;
+        }),
+      );
+      if (!current()) return;
+      showTeam(team);
+      body.replaceChildren();
+      renderContent(body, ctx, reads, team);
+      const evidence = showEvidence(body, reads);
+      if (evidence && ctx.role.id === "RM")
+        evidenceByTeam.set(team, {
+          className: evidence.className,
+          height: evidence.getBoundingClientRect?.().height,
+        });
+      else evidenceByTeam.delete(team);
+      if (ctx.role.id === "DM" && mode !== "zentao")
+        showDesignReminder(body, ctx, reads);
+    } finally {
+      finish();
+    }
   }
   await load(initialTeam);
 }
