@@ -460,29 +460,71 @@ it("Gate C P1-1 退出发生在确认预检期间时中止派发，不向禅道�
   expect(upstream.writes()).toEqual([]);
 });
 
-it("Gate C P1-3 详情返回 403 时同步失效已缓存的聚合报表", async () => {
-  const client = browser(await fixture.start());
+it("Gate C P1-3 详情返回 403/404 时失效缓存，且缩短 TTL 后旧快照立即失效", async () => {
+  const first = await fixture.start();
+  const client = browser(first);
   await login(client);
   const upstream = fixture.upstream();
   const { initialTitle } = upstream.instances.instanceA;
   expectReport(await client.call(report), initialTitle);
   upstream.fail("instanceA", "alice", storyPath, 403);
   expectPermissionDenied(await client.call(detail));
-  const cached = await client.call({ ...report, readMode: "cached" });
-  expect(JSON.stringify(cached.body)).not.toContain(initialTitle);
+  const cachedAfter403 = await client.call({ ...report, readMode: "cached" });
+  expect(JSON.stringify(cachedAfter403.body)).not.toContain(initialTitle);
+
+  upstream.fail("instanceA", "alice", storyPath);
+  expectReport(await client.call(report), initialTitle);
+  upstream.fail("instanceA", "alice", storyPath, 404);
+  const notFound = await client.call(detail);
+  expect(notFound.status).toBe(400);
+  expect(notFound.body).toMatchObject({
+    ok: false,
+    code: "NOT_FOUND",
+  });
+  const cachedAfter404 = await client.call({ ...report, readMode: "cached" });
+  expect(JSON.stringify(cachedAfter404.body)).not.toContain(initialTitle);
+
+  upstream.fail("instanceA", "alice", storyPath);
+  expectReport(await client.call(report), initialTitle);
+  await fixture.close(first);
+
+  fixture.advance(61_000);
+  const tightened = browser(
+    await fixture.start({
+      cache: { reportTtlSeconds: 60 },
+    }),
+  );
+  await login(tightened);
+  upstream.fail("instanceA", "alice", reportPath, 403);
+  const stale = await tightened.call({ ...report, readMode: "cached" });
+  expect(JSON.stringify(stale.body)).not.toContain(initialTitle);
 });
 
-it("Gate C P1-4 配置版本变更作废旧预览，撤权后切低权限角色不可读原回执", async () => {
+it("Gate C P1-4 配置版本变更作废旧预览，撤权后即使新角色共享同一工具也不可读原回执", async () => {
+  const file = fixture.teamPath("instanceA");
+  await writeFile(
+    file,
+    JSON.stringify({
+      roles: {
+        RM: ["alice", "bob"],
+        DM: ["alice", "bob"],
+        RD: ["alice", "bob"],
+      },
+    }),
+  );
   const client = browser(await fixture.start({ readOnly: false }));
   await login(client);
   const opId = await prepare(client);
   fixture.advance(3001);
 
-  const file = fixture.teamPath("instanceA");
   await writeFile(
     file,
     JSON.stringify({
-      roles: { RM: ["alice", "bob"], RD: ["alice", "bob"] },
+      roles: {
+        RM: ["alice", "bob"],
+        DM: ["alice", "bob"],
+        RD: ["alice", "bob"],
+      },
       timeState: { dueSoonWorkdays: 4 },
     }),
   );
@@ -495,9 +537,18 @@ it("Gate C P1-4 配置版本变更作废旧预览，撤权后切低权限角色�
 
   await writeFile(
     file,
-    JSON.stringify({ roles: { RM: ["bob"], RD: ["alice", "bob"] } }),
+    JSON.stringify({
+      roles: { RM: ["bob"], DM: ["alice", "bob"], RD: ["alice", "bob"] },
+    }),
   );
   expectPermissionDenied(await client.call(operation(opId2)));
+  expectPermissionDenied(
+    await client.call({
+      role: "DM",
+      tool: "get_operation",
+      input: { opId: opId2 },
+    }),
+  );
   expectPermissionDenied(
     await client.call({
       role: "RD",

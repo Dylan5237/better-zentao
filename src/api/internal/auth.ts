@@ -51,5 +51,9 @@ export function createZentaoAuth(login: () => Promise<string>) {
     current = { token };
   }
 
-  return { getSession, invalidate, seedSession };
+  function clearSession(): void {
+    current = undefined;
+  }
+
+  return { getSession, invalidate, seedSession, clearSession };
 }

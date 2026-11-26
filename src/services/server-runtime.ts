@@ -6,6 +6,7 @@ import { z } from "zod";
 import {
   createZentaoReadClient,
   exchangeZentaoSessionToken,
+  revokeZentaoReadClient,
   type ZentaoReadClient,
 } from "../api/client.ts";
 import { sampleMyActivity } from "../api/my.ts";
@@ -113,6 +114,12 @@ const writeTools = new Set<string>([
 
 const bypassCacheTools = new Set<string>(["get_story_progress"]);
 const storedInstanceSchema = z.object({ instanceHash: z.string() });
+const storedOpGrantSchema = z.strictObject({
+  instanceId: z.string(),
+  role: z.string(),
+});
+const opGrantPrefix = "portal-op-grant-v1:";
+const opGrantTtlMs = 365 * 24 * 60 * 60_000;
 const previewIdSchema = z.object({
   opId: z.string().min(1),
   preview: z.object({}),
@@ -228,6 +235,7 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
   function revokeSession(session: ServerSession): void {
     if (session.revoked) return;
     session.revoked = true;
+    revokeZentaoReadClient(session.client);
     session.previews.clear();
     if (sessions.get(session.sessionId) === session) {
       sessions.delete(session.sessionId);
@@ -427,6 +435,7 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
             revokeSession(bound.session);
           }
         },
+        isRevoked: () => bound.session?.revoked === true,
       });
       // 登录必须先回读并核对禅道身份，核对通过前不创建会话也不打开 state.db。
       const viewer = await getCurrentUser(client);
@@ -563,12 +572,25 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
               const roleAllowsKind = page.actions.some(
                 (action) => action === record.kind,
               );
+              const rawGrant = session.userContext.store.cache.get(
+                opGrantPrefix + opId,
+              );
+              const parsedGrant = rawGrant
+                ? storedOpGrantSchema.safeParse(JSON.parse(rawGrant))
+                : undefined;
+              const grantMatches =
+                parsedGrant === undefined
+                  ? true
+                  : parsedGrant.success &&
+                    parsedGrant.data.instanceId === session.instanceId &&
+                    parsedGrant.data.role === page.id;
               ownedDispatched =
                 record.actor === session.account &&
                 meta.success &&
                 meta.data.instanceHash === session.instanceHash &&
                 record.executedAt !== null &&
-                roleAllowsKind;
+                roleAllowsKind &&
+                grantMatches;
             } catch {
               ownedDispatched = false;
             }
@@ -662,6 +684,18 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
             role: page.id,
             configVersion: team.version,
           });
+          try {
+            session.userContext.store.cache.set(
+              opGrantPrefix + prepared.data.opId,
+              JSON.stringify({
+                instanceId: session.instanceId,
+                role: page.id,
+              }),
+              opGrantTtlMs,
+            );
+          } catch {
+            // 回执归属元数据落盘失败不影响预览返回。
+          }
         }
         const projected =
           request.readMode === "cached" && !reportExists(value)

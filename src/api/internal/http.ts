@@ -47,6 +47,8 @@ export interface ZentaoHttpOptions {
   readonly token?: string;
   /** Token-only 模式下遇上游 401 时触发，供服务端立即撤销会话。 */
   readonly onAuthFailed?: () => void;
+  /** 发送前最终撤销检查（在取得写锁与异步等待之后、实际 fetch 之前调用）。 */
+  readonly isRevoked?: () => boolean;
   /** 可选分区读取并发池（Server 1.0）。 */
   readonly readPool?: PartitionedReadPool;
   /** 分区并发池所需的实例哈希键。 */
@@ -567,9 +569,13 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     let replayed = false;
     let retries = 0;
     for (;;) {
+      if (options.isRevoked?.()) throw authFailed();
       const session = await auth.getSession();
       capture?.observeSession(session.token);
-      const runRead = () => send(prepared, session.token);
+      const runRead = () => {
+        if (options.isRevoked?.()) throw authFailed();
+        return send(prepared, session.token);
+      };
       const result =
         options.readPool && options.instanceHash
           ? await options.readPool.withReadSlot(
@@ -617,6 +623,7 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       body: encodeBody(request.body),
     };
     return withInstanceWriteLock(baseUrl, async () => {
+      if (options.isRevoked?.()) throw preSendAuthFailure(authFailed());
       let session;
       try {
         session = await auth.getSession();
@@ -625,6 +632,10 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
         if (error instanceof BztError && error.code === "AUTH_FAILED")
           throw preSendAuthFailure(error);
         throw error;
+      }
+      if (options.isRevoked?.()) {
+        auth.invalidate(session);
+        throw preSendAuthFailure(authFailed());
       }
       const result = await send(prepared, session.token);
       if (result.kind === "success") {
@@ -664,5 +675,9 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     });
   }
 
-  return { read, write, getProbeSender };
+  function revoke(): void {
+    auth.clearSession();
+  }
+
+  return { read, write, getProbeSender, revoke };
 }

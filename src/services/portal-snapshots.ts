@@ -105,20 +105,30 @@ export function createPortalSnapshots(
     if (bypassTools?.has(tool)) {
       if (mode === "cached") return { ok: false };
       try {
-        return await fetchReport();
+        const result = await fetchReport();
+        const parsed = report.safeParse(result);
+        if (parsed.success && parsed.data.completeness === "partial") {
+          invalidate();
+        }
+        return result;
       } catch (error) {
         if (
           error instanceof BztError &&
-          (error.code === "AUTH_FAILED" || error.code === "PERMISSION_DENIED")
+          (error.code === "AUTH_FAILED" ||
+            error.code === "PERMISSION_DENIED" ||
+            error.code === "NOT_FOUND")
         ) {
-          // 授权优先于缓存：直读对象被明确拒绝时，立即失效该用户已缓存的聚合报表。
+          // 授权优先于缓存：直读对象被明确拒绝或不可见时，立即失效该用户已缓存的聚合报表。
           invalidate();
         }
         throw error;
       }
     }
     const key = prefix + hash([configRevision, role, tool, input]);
-    const old = load(key, row);
+    const loaded = load(key, row);
+    const old =
+      loaded && clock() - loaded.savedAt < effectiveTtlMs ? loaded : undefined;
+    if (loaded && !old) evict(key);
     if (old && mode !== "sync") return response(old, true);
     if (mode === "cached") return { ok: false };
     const pending = inFlight.get(key);

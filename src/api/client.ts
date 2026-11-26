@@ -1,7 +1,10 @@
 import type { Clock } from "../core/clock.ts";
 import type { PartitionedReadPool } from "../core/http-policy.ts";
 import { exchangeZentaoToken } from "./internal/http.ts";
-import { registerReadClient } from "./internal/read-client.ts";
+import {
+  registerReadClient,
+  revokeReadClient,
+} from "./internal/read-client.ts";
 
 const readClientBrand: unique symbol = Symbol("ZentaoReadClient");
 
@@ -22,6 +25,7 @@ export type ZentaoReadConfig = ZentaoReadCredentials & {
   }>;
   readonly logSink?: (line: string) => void;
   readonly onAuthFailed?: () => void;
+  readonly isRevoked?: () => boolean;
   readonly readPool?: PartitionedReadPool;
   readonly instanceHash?: string;
 };
@@ -58,4 +62,8 @@ export function createZentaoReadClient(
   );
   registerReadClient(client, config);
   return client;
+}
+
+export function revokeZentaoReadClient(client: ZentaoReadClient): void {
+  revokeReadClient(client);
 }

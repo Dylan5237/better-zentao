@@ -311,4 +311,48 @@ describe("SRV-CONC-02 分区读取并发池", () => {
       await Promise.allSettled([active, queued]);
     }
   });
+
+  it("Gate C P1-1 等待实例写锁期间撤销会话后不发送写入，且后续读写均失败", async () => {
+    const holder = Promise.withResolvers<Response>();
+    const fetchA = vi.fn<typeof fetch>(() => holder.promise);
+    const fetchB = vi.fn<typeof fetch>(async () =>
+      Response.json({ id: 202 }, { status: 201 }),
+    );
+    let revoked = false;
+    const httpA = createZentaoHttp({
+      baseUrl,
+      account: "acct_a",
+      token,
+      clock,
+      fetch: fetchA,
+    });
+    const httpB = createZentaoHttp({
+      baseUrl,
+      account: "acct_b",
+      token,
+      clock,
+      fetch: fetchB,
+      isRevoked: () => revoked,
+    });
+
+    const firstWrite = httpA.write(writeStory, storyDto);
+    await vi.waitFor(() => expect(fetchA).toHaveBeenCalledOnce());
+    const secondWrite = httpB.write(writeStory, storyDto).catch((err) => err);
+    revoked = true;
+    httpB.revoke();
+    holder.resolve(Response.json({ id: 101 }, { status: 201 }));
+
+    await expect(firstWrite).resolves.toEqual({
+      status: "accepted",
+      data: { id: 101 },
+    });
+    expect(await secondWrite).toMatchObject({
+      code: "AUTH_FAILED",
+      details: { phase: "pre_send" },
+    });
+    await expect(httpB.read(story, storyDto)).rejects.toMatchObject({
+      code: "AUTH_FAILED",
+    });
+    expect(fetchB).not.toHaveBeenCalled();
+  });
 });
