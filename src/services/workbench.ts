@@ -327,7 +327,20 @@ async function assemble(
     },
     async confirmOperation(input: ConfirmOperation) {
       const options = await forWrite();
+      let replay = false;
+      try {
+        const existing = store.operations.get(input.opId);
+        replay =
+          existing.executedAt !== null &&
+          (!input.resume ||
+            store.operationSteps
+              .list(input.opId)
+              .every(({ state }) => state === "done" || state === "skipped"));
+      } catch {
+        // 未知 opId 交由执行器统一校验并报错。
+      }
       const result = await options.executor.confirm(input);
+      if (replay) return result;
       new IntakeService(options).recordConfirmed(result.opId, result);
       new FlowService({
         ...options,

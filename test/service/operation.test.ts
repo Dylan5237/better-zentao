@@ -268,16 +268,20 @@ describe("WP-16 / OperationExecutor", () => {
     expect(gateway.write).not.toHaveBeenCalled();
   });
 
-  it("SV-10 文件库重开后仍可查回执，同一数据库的其他账号不可见", async () => {
+  it("SV-10 文件库重开后仍可查回执，同一数据库拒绝其他账号打开且各自库隔离", async () => {
     const dir = mkdtempSync(join(tmpdir(), "bzt-executor-"));
     cleanups.push(() => rmSync(dir, { recursive: true }));
     const dbPath = join(dir, "state.db");
+    const bobDbPath = join(dir, "bob-state.db");
     const alice = setup({ dbPath });
     const { opId } = await alice.executor.prepare(plan(createStep));
     alice.store.cache.set("story:41", "alice", 60_000);
     alice.store.close();
     const reopened = setup({ dbPath });
-    const bob = setup({ dbPath, account: "bob" });
+    expect(() => setup({ dbPath, account: "bob" })).toThrow(
+      expect.objectContaining({ code: "PERMISSION_DENIED" }),
+    );
+    const bob = setup({ dbPath: bobDbPath, account: "bob" });
     expect(reopened.executor.getOperation({ recent: 1 })).toMatchObject([
       { opId },
     ]);

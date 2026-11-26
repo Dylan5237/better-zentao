@@ -606,7 +606,7 @@ export class CacheRepository {
     );
   }
 
-  /** 到期即失效：expires_at <= now 视为已过期并从库中清理。 */
+  /** 到期即失效：expires_at <= now 视为已过期并按相同条件原子清理。 */
   public get(key: string, now: number = this.clock()): string | undefined {
     assertCacheKey(key);
     const row = queryOne(
@@ -619,7 +619,15 @@ export class CacheRepository {
     );
     if (!row) return undefined;
     if (row.expires_at <= now) {
-      this.delete(key);
+      // CR-008 §4.4：条件删除，另一连接在读取与清理之间写入的新值不会被误删。
+      execute(
+        this.database,
+        `DELETE FROM cache_kv
+         WHERE instance_hash = ? AND account = ? AND "key" = ?
+           AND expires_at <= ?`,
+        [this.instanceHash, this.account, key, row.expires_at],
+        "清理过期缓存",
+      );
       return undefined;
     }
     return row.value;

@@ -171,7 +171,9 @@ describe("SRV-CONC-01 跨账号目标写协调", () => {
     const upstream = fakeGateway();
     const a = open(instanceA, accountA, "a.db");
     const b = open(instanceA, accountB, "b.db");
-    const secondRead = vi.fn(upstream.gateway.readTarget);
+    const secondRead = vi.fn<OperationGateway["readTarget"]>((target) =>
+      upstream.gateway.readTarget(target),
+    );
     const first = executor(instanceA, a, upstream.gateway, coordinator);
     const second = executor(
       instanceA,

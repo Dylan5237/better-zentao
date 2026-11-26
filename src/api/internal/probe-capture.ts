@@ -175,6 +175,8 @@ export async function collectProbeFixtures(
   if (!positiveInteger.optional().safeParse(requestedProductId).success) {
     throw new BztError("INVALID_INPUT", "禅道产品 ID 必须为正整数。");
   }
+  if (options.password === undefined)
+    throw new BztError("CONFIG_MISSING", "夹具采集需要账号密码登录。");
   const http = createZentaoHttp(options);
   const secrets = new Set([options.password]);
   const instance = URL.parse(options.baseUrl);

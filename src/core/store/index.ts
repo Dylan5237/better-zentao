@@ -1,6 +1,7 @@
 export { LocalStore, openLocalStore } from "./store.ts";
 export type { OpenStoreOptions } from "./store.ts";
 export {
+  canonicalAccountDir,
   instanceHashOf,
   resolveStoreLocation,
   sanitizeAccount,

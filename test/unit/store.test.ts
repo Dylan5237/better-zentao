@@ -21,6 +21,7 @@ import {
   resolveStoreLocation,
   sanitizeAccount,
 } from "../../src/core/store/index.ts";
+import { CacheRepository } from "../../src/core/store/repositories.ts";
 import type {
   IntakeRecord,
   LocalStore,
@@ -370,12 +371,13 @@ describe("WP-10 迁移", () => {
     await expect(checkSqlite()).resolves.toMatch(/^\d+\.\d+\.\d+/u);
   });
 
-  it("首次打开迁移至 v2，创建 P1 和 P2 表", () => {
+  it("首次打开迁移至 v3，创建 P1、P2 和 store_meta 表", () => {
     const { store } = open();
-    expect(store.schemaVersion).toBe(2);
+    expect(store.schemaVersion).toBe(3);
     expect(store.appliedMigrations()).toEqual([
       { version: 1, name: "001-p1-tables", appliedAt: START },
       { version: 2, name: "002-p2-tables", appliedAt: START },
+      { version: 3, name: "003-store-owner-meta", appliedAt: START },
     ]);
 
     const { dbPath } = store.location;
@@ -397,17 +399,18 @@ describe("WP-10 迁移", () => {
           "snapshot_items",
           "notifications",
           "reschedules",
+          "store_meta",
         ]),
       );
     });
   });
 
-  it("applyMigrations 将空库直接升级至 v2，P2 表使用 STRICT", () => {
+  it("applyMigrations 将空库直接升级至 v3，P2 与 store_meta 表使用 STRICT", () => {
     readDatabase(":memory:", (database) => {
-      expect(applyMigrations(database, testClock().now)).toBe(2);
+      expect(applyMigrations(database, testClock().now)).toBe(3);
       expect(
         listAppliedMigrations(database).map(({ version }) => version),
-      ).toEqual([1, 2]);
+      ).toEqual([1, 2, 3]);
       const tables = database.prepare("PRAGMA table_list").all();
       for (const name of [
         "stage_requirements",
@@ -416,6 +419,7 @@ describe("WP-10 迁移", () => {
         "snapshot_items",
         "notifications",
         "reschedules",
+        "store_meta",
       ]) {
         expect(tables).toContainEqual(
           expect.objectContaining({ name, strict: 1 }),
@@ -430,7 +434,7 @@ describe("WP-10 迁移", () => {
     });
   });
 
-  it("v1 有存量数据时只应用 002，重复迁移保留 P1 数据与迁移时间", () => {
+  it("v1 有存量数据时按序应用后续迁移，重复迁移保留 P1 数据与迁移时间", () => {
     const dbPath = join(homeDir, "v1.db");
     const v1 = MIGRATIONS.find(({ version }) => version === 1);
     if (!v1) throw new Error("缺少 001 迁移。");
@@ -446,7 +450,7 @@ describe("WP-10 迁移", () => {
         .prepare("INSERT INTO story_roles VALUES (42, 'alice', 'bob', ?)")
         .run(START);
       expect(tableNames(database)).not.toContain("snapshots");
-      expect(applyMigrations(database, testClock(START + 1).now)).toBe(1);
+      expect(applyMigrations(database, testClock(START + 1).now)).toBe(2);
       expect(applyMigrations(database, testClock(START + 2).now)).toBe(0);
     });
 
@@ -455,6 +459,7 @@ describe("WP-10 迁移", () => {
     expect(store.appliedMigrations()).toEqual([
       { version: 1, name: "001-p1-tables", appliedAt: START },
       { version: 2, name: "002-p2-tables", appliedAt: START + 1 },
+      { version: 3, name: "003-store-owner-meta", appliedAt: START + 1 },
     ]);
   });
 
@@ -462,11 +467,11 @@ describe("WP-10 迁移", () => {
     const first = open({}, testClock());
     expect(first.store.migrate()).toBe(0);
     const applied = first.store.appliedMigrations();
-    expect(applied).toHaveLength(2);
+    expect(applied).toHaveLength(3);
     first.store.close();
 
     const second = open({}, testClock(START + 60_000));
-    expect(second.store.schemaVersion).toBe(2);
+    expect(second.store.schemaVersion).toBe(3);
     expect(second.store.appliedMigrations()).toEqual(applied);
     expect(second.store.migrate()).toBe(0);
   });
@@ -846,7 +851,7 @@ describe("WP-10 cache_kv", () => {
     );
   });
 
-  it("SEC-04 同一 dbPath 下按实例与账号隔离缓存", () => {
+  it("SEC-04 同一 dbPath 下拒绝异主打开，且 CacheRepository 按实例与账号分区隔离", () => {
     const sharedPath = join(homeDir, "shared", "state.db");
     const clock = testClock();
     const alice = openLocalStore({
@@ -855,44 +860,73 @@ describe("WP-10 cache_kv", () => {
       clock: clock.now,
       dbPath: sharedPath,
     });
-    const bob = openLocalStore({
-      baseUrl: BASE_URL,
-      account: "bob",
-      clock: clock.now,
-      dbPath: sharedPath,
-    });
-    const other = openLocalStore({
-      baseUrl: "https://other.example.test/zentao",
-      account: "alice",
-      clock: clock.now,
-      dbPath: sharedPath,
-    });
-    stores.push(alice, bob, other);
+    stores.push(alice);
+    expect(
+      captureError(() =>
+        openLocalStore({
+          baseUrl: BASE_URL,
+          account: "bob",
+          clock: clock.now,
+          dbPath: sharedPath,
+        }),
+      ).code,
+    ).toBe("PERMISSION_DENIED");
+    const otherUrl = "https://other.example.test/zentao";
+    expect(
+      captureError(() =>
+        openLocalStore({
+          baseUrl: otherUrl,
+          account: "alice",
+          clock: clock.now,
+          dbPath: sharedPath,
+        }),
+      ).code,
+    ).toBe("PERMISSION_DENIED");
 
     alice.cache.set("story:42", "alice-value", 60_000);
-    bob.cache.set("story:42", "bob-value", 60_000);
-    other.cache.set("story:42", "other-value", 60_000);
-
-    expect(alice.cache.get("story:42")).toBe("alice-value");
-    expect(bob.cache.get("story:42")).toBe("bob-value");
-    expect(other.cache.get("story:42")).toBe("other-value");
-
-    alice.cache.set("portal-report-v1:old", "old", 20_000);
-    alice.cache.set("portal-report-v1:new", "new", 40_000);
-    bob.cache.set("portal-report-v1:old", "bob", 20_000);
-    alice.cache.trimPrefix("portal-report-v1:", 1);
-    expect(alice.cache.get("portal-report-v1:old")).toBeUndefined();
-    expect(alice.cache.get("portal-report-v1:new")).toBe("new");
-    alice.cache.trimPrefix("portal-report-v1:", 0);
-    expect(alice.cache.get("portal-report-v1:new")).toBeUndefined();
-    expect(alice.cache.get("story:42")).toBe("alice-value");
-    expect(bob.cache.get("portal-report-v1:old")).toBe("bob");
-    bob.cache.trimPrefix("portal-report-v1:", 0);
-
     alice.close();
-    bob.close();
-    other.close();
+
+    const baseHash = instanceHashOf(BASE_URL);
+    const otherHash = instanceHashOf(otherUrl);
     readDatabase(sharedPath, (database) => {
+      const aliceCache = new CacheRepository(
+        database,
+        clock.now,
+        baseHash,
+        "alice",
+      );
+      const bobCache = new CacheRepository(
+        database,
+        clock.now,
+        baseHash,
+        "bob",
+      );
+      const otherCache = new CacheRepository(
+        database,
+        clock.now,
+        otherHash,
+        "alice",
+      );
+
+      bobCache.set("story:42", "bob-value", 60_000);
+      otherCache.set("story:42", "other-value", 60_000);
+
+      expect(aliceCache.get("story:42")).toBe("alice-value");
+      expect(bobCache.get("story:42")).toBe("bob-value");
+      expect(otherCache.get("story:42")).toBe("other-value");
+
+      aliceCache.set("portal-report-v1:old", "old", 20_000);
+      aliceCache.set("portal-report-v1:new", "new", 40_000);
+      bobCache.set("portal-report-v1:old", "bob", 20_000);
+      aliceCache.trimPrefix("portal-report-v1:", 1);
+      expect(aliceCache.get("portal-report-v1:old")).toBeUndefined();
+      expect(aliceCache.get("portal-report-v1:new")).toBe("new");
+      aliceCache.trimPrefix("portal-report-v1:", 0);
+      expect(aliceCache.get("portal-report-v1:new")).toBeUndefined();
+      expect(aliceCache.get("story:42")).toBe("alice-value");
+      expect(bobCache.get("portal-report-v1:old")).toBe("bob");
+      bobCache.trimPrefix("portal-report-v1:", 0);
+
       const rows = database
         .prepare(
           'SELECT instance_hash, account, "key" FROM cache_kv ORDER BY account, instance_hash',
@@ -903,9 +937,9 @@ describe("WP-10 cache_kv", () => {
         (row) =>
           `${String(row.instance_hash)}|${String(row.account)}|${String(row.key)}`,
       );
-      expect(keys).toContain(`${alice.location.instanceHash}|alice|story:42`);
-      expect(keys).toContain(`${bob.location.instanceHash}|bob|story:42`);
-      expect(keys).toContain(`${other.location.instanceHash}|alice|story:42`);
+      expect(keys).toContain(`${baseHash}|alice|story:42`);
+      expect(keys).toContain(`${baseHash}|bob|story:42`);
+      expect(keys).toContain(`${otherHash}|alice|story:42`);
     });
   });
 
@@ -970,7 +1004,7 @@ describe("WP-10 文件持久化与关闭", () => {
       lastSeenAt: START,
     });
     expect(second.cache.get("directory")).toBe(JSON.stringify({ items: [] }));
-    expect(second.appliedMigrations()).toHaveLength(2);
+    expect(second.appliedMigrations()).toHaveLength(3);
   });
 
   it("close 幂等，关闭后操作返回 BztError", () => {
