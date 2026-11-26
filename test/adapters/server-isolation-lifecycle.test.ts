@@ -535,6 +535,18 @@ it("Gate C P1-4 配置版本变更作废旧预览，撤权后即使新角色共�
   fixture.advance(3001);
   expect((await client.call(confirmation(opId2))).status).toBe(200);
 
+  // 推进时钟 200 年后重登，原发起角色仍可读持久化回执（归属记录不早于回执过期）
+  fixture.advance(200 * 365 * 24 * 60 * 60_000);
+  await login(client);
+  expect((await client.call(operation(opId2))).status).toBe(200);
+  expectPermissionDenied(
+    await client.call({
+      role: "DM",
+      tool: "get_operation",
+      input: { opId: opId2 },
+    }),
+  );
+
   await writeFile(
     file,
     JSON.stringify({

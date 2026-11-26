@@ -119,7 +119,6 @@ const storedOpGrantSchema = z.strictObject({
   role: z.string(),
 });
 const opGrantPrefix = "portal-op-grant-v1:";
-const opGrantTtlMs = 100 * 365 * 24 * 60 * 60_000;
 const previewIdSchema = z.object({
   opId: z.string().min(1),
   preview: z.object({}),
@@ -561,6 +560,25 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
           if (!parsed.success || !parsed.data.opId)
             throw new BztError("PERMISSION_DENIED", "当前职责无权执行该操作。");
           const opId = parsed.data.opId;
+          let grantMatches = false;
+          try {
+            const rawGrant = session.userContext.store.cache.get(
+              opGrantPrefix + opId,
+              0,
+            );
+            const parsedGrant = rawGrant
+              ? storedOpGrantSchema.safeParse(JSON.parse(rawGrant))
+              : undefined;
+            grantMatches =
+              parsedGrant !== undefined &&
+              parsedGrant.success &&
+              parsedGrant.data.instanceId === session.instanceId &&
+              parsedGrant.data.role === page.id;
+          } catch {
+            grantMatches = false;
+          }
+          if (!grantMatches)
+            throw new BztError("PERMISSION_DENIED", "无权查看该操作回执。");
           const hasPreview = session.previews.get(opId)?.role === page.id;
           if (!hasPreview) {
             let ownedDispatched = false;
@@ -572,24 +590,12 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
               const roleAllowsKind = page.actions.some(
                 (action) => action === record.kind,
               );
-              const rawGrant = session.userContext.store.cache.get(
-                opGrantPrefix + opId,
-              );
-              const parsedGrant = rawGrant
-                ? storedOpGrantSchema.safeParse(JSON.parse(rawGrant))
-                : undefined;
-              const grantMatches =
-                parsedGrant !== undefined &&
-                parsedGrant.success &&
-                parsedGrant.data.instanceId === session.instanceId &&
-                parsedGrant.data.role === page.id;
               ownedDispatched =
                 record.actor === session.account &&
                 meta.success &&
                 meta.data.instanceHash === session.instanceHash &&
                 record.executedAt !== null &&
-                roleAllowsKind &&
-                grantMatches;
+                roleAllowsKind;
             } catch {
               ownedDispatched = false;
             }
@@ -625,6 +631,7 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
           const result = allTools.confirm_operation.output.parse(
             await wb.confirmOperation(parsed.data),
           );
+          session.previews.delete(parsed.data.opId);
           if (
             ["confirmed", "partial", "unknown"].includes(
               z.object({ status: z.string() }).parse(result).status,
@@ -679,13 +686,17 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
         }
         const prepared = previewIdSchema.safeParse(value);
         if (prepared.success) {
+          const permanentTtlMs = Math.max(
+            1,
+            Number.MAX_SAFE_INTEGER - Math.max(0, clock()),
+          );
           session.userContext.store.cache.set(
             opGrantPrefix + prepared.data.opId,
             JSON.stringify({
               instanceId: session.instanceId,
               role: page.id,
             }),
-            opGrantTtlMs,
+            permanentTtlMs,
           );
           session.previews.set(prepared.data.opId, {
             role: page.id,
