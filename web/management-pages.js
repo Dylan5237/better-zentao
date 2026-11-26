@@ -369,6 +369,11 @@ function mountTabs(
   const panels = new Map();
   function activate(id, options = {}) {
     if (!ctx.current()) return;
+    try {
+      sessionStorage.setItem(tabStoreKey, id);
+    } catch {
+      /* ignore */
+    }
     const [, , draw] = tabs.find(([key]) => key === id);
     for (const [key, control] of buttons) {
       control.className = `seg-tab${key === id ? " is-active" : ""}`;
@@ -394,7 +399,17 @@ function mountTabs(
       id,
       button(tabsBar, label, () => activate(id), "seg-tab", glyph),
     );
-  const first = tabs.find(([id]) => id === initial.tab) ?? tabs[0];
+  const tabStoreKey = `bzt.portal.tab/${ctx.account ?? ""}/${ctx.role.id}/${title}`;
+  let savedTab;
+  try {
+    savedTab = sessionStorage.getItem(tabStoreKey);
+  } catch {
+    savedTab = null;
+  }
+  const first =
+    tabs.find(([id]) => id === initial.tab) ??
+    tabs.find(([id]) => id === savedTab) ??
+    tabs[0];
   activate(first[0], initial);
 }
 
@@ -558,6 +573,7 @@ function drawQueue(toolbar, output, ctx, report, query, mount) {
     config.replaceChildren();
     updateSelection = showDecompose(config, ctx, stories, closeConfig);
     updateSelection();
+    config.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
   }
   function changed() {
     batch.textContent = `一键建齐阶段任务 (${selection.size})`;
@@ -1158,7 +1174,7 @@ function designTasks(parent, ctx, initial) {
         template: "design",
         ...(initial.storyId && { storyIds: [initial.storyId] }),
       }),
-    "btn btn-primary btn-sm",
+    "btn-primary btn-sm",
   );
 }
 
@@ -1230,7 +1246,7 @@ function reviewReleaseException(parent, ctx, ids, close) {
           waiver: { rule: "R13" },
         });
     },
-    "btn btn-warn btn-sm",
+    "btn-warn btn-sm",
   );
 }
 
@@ -1335,6 +1351,13 @@ function showGate(output, ctx, report, mount) {
   }
   waiver.disabled =
     !canWaive || actual !== "blocked" || candidates.length === 0;
+  if (waiver.disabled) {
+    waiver.title = !canWaive
+      ? "仅产品管理可批准发布例外"
+      : actual !== "blocked"
+        ? "当前版本门禁未阻断，无需登记例外"
+        : "当前证据未定位到可登记例外的需求";
+  }
   if (canWaive && actual === "blocked" && !candidates.length)
     add(intro, "p", "当前证据未定位到可登记例外的需求。", "page-sub");
 
@@ -2083,7 +2106,7 @@ function l3Panel(parent, plan, month, mount) {
 }
 
 function iterationPanels(left, right, ctx, iteration, mount) {
-  const pairs = card(left, "跨产品配对进度对比（US-PM-04）", "plans-col-fixed");
+  const pairs = card(left, "跨产品配对进度对比", "plans-col-fixed");
   const groups = iteration?.crossProduct ?? [];
   if (mount) {
     mount(add(pairs.head, "span"), (doc) => skeletonBlock(doc, "chip"));
@@ -2109,11 +2132,7 @@ function iterationPanels(left, right, ctx, iteration, mount) {
       }
     }
   }
-  const { body, head } = card(
-    right,
-    "迭代过程指标（US-PJ-03）",
-    "plans-col-fixed",
-  );
+  const { body, head } = card(right, "迭代过程指标", "plans-col-fixed");
   badge(head, "叶子任务口径");
   if (mount) {
     mount(add(body, "div"), (doc) => iterationMetrics(doc, iterationColumns));

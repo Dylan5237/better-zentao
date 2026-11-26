@@ -221,7 +221,7 @@ describe("WEB-03 原型角色工作台", () => {
       "登录姓名（设计主管）",
       "三档·全封装",
       "现在需要您处理的事项",
-      "团队与我维护的需求（US-DM-03 · 按维护人筛选）",
+      "团队与我维护的需求（按维护人筛选）",
       "全部设计团队",
       "本人（设计主管）",
       managed.title,
@@ -294,7 +294,7 @@ describe("WEB-03 原型角色工作台", () => {
     await renderWorkbench(root, ctx);
     shows(
       root,
-      "禅道 22.6 原生风格视图",
+      "一档·禅道原生",
       "研发需求列表",
       "用户需求池",
       "阶段进展",
@@ -394,7 +394,7 @@ describe("WEB-03 原型角色工作台", () => {
       "待验收与可关闭",
       "现在需要您处理的事项",
       id === "DM"
-        ? "团队与我维护的需求（US-DM-03 · 按维护人筛选）"
+        ? "团队与我维护的需求（按维护人筛选）"
         : "我维护的需求（移交研发后仍可持续跟进）",
     );
     expect(metric(root, "设计完成待移交")).toBe("1");
@@ -514,7 +514,7 @@ describe("WEB-03 原型角色工作台", () => {
     expect(root.textContent.split(task.name)).toHaveLength(2);
     find(root, "button", "看范围与章节").click();
     expect(ctx.openStory).toHaveBeenCalledWith(story.id, "dev");
-    find(root, "button", "急事已开工？先建草稿").click();
+    find(root, "button", "急事补录草稿").click();
     expect(ctx.navigate).toHaveBeenCalledWith("intake", { mode: "backfilled" });
     expect(find(root, "a", "在禅道查看或拆子任务").attributes.get("href")).toBe(
       task.url,

@@ -782,7 +782,7 @@ function queryForm(tool, role, preset = {}) {
       control.required = visible && Boolean(field.required);
     }
   };
-  const submit = make("button", "查询", "btn btn-primary");
+  const submit = make("button", "查询", "btn-primary");
   submit.type = "submit";
   const footer = make("div", undefined, "filter-actions");
   footer.append(submit);
@@ -841,7 +841,35 @@ function mountPortal(
   let editingRoles = false;
   let pendingLaunch;
   let currentSection = "workbench";
+  let currentInitial = {};
+  let activeStory;
+  let pendingReturnStory;
+  let needsSectionRefresh = false;
   let badgeReads;
+  const sectionKey = () =>
+    "bzt.portal.section/" +
+    encodeURIComponent(session.identity?.account ?? "") +
+    "/" +
+    (session.role?.id ?? "");
+  function readSavedSection() {
+    try {
+      const raw = sessionStorage.getItem(sectionKey());
+      return raw ? JSON.parse(raw) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  function saveSection(id, initial) {
+    try {
+      const payload = {
+        id,
+        ...(typeof initial?.tab === "string" && { tab: initial.tab }),
+      };
+      sessionStorage.setItem(sectionKey(), JSON.stringify(payload));
+    } catch {
+      /* Storage may be disabled. */
+    }
+  }
   const sidebar = byId("sidebar");
   const accountDialog = byId("account-dialog");
   const shell = createMeridianShell({
@@ -953,7 +981,13 @@ function mountPortal(
         16 -
           [...meetingRecords.values()].filter((record) => record.status).length,
       );
-      openSection("workbench");
+      const saved = readSavedSection();
+      const restored =
+        saved?.id &&
+        sectionsFor(role).some((s) => s.id === saved.id && s.enabled)
+          ? saved
+          : { id: "workbench" };
+      openSection(restored.id, restored.tab ? { tab: restored.tab } : {});
       badgeReads = new AbortController();
       const badgeContext = viewContext(badgeReads.signal);
       const idleTimer = setTimeout(
@@ -1020,13 +1054,13 @@ function mountPortal(
     const save = make(
       "button",
       role ? "保存职责" : "保存并进入工作台",
-      "btn btn-primary",
+      "btn-primary",
     );
     save.type = "submit";
-    const refresh = make("button", "重新读取职责", "btn");
+    const refresh = make("button", "重新读取职责", "btn-secondary");
     refresh.type = "button";
     refresh.hidden = true;
-    const cancel = make("button", "取消", "btn");
+    const cancel = make("button", "取消", "btn-ghost");
     cancel.type = "button";
     cancel.hidden = !role;
     const status = notice(message);
@@ -1284,18 +1318,31 @@ function mountPortal(
     }
   }
 
-  function closeOverlay() {
+  function closeOverlay({ preserveReturn = false } = {}) {
     const active = overlay;
     if (!active) return;
     overlay = undefined;
+    activeStory = undefined;
     active.controller.abort();
     active.dialog.close();
     active.dialog.remove();
+    if (!preserveReturn) {
+      const returnStory = pendingReturnStory;
+      const shouldRefresh = needsSectionRefresh;
+      pendingReturnStory = undefined;
+      needsSectionRefresh = false;
+      if (shouldRefresh && session.role) {
+        openSection(currentSection, currentInitial);
+      }
+      if (returnStory && session.role) {
+        openStory(returnStory.id, returnStory.tab);
+      }
+    }
   }
 
   function openOverlay(label, drawer, render, provideHeader = true) {
     if (!session.role) return;
-    closeOverlay();
+    closeOverlay({ preserveReturn: true });
     const dialog = make(
       "dialog",
       undefined,
@@ -1379,6 +1426,7 @@ function mountPortal(
       (content, ctx) => renderStoryDrawer(content, ctx, id, tab),
       false,
     );
+    activeStory = { id, tab };
   }
 
   function viewContext(signal) {
@@ -1439,6 +1487,7 @@ function mountPortal(
       openTool,
       openStory,
       close: closeOverlay,
+      toast: shell.toast,
       setBadge: (id, count) => {
         if (scope.current()) setBadge(id, count);
       },
@@ -1465,6 +1514,8 @@ function mountPortal(
       return;
     discardPage();
     currentSection = id;
+    currentInitial = initial;
+    saveSection(id, initial);
     page = new AbortController();
     for (const item of nav.querySelectorAll("[data-view]")) {
       const active = item.dataset.view === id;
@@ -1497,9 +1548,23 @@ function mountPortal(
     if (!session.role?.actions.includes(tool)) return;
     const action = reads[tool] ?? writes[tool];
     if (!action) return;
+    const fromStory = activeStory;
+    if (fromStory) pendingReturnStory = fromStory;
+    closeOverlay({ preserveReturn: true });
     openOverlay(action.label, false, (body, ctx) => {
       if (Object.hasOwn(writes, tool))
-        return ctx.renderWrite(body, tool, initial, options);
+        return ctx.renderWrite(body, tool, initial, {
+          ...options,
+          inModal: true,
+          onClose: () => closeOverlay(),
+          onReceipt: (receipt) => {
+            options.onReceipt?.(receipt);
+            if (receipt?.status === "confirmed") {
+              needsSectionRefresh = true;
+              shell.toast?.("操作已完成", "success");
+            }
+          },
+        });
       renderQuery(body, ctx, tool, initial);
     });
   }
@@ -1512,7 +1577,7 @@ function mountPortal(
     if (initial.requirementId) values.lookup = "requirementId";
     if (initial.intakeId) values.lookup = "intakeId";
     const { form, submit } = queryForm(tool, role.id, values);
-    const refresh = make("button", "刷新结果", "btn btn-sm");
+    const refresh = make("button", "刷新结果", "btn-secondary btn-sm");
     refresh.type = "button";
     refresh.disabled = true;
     form.querySelector(".filter-actions").append(refresh);
@@ -1585,6 +1650,17 @@ function mountPortal(
   });
   byId("account-start").onclick = () => accountDialog.showModal();
   byId("account-close").onclick = () => accountDialog.close();
+  accountDialog.addEventListener("click", (event) => {
+    if (event.target !== accountDialog) return;
+    const rect = accountDialog.getBoundingClientRect();
+    if (
+      event.clientX < rect.left ||
+      event.clientX > rect.right ||
+      event.clientY < rect.top ||
+      event.clientY > rect.bottom
+    )
+      accountDialog.close();
+  });
   loginForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (loginButton.disabled) return;

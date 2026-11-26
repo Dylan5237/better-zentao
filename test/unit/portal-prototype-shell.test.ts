@@ -45,7 +45,6 @@ it("固定伏羲 v11 应用入口、命令检索、折叠及深浅主题", async
     "sidebar-role-card",
     "theme-button",
     "command-button",
-    "sidebar-mode-box",
   ])
     expect(html).toContain(value);
 });

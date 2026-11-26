@@ -241,8 +241,15 @@ function filteredList(
     onCount?.(visible.length);
     controls?.tally(source, visible.length);
     content.replaceChildren();
-    if (!visible.length)
-      add(content, "p", emptyText(source, empty), "empty-inline");
+    if (!visible.length) {
+      if (controls?.hasActive?.()) {
+        const box = add(content, "div", undefined, "empty-state-action");
+        add(box, "p", emptyText(source, empty), "empty-inline");
+        button(box, "清空筛选", () => controls.reset(), "btn-secondary btn-xs");
+      } else {
+        add(content, "p", emptyText(source, empty), "empty-inline");
+      }
+    }
     for (const row of visible) display(content, row);
   }
   const controls =
@@ -674,7 +681,7 @@ function renderDesign(parent, ctx, { work, unlinked, design }) {
   const maintainedCard = card(
     grid,
     supervisor
-      ? "团队与我维护的需求（US-DM-03 · 按维护人筛选）"
+      ? "团队与我维护的需求（按维护人筛选）"
       : "我维护的需求（移交研发后仍可持续跟进）",
     { grouped: true },
   );
@@ -933,7 +940,7 @@ function renderDevelopmentLead(
   )?.name;
   const overdueCard = card(
     columns,
-    `${selectedName ? selectedName + " · " : ""}团队逾期任务（按成员分组 · get_team_work · US-RM-06）`,
+    `${selectedName ? selectedName + " · " : ""}团队逾期任务（按成员分组）`,
   );
   const teamRows = unique(
     team.data?.groups?.flatMap(({ items }) => items),
@@ -1039,12 +1046,9 @@ function renderDeveloper(parent, ctx, { work, personalTasks }) {
   const overdue = total("overdue");
   const soon = total("due_soon") + total("unscheduled");
   const addMetric = metricGrid(parent, 4, ctx.pending);
-  addMetric(
-    "新到达任务",
-    count(work, newIds.size),
-    "刚流转到我名下（US-RD-01）",
-    { click: () => select("new") },
-  );
+  addMetric("新到达任务", count(work, newIds.size), "刚流转到我名下", {
+    click: () => select("new"),
+  });
   addMetric("当前逾期", count(source, overdue), "截止日早于今天", {
     click: () => select("overdue"),
     tone:
@@ -1731,8 +1735,7 @@ export async function renderWorkbench(container, ctx) {
   if (!ctx.current()) return;
   if (!Object.hasOwn(profiles, ctx.role.id)) return;
   const profile = profiles[ctx.role.id];
-  const [mode, tier, modeLabel, description] =
-    modes.find(([key]) => key === ctx.mode) ?? modes[2];
+  const [mode] = modes.find(([key]) => key === ctx.mode) ?? modes[2];
   container.replaceChildren();
   const root = add(container, "div", undefined, "bzt-page workbench-home");
   const head = add(root, "div", undefined, "page-head");
@@ -1746,15 +1749,7 @@ export async function renderWorkbench(container, ctx) {
     identity ? `${identity}（${ctx.role.label}）` : ctx.role.label,
     "role-chip grp-" + profile.group,
   );
-  add(titleRow, "span", tier, "mode-tier-badge is-" + mode).title = description;
-  add(
-    title,
-    "p",
-    mode === "meridian"
-      ? profile.headline
-      : `${profile.headline}（${modeLabel}）`,
-    "page-sub",
-  );
+  add(title, "p", profile.headline, "page-sub");
 
   const actions = add(head, "div", undefined, "page-head-actions");
   const switcher = add(actions, "div", undefined, "mode-tier-bar");
@@ -1775,10 +1770,10 @@ export async function renderWorkbench(container, ctx) {
     button(
       actions,
       developer
-        ? "急事已开工？先建草稿"
+        ? "急事补录草稿"
         : ctx.role.id === "FB"
           ? "极简提诉求"
-          : "提新需求",
+          : "提需求",
       intake(ctx, developer ? { mode: "backfilled" } : undefined),
       "btn-primary",
       developer ? "GitPullRequestDraft" : "Plus",
@@ -1787,7 +1782,16 @@ export async function renderWorkbench(container, ctx) {
   if (ctx.role.id === "FB" && mode !== "zentao") feedbackForm(root, ctx);
 
   const teams = ctx.role.id === "RM" ? (ctx.developmentTeams ?? []) : [];
-  const initialTeam = teams[0]?.id;
+  const teamStoreKey = `bzt.portal.rm.team/${ctx.account ?? ""}`;
+  let savedTeam;
+  try {
+    savedTeam = sessionStorage.getItem(teamStoreKey);
+  } catch {
+    savedTeam = null;
+  }
+  const initialTeam =
+    (savedTeam && teams.some(({ id }) => id === savedTeam) && savedTeam) ||
+    teams[0]?.id;
   let generation = 0;
   let activeTab = 0;
   let teamNote;
@@ -1804,7 +1808,14 @@ export async function renderWorkbench(container, ctx) {
       toolbar,
       teams.map(({ id, name }) => [id, name]),
       initialTeam,
-      (team) => void load(team),
+      (team) => {
+        try {
+          sessionStorage.setItem(teamStoreKey, team);
+        } catch {
+          /* ignore */
+        }
+        void load(team);
+      },
       "segmented-tabs",
     );
   }

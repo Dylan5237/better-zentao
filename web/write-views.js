@@ -76,7 +76,7 @@ const businessFeedback = [
     ],
     required: true,
   }),
-  field("title", "一句话诉求简述 *", "text", {
+  field("title", "一句话诉求简述", "text", {
     ...required,
     full: true,
     placeholder: "例如：运营导出审批清单时希望能按二级部门筛选…",
@@ -352,15 +352,19 @@ function fieldsFor(tool, role) {
   return forms[tool];
 }
 
+function fieldError(message, fieldName) {
+  return Object.assign(new Error(message), { fieldName });
+}
+
 function valueOf(spec, control) {
   if (spec.kind === "checkbox") return control.checked;
   const value = control.value.trim();
   if (!value) {
-    if (spec.required) throw new Error(`请填写${spec.label}。`);
+    if (spec.required) throw fieldError(`请填写${spec.label}。`, spec.name);
     return undefined;
   }
   if (spec.choices && !spec.choices.some(([choice]) => choice === value)) {
-    throw new Error(`请选择有效的${spec.label}。`);
+    throw fieldError(`请选择有效的${spec.label}。`, spec.name);
   }
   if (spec.kind === "id" || spec.kind === "ids") {
     const values = spec.kind === "ids" ? value.split(separator) : [value];
@@ -372,14 +376,14 @@ function valueOf(spec, control) {
       ids.length > 100 ||
       ids.some((id) => !Number.isSafeInteger(id) || id < 1)
     ) {
-      throw new Error("请输入 1 至 100 个有效的正整数编号。");
+      throw fieldError("请输入 1 至 100 个有效的正整数编号。", spec.name);
     }
     return spec.kind === "id" ? ids[0] : [...new Set(ids)];
   }
   if (spec.kind === "hours") {
     const hours = Number(value);
     if (!Number.isFinite(hours) || hours < 0)
-      throw new Error("预计工时应为非负数字。");
+      throw fieldError("预计工时应为非负数字。", spec.name);
     return hours;
   }
   if (
@@ -387,12 +391,15 @@ function valueOf(spec, control) {
     !monthPattern.test(value) &&
     !["本月", "下月", "上月"].includes(value)
   ) {
-    throw new Error("请输入 YYYY-MM 格式的月份，或填写本月、下月、上月。");
+    throw fieldError(
+      "请输入 YYYY-MM 格式的月份，或填写本月、下月、上月。",
+      spec.name,
+    );
   }
   if (spec.kind === "classes") {
     const classes = [...new Set(value.split(separator).filter(Boolean))];
     if (classes.some((entry) => !["A", "B", "C"].includes(entry)))
-      throw new Error("任务类别可选 A、B、C。");
+      throw fieldError("任务类别可选 A、B、C。", spec.name);
     return classes;
   }
   if (spec.kind === "triState") return value === "yes";
@@ -591,7 +598,9 @@ function buildForm(make, tool, role, initial, options) {
     const wrapper = make(
       segmented ? "div" : "label",
       "",
-      checkbox ? "check-label" : `bzt-field${spec.full ? " is-full" : ""}`,
+      checkbox
+        ? "check-label"
+        : `bzt-field${spec.full ? " is-full" : ""}${spec.required ? " is-required" : ""}`,
     );
     const label = make("span", spec.label);
     const control = make(
@@ -727,7 +736,7 @@ function buildForm(make, tool, role, initial, options) {
   const templateField = locate("template")?.control;
   const children = make("div");
   const childRows = make("div");
-  const addChild = make("button", "添加子任务", "btn");
+  const addChild = make("button", "添加子任务", "btn-secondary btn-sm");
   addChild.type = "button";
   children.append(childRows, addChild);
   const routing = make("p", "", "form-footer-note");
@@ -846,7 +855,7 @@ function buildForm(make, tool, role, initial, options) {
       );
       const rowFields = fields.slice(start);
       if (index > 0) {
-        const remove = make("button", "移除子任务", "btn");
+        const remove = make("button", "移除子任务", "btn-ghost btn-sm");
         remove.type = "button";
         remove.addEventListener("click", () => {
           for (const entry of rowFields)
@@ -995,6 +1004,24 @@ function buildForm(make, tool, role, initial, options) {
     return false;
   }
 
+  function clearInvalid() {
+    for (const { wrapper, control } of fields) {
+      wrapper.classList?.remove?.("is-invalid");
+      control.removeAttribute?.("aria-invalid");
+    }
+  }
+  function markInvalid(fieldName) {
+    clearInvalid();
+    if (!fieldName) return;
+    const entry = locate(fieldName);
+    if (!entry) return;
+    if (entry.spec.advanced) details.open = true;
+    entry.wrapper.classList?.add?.("is-invalid");
+    entry.control.setAttribute?.("aria-invalid", "true");
+    entry.wrapper.scrollIntoView?.({ block: "nearest" });
+    entry.control.focus?.();
+  }
+  form.addEventListener("input", clearInvalid);
   return {
     form,
     payload,
@@ -1002,6 +1029,8 @@ function buildForm(make, tool, role, initial, options) {
     resetForm,
     setLocked,
     prepareForm,
+    clearInvalid,
+    markInvalid,
     selectIntakeMode(mode) {
       if (locked || simple) return;
       switchIntakeMode(mode);
@@ -1195,6 +1224,8 @@ function buildBatchForm(make, options) {
     payload,
     prefill: () => false,
     prepareForm: () => true,
+    clearInvalid: () => {},
+    markInvalid: () => {},
     resetForm() {
       form.reset?.();
       rows.replaceChildren();
@@ -1387,6 +1418,8 @@ export function renderWrite(
     resetForm,
     setLocked,
     prepareForm,
+    clearInvalid,
+    markInvalid,
     selectIntakeMode,
   } =
     tool === "import_stories"
@@ -1395,7 +1428,7 @@ export function renderWrite(
   const inline = make("section", "", "daily-write-inline");
   inline.hidden = true;
   const dialog = make("dialog", "", "write-modal daily-write-dialog");
-  const usesDialog = typeof dialog.showModal === "function";
+  const usesDialog = !options.inModal && typeof dialog.showModal === "function";
   const title = make("h3");
   const opIdChip = make("span", "", "bzt-badge mono");
   opIdChip.hidden = true;
@@ -1583,9 +1616,11 @@ export function renderWrite(
     reset();
     let input;
     try {
+      clearInvalid();
       if (!prepareForm()) return;
       input = payload();
     } catch (error) {
+      markInvalid(error?.fieldName);
       showError(error, "请核对表单字段。");
       return;
     }
@@ -1659,7 +1694,12 @@ export function renderWrite(
     ack.type = "checkbox";
     ack.name = "previewAck";
     check.append(ack, make("span", checkLabel));
-    const button = make("button", label, "btn-primary");
+    const destructive = ["close_stories", "reschedule_story"].includes(tool);
+    const button = make(
+      "button",
+      label,
+      destructive && label === "确认执行" ? "btn-danger" : "btn-primary",
+    );
     button.type = "button";
     button.disabled = true;
     const update = () => {
@@ -1899,12 +1939,21 @@ export function renderWrite(
       receipt?.status === "confirmed" ||
       (receipt?.status === "not_executed" && entry.expires === 0)
     ) {
-      const start = make("button", "开始新操作", "btn-primary");
+      const start = make("button", "开始新操作", "btn-secondary btn-sm");
       start.type = "button";
       start.addEventListener("click", () => {
         if (start.isConnected) startNewOperation(entry);
       });
       buttons.append(start);
+      if (options.onClose) {
+        const done = make("button", "完成并关闭", "btn-primary btn-sm");
+        done.type = "button";
+        done.addEventListener("click", () => {
+          if (!done.isConnected) return;
+          if (forgetOperation(entry)) options.onClose();
+        });
+        buttons.append(done);
+      }
     }
     if (
       receipt?.steps.some(({ state }) =>

@@ -232,10 +232,7 @@ function feedbackTabs(ctx, { work, feedback }) {
       ],
     ],
     footer: "当前账号登记的诉求与需求进展。",
-    action: [
-      "+ 极简提新诉求",
-      allowed(ctx, "create_story") && go(ctx, "intake"),
-    ],
+    action: ["+ 极简提诉求", allowed(ctx, "create_story") && go(ctx, "intake")],
   }));
 }
 
@@ -296,7 +293,7 @@ function designTabs(ctx, { work, design, requirements, unlinked }) {
           true,
         ],
       ],
-      action: ["+ 提新需求", allowed(ctx, "create_story") && go(ctx, "intake")],
+      action: ["+ 提需求", allowed(ctx, "create_story") && go(ctx, "intake")],
     },
   ];
 }
@@ -630,7 +627,6 @@ export function renderNativeWorkbench(
   const navigation = add(header, "div", undefined, "zt-tabs-left");
   navigation.setAttribute("role", "group");
   navigation.setAttribute("aria-label", "禅道台账");
-  add(header, "span", "禅道 22.6 原生风格视图", "mode-tier-badge is-zentao");
   const content = add(shell, "div", undefined, "workbench-native-content");
   const controls = tabs.map((tab, i) => {
     const control = button(

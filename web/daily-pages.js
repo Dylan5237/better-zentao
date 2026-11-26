@@ -389,7 +389,7 @@ export async function renderIntake(container, ctx, initial = {}) {
   const design = ["DM", "DS"].includes(ctx.role.id) && mayCreate;
   const head = pageHeading(
     page,
-    fb ? "极简提诉求" : "快速提需求",
+    fb ? "极简提诉求" : "提需求",
     fb
       ? "用自然语言说清业务诉求，提交前核对补充内容。"
       : "系统按规范匹配本月 L3 计划并在预览中列出状态维护人。",
@@ -476,7 +476,22 @@ export async function renderIntake(container, ctx, initial = {}) {
     : editor;
   const writer =
     mayCreate && ctx.renderWrite(form, "create_story", fields, options);
-  if (!mayCreate) put(editor, "p", "当前职责只可查看。", "empty-inline");
+  if (!mayCreate) {
+    const box = put(editor, "div", undefined, "empty-state-action");
+    put(
+      box,
+      "p",
+      "当前职责没有提需求权限，可前往「需求流转」查看需求进度或联系设计侧登记。",
+      "empty-inline",
+    );
+    button(
+      box,
+      "前往需求流转",
+      () => ctx.navigate("stories"),
+      "btn-secondary btn-sm",
+      "ArrowRight",
+    );
+  }
   if (mode === "batchImport" && options.showBatch)
     writer?.selectIntakeMode?.(mode);
   let request = 0;
@@ -579,10 +594,12 @@ export async function renderIntake(container, ctx, initial = {}) {
           title: item.title,
           feedbackBy: item.feedbackBy ?? "",
         });
-        feedback.textContent =
+        const msg =
           changed === false
             ? "请先核对当前操作回执，再带入新的用户需求。"
             : `已带入用户需求 #${item.id}，创建时按预览关联。`;
+        feedback.textContent = msg;
+        ctx.toast?.(msg, changed === false ? "warning" : "success");
       }
     } catch (error) {
       if (current()) {
@@ -820,16 +837,21 @@ function ledgerBody(parent) {
   return put(table, "tbody");
 }
 
-function ledger(parent, ctx, items, complete) {
+function ledger(parent, ctx, items, complete, onClear) {
   const body = ledgerBody(parent);
   if (!items.length) {
-    const empty = put(
-      put(body, "tr"),
-      "td",
-      complete ? "当前筛选范围内暂无需求。" : "当前未读到符合筛选条件的需求。",
-      "empty-inline",
-    );
-    empty.colSpan = 4;
+    const cell = put(put(body, "tr"), "td", undefined, "empty-inline");
+    cell.colSpan = 4;
+    const msg = complete
+      ? "当前筛选范围内暂无需求。"
+      : "当前未读到符合筛选条件的需求。";
+    if (onClear) {
+      const box = put(cell, "div", undefined, "empty-state-action");
+      put(box, "span", msg);
+      button(box, "清空筛选", onClear, "btn-secondary btn-xs");
+    } else {
+      cell.textContent = msg;
+    }
     return;
   }
   for (const item of items) {
@@ -1044,18 +1066,39 @@ export async function renderStories(container, ctx, initial = {}) {
     ["all-stories", "全部需求台账"],
     ["flow", "9 步标准流转图", "GitBranch"],
   ];
+  const stateKey = `bzt.portal.stories/${ctx.account ?? ""}/${ctx.role.id}`;
+  let saved = {};
+  try {
+    saved = JSON.parse(sessionStorage.getItem(stateKey) || "{}") || {};
+  } catch {
+    saved = {};
+  }
+  const saveState = () => {
+    try {
+      sessionStorage.setItem(
+        stateKey,
+        JSON.stringify({ tab: active, progress: filter }),
+      );
+    } catch {
+      /* ignore */
+    }
+  };
   let active = entries.some(([key]) => key === initial.tab)
     ? initial.tab
-    : "design-board";
+    : entries.some(([key]) => key === saved.tab)
+      ? saved.tab
+      : "design-board";
   let filter =
     typeof initial.progress === "string"
       ? initial.progress
-      : (initial.progress?.[0] ?? "");
+      : (initial.progress?.[0] ??
+        (typeof saved.progress === "string" ? saved.progress : ""));
   let keyword = typeof initial.keyword === "string" ? initial.keyword : "";
   let request = 0;
   const choose = tabs(head, "需求流转视图", entries, active, (value) => {
     if (value === active) return;
     active = value;
+    saveState();
     choose(active);
     return load();
   });
@@ -1124,6 +1167,7 @@ export async function renderStories(container, ctx, initial = {}) {
   select.value = filter;
   select.addEventListener("change", () => {
     filter = select.value;
+    saveState();
     return load();
   });
   const ledgerStatus = put(
@@ -1170,6 +1214,21 @@ export async function renderStories(container, ctx, initial = {}) {
       ctx,
       filtered,
       ledgerResult.completeness !== "partial" && !ledgerResult.truncated,
+      keyword || filter
+        ? () => {
+            search.value = "";
+            keyword = "";
+            clear.hidden = true;
+            if (filter) {
+              filter = "";
+              select.value = "";
+              saveState();
+              void load();
+            } else {
+              showLedger();
+            }
+          }
+        : undefined,
     );
   }
 
@@ -1564,7 +1623,7 @@ function overview(parent, ctx, data, result) {
   link.className = "link-inline";
 }
 
-function businessCard(parent, result, current) {
+function businessCard(parent, result, current, ctx) {
   const { story, card, people, progress: stage } = result.data;
   if (!card) {
     notice(parent, "当前未读到可转发的进度卡片。", "warn");
@@ -1620,7 +1679,10 @@ function businessCard(parent, result, current) {
       if (!current()) return;
       try {
         await navigator.clipboard.writeText(card);
-        if (current()) feedback.textContent = "进度卡片已复制。";
+        if (current()) {
+          feedback.textContent = "进度卡片已复制。";
+          ctx?.toast?.("进度卡片已复制", "success");
+        }
       } catch {
         if (!current()) return;
         if (rawCard.hidden) toggle.click?.();
@@ -1751,7 +1813,7 @@ export async function renderStoryDrawer(container, ctx, id, tab = "full") {
             `#${item.id} ${item.title || "需求"}`,
           );
       } else if (panel === "dev") devView(content, data);
-      else if (panel === "card") businessCard(content, result, current);
+      else if (panel === "card") businessCard(content, result, current, ctx);
       else overview(content, ctx, data, result);
       if (!fb) evidence(content, result);
     } catch (error) {

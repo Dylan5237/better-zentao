@@ -29,9 +29,14 @@ export function sectionsFor(role) {
   const external = role.id === "FB";
   return (external ? sections.slice(0, 2) : sections).map(
     ([id, label, editors]) => {
-      const readOnly = editors
-        ? !editors.includes(role.id)
-        : id === "intake" && !role.actions.includes("create_story");
+      const readOnly =
+        id === "stories"
+          ? !editors.includes(role.id) &&
+            !role.actions.includes("handoff_story") &&
+            !role.actions.includes("close_stories")
+          : editors
+            ? !editors.includes(role.id)
+            : id === "intake" && !role.actions.includes("create_story");
       return {
         id,
         label: external && id === "intake" ? "极简提诉求" : label,

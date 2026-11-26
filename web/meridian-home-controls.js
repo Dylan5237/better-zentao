@@ -260,7 +260,19 @@ export function filterControls(
     },
     native ? "zt-reset-btn" : "hybrid-reset-btn",
   );
+  function reset() {
+    input.value = "";
+    for (const { select } of controls) select.value = "";
+    onChange();
+  }
   return {
+    reset,
+    hasActive() {
+      return Boolean(
+        input.value.trim() ||
+        controls.some(({ select }) => Boolean(select.value)),
+      );
+    },
     matches(row) {
       const keyword = input.value.trim().toLowerCase();
       return (

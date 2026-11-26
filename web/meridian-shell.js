@@ -84,7 +84,40 @@ export function createMeridianShell({
     drawModes();
     if (getCurrent() === "workbench") openSection("workbench");
   }
+  let toastTimer;
+  function toast(message, tone = "info") {
+    const host = byId("portal-shell");
+    if (!host || !message) return;
+    let stack = host.querySelector(":scope > .toast-stack");
+    if (!stack) {
+      stack = el("div", "toast-stack");
+      stack.setAttribute("role", "status");
+      stack.setAttribute("aria-live", "polite");
+      host.append(stack);
+    }
+    stack.replaceChildren();
+    const item = el(
+      "div",
+      "toast-item" + (tone !== "info" ? " tone-" + tone : ""),
+    );
+    const sym = el("span", "toast-icon");
+    sym.append(
+      icon(
+        tone === "success"
+          ? "CircleCheck"
+          : tone === "warning"
+            ? "TriangleAlert"
+            : "Info",
+        15,
+      ),
+    );
+    item.append(sym, el("span", "toast-message", message));
+    stack.append(item);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => stack.replaceChildren(), 3200);
+  }
   function drawModes() {
+    if (!sideModes) return;
     sideModes.replaceChildren();
     for (const [id, label] of modes) {
       const active = id === mode();
@@ -97,33 +130,109 @@ export function createMeridianShell({
       sideModes.append(control);
     }
   }
+  let closeRoleMenu;
   function drawRoles(identity, role) {
+    closeRoleMenu?.();
+    closeRoleMenu = undefined;
     tabs.replaceChildren();
+    const compact = (identity.roles?.length ?? 0) > 3;
+    tabs.classList.toggle("is-compact", compact);
+    if (!compact) {
+      for (const [key, label, , order] of groups) {
+        const entries = order
+          .map((id) => identity.roles.find((r) => r.id === id))
+          .filter(Boolean);
+        if (!entries.length) continue;
+        const cluster = el("div", "role-group-cluster");
+        if (tabs.childElementCount)
+          cluster.append(el("span", "role-group-sep"));
+        cluster.append(el("span", "role-group-tag grp-" + key, label));
+        for (const entry of entries) {
+          const active = entry.id === role?.id;
+          const control = btn(
+            "role-pill" + (active ? " is-active grp-" + key : ""),
+            entry.label,
+            () => {
+              if (!active) selectRole(entry.id);
+            },
+          );
+          control.dataset.role = entry.id;
+          control.setAttribute("aria-pressed", String(active));
+          control.title =
+            entry.label + " · " + (identity.displayName || identity.account);
+          cluster.append(control);
+        }
+        tabs.append(cluster);
+      }
+      return;
+    }
+    const currentGroup = groups.find((g) => g[3].includes(role?.id));
+    const trigger = btn("role-dropdown-trigger", null, (e) => {
+      e.stopPropagation();
+      const next = menu.hidden;
+      menu.hidden = !next;
+      trigger.setAttribute("aria-expanded", String(next));
+    });
+    trigger.setAttribute("aria-haspopup", "true");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.title = "切换已分配的角色视角 (Alt+1–8)";
+    if (currentGroup)
+      trigger.append(
+        el("span", "role-chip grp-" + currentGroup[0], currentGroup[1]),
+      );
+    trigger.append(
+      el("span", null, role?.label || "选择角色"),
+      el("span", "mono sidebar-asof", `${identity.roles.length} 角色`),
+      icon("ChevronDown", 14),
+    );
+    const menu = el("div", "role-dropdown-menu");
+    menu.hidden = true;
     for (const [key, label, , order] of groups) {
       const entries = order
         .map((id) => identity.roles.find((r) => r.id === id))
         .filter(Boolean);
       if (!entries.length) continue;
-      const cluster = el("div", "role-group-cluster");
-      if (tabs.childElementCount) cluster.append(el("span", "role-group-sep"));
-      cluster.append(el("span", "role-group-tag grp-" + key, label));
+      const section = el("div", "role-dropdown-group");
+      section.append(el("span", "role-dropdown-group-title grp-" + key, label));
+      const list = el("div", "role-dropdown-items");
       for (const entry of entries) {
         const active = entry.id === role?.id;
         const control = btn(
           "role-pill" + (active ? " is-active grp-" + key : ""),
           entry.label,
           () => {
+            menu.hidden = true;
+            trigger.setAttribute("aria-expanded", "false");
             if (!active) selectRole(entry.id);
           },
         );
         control.dataset.role = entry.id;
         control.setAttribute("aria-pressed", String(active));
-        control.title =
-          entry.label + " · " + (identity.displayName || identity.account);
-        cluster.append(control);
+        list.append(control);
       }
-      tabs.append(cluster);
+      section.append(list);
+      menu.append(section);
     }
+    const onOutside = (e) => {
+      if (!menu.hidden && !tabs.contains(e.target)) {
+        menu.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+      }
+    };
+    const onEsc = (e) => {
+      if (e.key === "Escape" && !menu.hidden) {
+        menu.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+        trigger.focus();
+      }
+    };
+    document.addEventListener("click", onOutside);
+    document.addEventListener("keydown", onEsc);
+    closeRoleMenu = () => {
+      document.removeEventListener("click", onOutside);
+      document.removeEventListener("keydown", onEsc);
+    };
+    tabs.append(trigger, menu);
   }
   function drawSidebar(identity, role) {
     nav.replaceChildren();
@@ -134,10 +243,14 @@ export function createMeridianShell({
     const chip = byId("role-group");
     chip.className = "role-chip grp-" + key;
     chip.textContent = groupLabel;
-    byId("role-code").textContent = role.id;
+    const roleCode = byId("role-code");
+    if (roleCode) roleCode.textContent = role.id;
     byId("account-menu").textContent =
       (identity.displayName || identity.account) + "（" + role.label + "）";
-    byId("role-focus").textContent = roleGuide[role.id]?.focus || "";
+    const focusText = roleGuide[role.id]?.focus || "";
+    const focusEl = byId("role-focus");
+    focusEl.textContent = focusText;
+    focusEl.title = focusText;
     byId("as-of").textContent = "";
     drawModes();
     for (const [i, section] of sectionsFor(role).entries()) {
@@ -182,6 +295,7 @@ export function createMeridianShell({
       document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     setTheme(t);
     setPreference("bzt.portal.theme", t);
+    toast(t === "dark" ? "已切换为深色主题" : "已切换为浅色主题");
   }
   function collapse(value) {
     collapsed = value;
@@ -248,12 +362,39 @@ export function createMeridianShell({
           sym: navIcons[s.id],
           run: () => openSection(s.id),
         })),
-      ...toolsFor(session.role).map((t) => ({
-        name: t.label,
-        group: "操作",
-        sym: "ArrowRight",
-        run: () => openTool(t.tool),
-      })),
+      ...toolsFor(session.role)
+        .filter((t) => t.tool !== "create_story")
+        .map((t) => ({
+          name: t.label,
+          group: "操作",
+          sym: "ArrowRight",
+          run: () => openTool(t.tool),
+        })),
+      ...(session.identity?.roles ?? [])
+        .filter((r) => r.id !== session.role?.id)
+        .map((r) => ({
+          name: "切换角色：" + r.label,
+          group: "视角与偏好",
+          sym: "Users",
+          run: () => selectRole(r.id),
+        })),
+      ...modes
+        .filter(([id]) => id !== mode())
+        .map(([id, label]) => ({
+          name: "工作台模式：" + label,
+          group: "视角与偏好",
+          sym: "LayoutDashboard",
+          run: () => {
+            setMode(id);
+            if (getCurrent() !== "workbench") openSection("workbench");
+          },
+        })),
+      {
+        name: "切换深浅主题",
+        group: "视角与偏好",
+        sym: "Sun",
+        run: toggleTheme,
+      },
       { name: "账号与职责", group: "账号", sym: "Users", run: showAccount },
     ];
     function paint(target, rows, { showEmpty, notice, offset = 0 } = {}) {
@@ -409,6 +550,7 @@ export function createMeridianShell({
       drawModes();
       openSection("workbench");
     }
+    toast("已恢复默认界面偏好", "success");
   };
   collapse(getPreference("bzt.portal.collapsed") === "yes");
   setTheme(getPreference("bzt.portal.theme") === "dark" ? "dark" : "light");
@@ -434,7 +576,7 @@ export function createMeridianShell({
     const digit = Number(e.key);
     if (digit >= 1 && digit <= 8) {
       const target = e.altKey
-        ? tabs.querySelectorAll("button")[digit - 1]
+        ? tabs.querySelectorAll("button[data-role]")[digit - 1]
         : nav.querySelectorAll("button")[digit - 1];
       if (target && !target.disabled) {
         e.preventDefault();
@@ -454,6 +596,10 @@ export function createMeridianShell({
     date,
     mode,
     setMode,
-    clear: () => activePopup?.close(),
+    toast,
+    clear: () => {
+      closeRoleMenu?.();
+      activePopup?.close();
+    },
   };
 }
