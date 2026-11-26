@@ -415,11 +415,16 @@ class StalePortalRequest extends Error {
   }
 }
 
-async function requestJson(send, url, { body, account, launch, signal } = {}) {
+async function requestJson(
+  send,
+  url,
+  { body, account, launch, csrfToken, signal } = {},
+) {
   const headers = { Accept: "application/json" };
   if (account !== undefined)
     headers["X-Bzt-Account"] = encodeURIComponent(account);
   if (launch) headers["X-Bzt-Launch"] = launch;
+  if (csrfToken) headers["X-Bzt-Csrf"] = csrfToken;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const response = await send(url, {
     method: body === undefined ? "GET" : "POST",
@@ -501,6 +506,7 @@ export function createPortalSession(send = fetch) {
     identity = next;
     role =
       (identity.account === preferred?.account &&
+        (identity.instanceId ?? "") === (preferred?.instanceId ?? "") &&
         identity.roles.find(({ id }) => id === preferred.role)) ||
       identity.roles[0];
   }
@@ -529,6 +535,7 @@ export function createPortalSession(send = fetch) {
     restore() {
       return load("/api/session", undefined, {
         account: identity?.account,
+        instanceId: identity?.instanceId,
         role: role?.id,
       });
     },
@@ -547,7 +554,8 @@ export function createPortalSession(send = fetch) {
       )
         return "unchanged";
       const retained =
-        next?.account === identity?.account
+        next?.account === identity?.account &&
+        (next?.instanceId ?? "") === (identity?.instanceId ?? "")
           ? next?.roles.find(({ id }) => id === role?.id)
           : undefined;
       const preserveForm =
@@ -562,10 +570,11 @@ export function createPortalSession(send = fetch) {
     startup(launch) {
       return requestJson(send, "/api/startup", { launch });
     },
-    login(account, password, { baseUrl, launch } = {}) {
+    login(account, password, { baseUrl, launch, instanceId } = {}) {
       return load("/api/login", {
         account,
         password,
+        ...(instanceId && { instanceId }),
         ...(baseUrl && { baseUrl }),
         ...(launch && { launch }),
       });
@@ -579,21 +588,29 @@ export function createPortalSession(send = fetch) {
           code: "PERMISSION_DENIED",
         });
       const account = identity.account;
+      const instanceId = identity.instanceId;
+      const csrfToken = identity.csrfToken;
       const before = version;
       const next = await requestJson(send, "/api/roles", {
         account,
+        csrfToken,
         body: { roles, revision },
       });
       if (version !== before || next.account !== account)
         throw new StalePortalRequest();
       ++version;
-      setIdentity(next, { account, role: role?.id });
+      setIdentity(next, { account, instanceId, role: role?.id });
     },
     async logout() {
       const account = identity?.account;
+      const csrfToken = identity?.csrfToken;
       invalidate();
       if (account !== undefined)
-        await requestJson(send, "/api/logout", { account, body: {} });
+        await requestJson(send, "/api/logout", {
+          account,
+          csrfToken,
+          body: {},
+        });
     },
     selectRole(id) {
       const next = identity?.roles.find((entry) => entry.id === id);
@@ -605,6 +622,8 @@ export function createPortalSession(send = fetch) {
     scope(signal) {
       const versionAtOpen = version;
       const accountAtOpen = identity?.account;
+      const instanceAtOpen = identity?.instanceId ?? "";
+      const csrfAtOpen = identity?.csrfToken;
       const roleAtOpen = role;
       const current = () =>
         Boolean(roleAtOpen && version === versionAtOpen && !signal?.aborted);
@@ -617,7 +636,10 @@ export function createPortalSession(send = fetch) {
           check();
           const latest = await requestJson(send, "/api/session", { signal });
           check();
-          if (latest.account !== accountAtOpen) {
+          if (
+            latest.account !== accountAtOpen ||
+            (latest.instanceId ?? "") !== instanceAtOpen
+          ) {
             throw Object.assign(new Error("登录账号已切换。"), {
               status: 409,
               code: "AUTH_FAILED",
@@ -642,6 +664,7 @@ export function createPortalSession(send = fetch) {
           try {
             const result = await requestJson(send, "/api/call", {
               account: accountAtOpen,
+              csrfToken: csrfAtOpen,
               signal,
               body: {
                 role: roleAtOpen.id,
@@ -662,6 +685,7 @@ export function createPortalSession(send = fetch) {
           check();
           const result = await requestJson(send, "/api/updates", {
             account: accountAtOpen,
+            csrfToken: csrfAtOpen,
             signal,
             body: {
               role: roleAtOpen.id,
@@ -825,6 +849,8 @@ function mountPortal(
   const loginStatus = byId("login-status");
   const accountInput = byId("login-account");
   const passwordInput = byId("login-password");
+  const instanceInput = byId("login-instance");
+  const instanceField = byId("login-instance-field");
   const baseUrlInput = byId("login-base-url");
   const baseUrlField = byId("login-base-url-field");
   const launchRequired = byId("launch-required");
@@ -974,6 +1000,8 @@ function mountPortal(
   };
   const sectionKey = () =>
     "bzt.portal.section/" +
+    encodeURIComponent(session.identity?.instanceId ?? "") +
+    "/" +
     encodeURIComponent(session.identity?.account ?? "") +
     "/" +
     (session.role?.id ?? "");
@@ -1089,9 +1117,12 @@ function mountPortal(
     activityScope = undefined;
     activity = undefined;
     showDataStatus();
-    if (periodAccount !== identity?.account) {
+    const nextPeriodKey = identity
+      ? `${identity.instanceId ?? ""}\0${identity.account}`
+      : undefined;
+    if (periodAccount !== nextPeriodKey) {
       selectedMonth = undefined;
-      periodAccount = identity?.account;
+      periodAccount = nextPeriodKey;
     }
     if (!identity) {
       accountDialog.close();
@@ -1295,12 +1326,31 @@ function mountPortal(
     portal.hidden = true;
     startup.hidden = false;
     try {
-      const { needsBaseUrl, account } = settings ?? (await session.startup());
-      const canSetBaseUrl = needsBaseUrl && Boolean(launch);
+      const info = settings ?? (await session.startup());
+      const { needsBaseUrl, account, mode, instances } = info;
+      const isServer = mode === "server" && Array.isArray(instances);
+      if (instanceField && instanceInput) {
+        instanceField.hidden = !isServer;
+        instanceInput.disabled = !isServer;
+        instanceInput.required = isServer;
+        if (isServer) {
+          const previous = instanceInput.value;
+          instanceInput.replaceChildren(
+            ...instances.map(({ id, name }) => {
+              const option = make("option", name || id);
+              option.value = id;
+              return option;
+            }),
+          );
+          if (instances.some(({ id }) => id === previous))
+            instanceInput.value = previous;
+        }
+      }
+      const canSetBaseUrl = !isServer && needsBaseUrl && Boolean(launch);
       baseUrlField.hidden = !canSetBaseUrl;
       baseUrlInput.disabled = !canSetBaseUrl;
       baseUrlInput.required = canSetBaseUrl;
-      launchRequired.hidden = !needsBaseUrl || canSetBaseUrl;
+      launchRequired.hidden = isServer || !needsBaseUrl || canSetBaseUrl;
       loginForm.hidden = !launchRequired.hidden;
       if (account && !accountInput.value) accountInput.value = account;
     } catch {
@@ -1835,6 +1885,10 @@ function mountPortal(
     );
     try {
       await session.login(accountInput.value.trim(), passwordInput.value, {
+        instanceId:
+          instanceInput && !instanceInput.disabled
+            ? instanceInput.value
+            : undefined,
         baseUrl: baseUrlInput.disabled ? undefined : baseUrlInput.value.trim(),
         launch,
       });

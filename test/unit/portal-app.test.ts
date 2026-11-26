@@ -508,4 +508,65 @@ describe("本机门户首次登录与职责设置", () => {
     expect(portal.role).toEqual(qa);
     expect(oldWork.current()).toBe(false);
   });
+
+  it("SRV-ISO-04 同名账号切换实例时携带新 CSRF、作废旧作用域并丢弃晚到响应", async () => {
+    const delayed = Promise.withResolvers<Response>();
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        json({
+          instanceId: "instanceA",
+          account: "alice",
+          csrfToken: "csrf-a",
+          roles: [fb, qa],
+        }),
+      )
+      .mockImplementationOnce(() => delayed.promise)
+      .mockResolvedValueOnce(
+        json({
+          instanceId: "instanceB",
+          account: "alice",
+          csrfToken: "csrf-b",
+          roles: [fb],
+        }),
+      )
+      .mockResolvedValueOnce(json({ ok: true, from: "instanceB" }));
+
+    const portal = createPortalSession(request);
+    await portal.login("alice", "pw", { instanceId: "instanceA" });
+    portal.selectRole("QA");
+    const scopeA = portal.scope();
+    const staleCall = scopeA.call("get_my_work", {});
+    expect(request.mock.calls[1]).toEqual([
+      "/api/call",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Bzt-Csrf": "csrf-a" }),
+      }),
+    ]);
+
+    await portal.login("alice", "pw", { instanceId: "instanceB" });
+    expect(scopeA.current()).toBe(false);
+    expect(portal.identity).toMatchObject({
+      instanceId: "instanceB",
+      account: "alice",
+    });
+    expect(portal.role).toEqual(fb);
+
+    delayed.resolve(json({ ok: true, from: "instanceA" }));
+    await expect(staleCall).rejects.toMatchObject({
+      name: "StalePortalRequest",
+    });
+
+    const scopeB = portal.scope();
+    await expect(scopeB.call("get_my_work", {})).resolves.toEqual({
+      ok: true,
+      from: "instanceB",
+    });
+    expect(request.mock.calls[3]).toEqual([
+      "/api/call",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Bzt-Csrf": "csrf-b" }),
+      }),
+    ]);
+  });
 });

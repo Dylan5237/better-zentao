@@ -81,6 +81,10 @@
             action="/api/login"
             aria-describedby="login-status"
           >
+            <label id="login-instance-field" class="field" hidden>
+              <span>禅道实例</span>
+              <select id="login-instance" name="instanceId" disabled></select>
+            </label>
             <label id="login-base-url-field" class="field" hidden>
               <span>禅道地址</span>
               <input
