@@ -109,11 +109,13 @@ export function createPartitionedReadPool(options: PartitionedReadPoolOptions) {
     request: ReadSlotRequest,
     fn: () => Promise<T>,
   ): Promise<T> {
-    if (!hasCapacity(request))
+    if (hasCapacity(request)) {
+      acquire(request);
+    } else {
       await new Promise<void>((resolve) => {
         waiting.push({ resolve, request });
       });
-    acquire(request);
+    }
     try {
       return await fn();
     } finally {
@@ -123,6 +125,8 @@ export function createPartitionedReadPool(options: PartitionedReadPoolOptions) {
 
   return { withReadSlot };
 }
+
+export type PartitionedReadPool = ReturnType<typeof createPartitionedReadPool>;
 
 let readConcurrency = 8;
 let readsInFlight = 0;

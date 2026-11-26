@@ -6,6 +6,7 @@ import {
   readRetryDelaysMs,
   withInstanceWriteLock,
   withReadSlot,
+  type PartitionedReadPool,
 } from "../../core/http-policy.ts";
 import {
   httpLogIds,
@@ -44,6 +45,12 @@ export interface ZentaoHttpOptions {
    * 401 时不自动重登，直接失效 Token 并上抛 AUTH_FAILED。
    */
   readonly token?: string;
+  /** Token-only 模式下遇上游 401 时触发，供服务端立即撤销会话。 */
+  readonly onAuthFailed?: () => void;
+  /** 可选分区读取并发池（Server 1.0）。 */
+  readonly readPool?: PartitionedReadPool;
+  /** 分区并发池所需的实例哈希键。 */
+  readonly instanceHash?: string;
 }
 
 /** ADR-22：一次性换取禅道 Token，不保留密码。 */
@@ -52,6 +59,13 @@ export async function exchangeZentaoToken(options: {
   readonly account: string;
   readonly password: string;
   readonly clock: Clock;
+  readonly env?: Readonly<{
+    ZENTAO_TIMEOUT_MS?: string;
+    BZT_LOG_LEVEL?: string;
+  }>;
+  readonly logSink?: (line: string) => void;
+  readonly readPool?: PartitionedReadPool;
+  readonly instanceHash?: string;
   readonly fetch?: typeof fetch;
 }): Promise<{ readonly token: string }> {
   const credentials = loginCredentials.safeParse(options);
@@ -60,41 +74,84 @@ export async function exchangeZentaoToken(options: {
   const normalized = normalizeZentaoBaseUrl(options.baseUrl);
   if (!normalized) throw new BztError("INVALID_INPUT", "禅道基础地址不合法。");
   const url = new URL(tokenPath.slice(1), normalized.href).href;
-  let response: Response;
-  try {
-    response = await (options.fetch ?? fetch)(url, {
-      method: "POST",
-      // SSRF 防线：凭据绝不随重定向转发（docs/06 §2.2）。
-      redirect: "error",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(credentials.data),
-    });
-  } catch {
-    throw new BztError("ZENTAO_UNAVAILABLE", "无法连接禅道。");
+  const started = options.clock();
+  const perform = async () => {
+    let response: Response;
+    try {
+      response = await (options.fetch ?? fetch)(url, {
+        method: "POST",
+        // SSRF 防线：凭据绝不随重定向转发（docs/06 §2.2）。
+        redirect: "error",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(credentials.data),
+      });
+    } catch {
+      try {
+        writeHttpLog(
+          {
+            method: "POST",
+            pathTemplate: tokenPath,
+            status: 0,
+            durationMs: Math.max(0, options.clock() - started),
+          },
+          options.logSink,
+          options.env,
+        );
+      } catch {
+        // 日志输出失败不掩盖原始错误。
+      }
+      throw new BztError("ZENTAO_UNAVAILABLE", "无法连接禅道。");
+    }
+    try {
+      writeHttpLog(
+        {
+          method: "POST",
+          pathTemplate: tokenPath,
+          status: response.status,
+          durationMs: Math.max(0, options.clock() - started),
+        },
+        options.logSink,
+        options.env,
+      );
+    } catch {
+      // 日志输出失败不掩盖认证响应。
+    }
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => {});
+      if (response.status >= 400 && response.status < 500) throw authFailed();
+      throw new BztError("ZENTAO_UNAVAILABLE", "无法连接禅道。", {
+        status: response.status,
+      });
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(await response.text());
+    } catch {
+      throw authFailed();
+    }
+    const parsed = z
+      .object({ token: z.string().refine((value) => value.trim() !== "") })
+      .safeParse(payload);
+    if (!parsed.success) throw authFailed();
+    // 校验 Fetch 实际发送的头值，无效 Token 不能进入后续业务请求。
+    if (
+      new Headers({ Token: parsed.data.token }).get("Token") !==
+      parsed.data.token
+    )
+      throw authFailed();
+    return { token: parsed.data.token };
+  };
+  if (options.readPool && options.instanceHash) {
+    return options.readPool.withReadSlot(
+      {
+        instanceHash: options.instanceHash,
+        account: credentials.data.account,
+        priority: "auth",
+      },
+      perform,
+    );
   }
-  if (!response.ok) {
-    void response.body?.cancel().catch(() => {});
-    if (response.status >= 400 && response.status < 500) throw authFailed();
-    throw new BztError("ZENTAO_UNAVAILABLE", "无法连接禅道。", {
-      status: response.status,
-    });
-  }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(await response.text());
-  } catch {
-    throw authFailed();
-  }
-  const parsed = z
-    .object({ token: z.string().refine((value) => value.trim() !== "") })
-    .safeParse(payload);
-  if (!parsed.success) throw authFailed();
-  // 校验 Fetch 实际发送的头值，无效 Token 不能进入后续业务请求。
-  if (
-    new Headers({ Token: parsed.data.token }).get("Token") !== parsed.data.token
-  )
-    throw authFailed();
-  return { token: parsed.data.token };
+  return perform();
 }
 
 export interface ReadRequest extends HttpLogIds {
@@ -494,7 +551,17 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     for (;;) {
       const session = await auth.getSession();
       capture?.observeSession(session.token);
-      const result = await withReadSlot(() => send(prepared, session.token));
+      const runRead = () => send(prepared, session.token);
+      const result =
+        options.readPool && options.instanceHash
+          ? await options.readPool.withReadSlot(
+              {
+                instanceHash: options.instanceHash,
+                account: options.account,
+              },
+              runRead,
+            )
+          : await withReadSlot(runRead);
       if (result.kind === "success") {
         const body = decodeJson(
           result.text,
@@ -507,6 +574,7 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       }
       if (result.kind === "http-error" && result.status === 401) {
         auth.invalidate(session);
+        if (tokenOnly) options.onAuthFailed?.();
         if (tokenOnly || replayed) throw authFailed();
         replayed = true;
         continue;
@@ -569,6 +637,7 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
         // docs/06 §2.2 无法证明 401 的写请求未进入业务处理。
         if (result.status === 401) {
           auth.invalidate(session);
+          if (tokenOnly) options.onAuthFailed?.();
           throw postSendAuthFailure();
         }
         throw requestError(result);

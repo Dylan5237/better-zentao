@@ -42,11 +42,22 @@ function response(entry: Snapshot, fromCache: boolean, retained = false) {
   };
 }
 
+export interface PortalSnapshotOptions {
+  readonly ttlMs?: number;
+  readonly bypassTools?: ReadonlySet<string>;
+  readonly failClosedOnPartial?: boolean;
+}
+
 export function createPortalSnapshots(
-  cache: Pick<CacheRepository, "get" | "set" | "pruneExpired" | "trimPrefix">,
+  cache: Pick<CacheRepository, "get" | "set" | "pruneExpired" | "trimPrefix"> &
+    Partial<Pick<CacheRepository, "delete">>,
   clock: () => number,
   sampleActivity: () => Promise<unknown>,
+  options: PortalSnapshotOptions = {},
 ) {
+  const effectiveTtlMs = options.ttlMs ?? ttlMs;
+  const bypassTools = options.bypassTools;
+  const failClosedOnPartial = options.failClosedOnPartial === true;
   const inFlight = new Map<string, Promise<unknown>>();
   let probe: Promise<z.infer<typeof probeRow>> | undefined;
   let generation = 0;
@@ -64,9 +75,17 @@ export function createPortalSnapshots(
     try {
       const json = JSON.stringify(value);
       if (Buffer.byteLength(json) <= 2 * 1024 * 1024)
-        cache.set(key, json, ttlMs);
+        cache.set(key, json, effectiveTtlMs);
     } catch {
       // 本地缓存不可用时，仍可直接显示已取得的数据。
+    }
+  }
+
+  function evict(key: string) {
+    try {
+      cache.delete?.(key);
+    } catch {
+      // 淘汰失败不覆盖主错误。
     }
   }
   try {
@@ -83,6 +102,10 @@ export function createPortalSnapshots(
     fetchReport: () => Promise<unknown>,
     configRevision = "",
   ) {
+    if (bypassTools?.has(tool)) {
+      if (mode === "cached") return { ok: false };
+      return fetchReport();
+    }
     const key = prefix + hash([configRevision, role, tool, input]);
     const old = load(key, row);
     if (old && mode !== "sync") return response(old, true);
@@ -94,12 +117,18 @@ export function createPortalSnapshots(
       try {
         const result = await fetchReport();
         const parsed = report.safeParse(result);
-        if (
-          !parsed.success ||
-          (old?.report.completeness === "complete" &&
-            parsed.data.completeness === "partial")
-        ) {
+        if (!parsed.success) {
           return old ? response(old, true, true) : result;
+        }
+        if (
+          old?.report.completeness === "complete" &&
+          parsed.data.completeness === "partial"
+        ) {
+          if (failClosedOnPartial) {
+            evict(key);
+            return result;
+          }
+          return response(old, true, true);
         }
         const entry = { report: parsed.data, savedAt: clock() };
         if (generation === stamp) {
@@ -113,16 +142,18 @@ export function createPortalSnapshots(
         return response(entry, false);
       } catch (error) {
         if (
-          old &&
-          (!(error instanceof BztError) ||
-            ![
-              "AUTH_FAILED",
-              "PERMISSION_DENIED",
-              "INVALID_INPUT",
-              "NOT_FOUND",
-            ].includes(error.code))
-        )
-          return response(old, true, true);
+          error instanceof BztError &&
+          [
+            "AUTH_FAILED",
+            "PERMISSION_DENIED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+          ].includes(error.code)
+        ) {
+          evict(key);
+          throw error;
+        }
+        if (old) return response(old, true, true);
         throw error;
       }
     })();
@@ -138,6 +169,7 @@ export function createPortalSnapshots(
     role: string,
     acknowledge?: string,
     section = "workbench",
+    sampleOverride?: () => Promise<unknown>,
   ) {
     const key = "portal-activity-v1";
     const baselineKey = "portal-activity-base-v1:" + role + ":" + section;
@@ -146,7 +178,8 @@ export function createPortalSnapshots(
       probe ??= (async () => {
         const checkedAt = clock();
         try {
-          const current = { checkedAt, revision: hash(await sampleActivity()) };
+          const sampler = sampleOverride ?? sampleActivity;
+          const current = { checkedAt, revision: hash(await sampler()) };
           save(key, current);
           return current;
         } catch {

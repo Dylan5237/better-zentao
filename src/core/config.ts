@@ -584,7 +584,7 @@ function parseConfig<T>(
 const jsonKey = z.string();
 
 // JSON.parse 已验证语法，但会覆盖重复键。按原文的对象边界核对解码后的键名。
-function rejectDuplicateKeys(contents: string, source: string): void {
+export function rejectDuplicateKeys(contents: string, source: string): void {
   const objects: Set<string>[] = [];
   const tokens = /[{}]|("(?:\\.|[^"\\])*")\s*(:)?/gu;
   for (const [token, quoted, colon] of contents.matchAll(tokens)) {
