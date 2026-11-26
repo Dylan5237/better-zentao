@@ -319,7 +319,10 @@ export const teamConfigSchema = z
       )
       .default({}),
     roles: z
-      .partialRecord(z.enum(["PM", "PJ", "DM", "RM", "QA_LEAD"]), z.array(text))
+      .partialRecord(
+        z.enum(["PM", "PJ", "DM", "RM", "QA_LEAD", "FB", "DS", "RD", "QA"]),
+        z.array(text),
+      )
       .default({}),
     aliases: z.record(text, text).default({}),
     naming,
@@ -456,6 +459,8 @@ interface ConfigSources {
   readonly env: ConfigEnv;
   readonly homeDir?: string;
   readonly cli?: ConfigOverrides;
+  readonly optionalTeamConfig?: boolean;
+  readonly includeTeamDocument?: boolean;
 }
 
 const credentialField =
@@ -600,7 +605,7 @@ async function readConfigFile(
   source: string,
   known: readonly string[],
   optional = false,
-): Promise<unknown> {
+) {
   let contents: string;
   try {
     contents = await readFile(path, "utf8");
@@ -623,7 +628,7 @@ async function readConfigFile(
   rejectDuplicateKeys(contents, source);
   // 必须先扫描原始 JSON，避免敏感字段在投影时消失。
   scanConfigCredentials(input, known);
-  return input;
+  return { contents, input };
 }
 
 function productOverride(
@@ -640,7 +645,13 @@ function productOverride(
   return result.data;
 }
 
-export async function loadFileConfig({ env, homeDir, cli }: ConfigSources) {
+export async function loadFileConfig({
+  env,
+  homeDir,
+  cli,
+  optionalTeamConfig = false,
+  includeTeamDocument = false,
+}: ConfigSources) {
   const known = knownCredentials(env);
   const teamPath = (cli?.config ?? env.BZT_CONFIG)?.trim();
   if (cli?.config !== undefined && !teamPath) {
@@ -652,7 +663,7 @@ export async function loadFileConfig({ env, homeDir, cli }: ConfigSources) {
     (normalizedHomeDir ? join(normalizedHomeDir, ".better-zentao") : undefined);
   const source = cli?.config === undefined ? "BZT_CONFIG" : "--config";
   const teamRaw = teamPath
-    ? await readConfigFile(teamPath, source, known)
+    ? await readConfigFile(teamPath, source, known, optionalTeamConfig)
     : undefined;
   const userRaw = stateDir
     ? await readConfigFile(
@@ -664,12 +675,12 @@ export async function loadFileConfig({ env, homeDir, cli }: ConfigSources) {
     : undefined;
   const team = parseConfig(
     teamConfigSchema,
-    teamRaw === undefined ? {} : teamRaw,
+    teamRaw === undefined ? {} : teamRaw.input,
     known,
   );
   const user = parseConfig(
     userConfigSchema,
-    userRaw === undefined ? {} : userRaw,
+    userRaw === undefined ? {} : userRaw.input,
     known,
   );
   if (team.mode === "strict-ai" && user.mode === "personal") {
@@ -688,6 +699,7 @@ export async function loadFileConfig({ env, homeDir, cli }: ConfigSources) {
     stateDir,
     productId: productOverride(cli?.product),
     configured: teamRaw !== undefined || userRaw !== undefined,
+    ...(includeTeamDocument && { teamDocument: teamRaw }),
   };
 }
 

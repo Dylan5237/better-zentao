@@ -92,7 +92,7 @@ export const draft = {
   verify: "显示对应部门的数据",
 };
 
-function fakeZentao() {
+export function fakeZentao() {
   const stories = new Map([
     [31, story],
     [32, uncertainStory],

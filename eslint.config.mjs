@@ -469,6 +469,35 @@ export default [
     },
   },
   {
+    files: ["src/adapters/web/server.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            "process",
+            "node:process",
+            {
+              name: "node:http",
+              allowImportNames: [
+                "createServer",
+                "IncomingMessage",
+                "ServerResponse",
+              ],
+            },
+          ],
+          patterns: [
+            {
+              ...networkModules,
+              regex: "^(?!node:http$)(?:" + networkModules.regex + ")",
+            },
+            restrictedModules[1],
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["src/{domain,rules}/**/*.ts", ...pureCoreFiles],
     rules: {
       "no-restricted-globals": restrictedGlobals([

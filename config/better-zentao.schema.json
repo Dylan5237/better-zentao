@@ -182,7 +182,7 @@
       "type": "object",
       "propertyNames": {
         "type": "string",
-        "enum": ["PM", "PJ", "DM", "RM", "QA_LEAD"]
+        "enum": ["PM", "PJ", "DM", "RM", "QA_LEAD", "FB", "DS", "RD", "QA"]
       },
       "additionalProperties": {
         "type": "array",

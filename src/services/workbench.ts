@@ -6,7 +6,7 @@ import {
   operationPlanSchema,
   type OperationResult,
 } from "../contracts/operation.ts";
-import { getInstanceConfig } from "../api/org.ts";
+import { getCurrentUser, getInstanceConfig } from "../api/org.ts";
 import { toolErrorMessages, toolErrorSchema } from "../contracts/error.ts";
 import type { ToolError } from "../contracts/error.ts";
 import type { ConfirmOperation, GetOperation } from "../contracts/operation.ts";
@@ -16,7 +16,7 @@ import {
   loadConfig,
 } from "../core/config.ts";
 import { normalizeZentaoBaseUrl } from "../core/base-url.ts";
-import type { ConfigEnv } from "../core/config.ts";
+import type { ConfigEnv, TeamConfig } from "../core/config.ts";
 import { BztError } from "../core/errors.ts";
 import {
   instanceHashOf,
@@ -52,14 +52,18 @@ const utcTimestamp = new Intl.DateTimeFormat("sv-SE", {
   second: "2-digit",
 });
 
-async function assemble(runtime: WorkbenchRuntime | undefined) {
+async function assemble(
+  runtime: WorkbenchRuntime | undefined,
+  verifyIdentity = false,
+  optionalTeamConfig = false,
+) {
   const missing = findMissingEnv(runtime?.env ?? {});
   const password = runtime?.env.ZENTAO_PASSWORD;
   if (!runtime || !password || missing.length)
     throw new BztError("CONFIG_MISSING", "缺少必填禅道环境变量。", {
       fields: missing,
     });
-  const config = await loadConfig(runtime);
+  const config = await loadConfig({ ...runtime, optionalTeamConfig });
   const { baseUrl, account } = config.zentao;
   const { clock, logSink, env } = runtime;
   const client = createZentaoReadClient({
@@ -71,6 +75,10 @@ async function assemble(runtime: WorkbenchRuntime | undefined) {
     env,
     timezone: config.timezone,
   });
+  // Web 登录必须回读本人身份，不能用已有目录缓存接受新提交的密码。
+  const viewer = verifyIdentity ? await getCurrentUser(client) : undefined;
+  if (viewer && viewer.account !== account.trim())
+    throw new BztError("AUTH_FAILED", "登录账号与禅道返回的身份不一致。");
   const store = openLocalStore({
     baseUrl,
     account,
@@ -203,6 +211,70 @@ async function assemble(runtime: WorkbenchRuntime | undefined) {
   }
 
   return {
+    viewer,
+    get releaseCalendar() {
+      return config.releaseCalendar.map(({ product, version, date }) => ({
+        product,
+        version,
+        date,
+      }));
+    },
+    portalTeams() {
+      const designers = config.teams.design;
+      const developmentTeams = Object.entries(config.teams)
+        .filter(
+          ([key, team]) =>
+            ["fe", "be"].includes(key) ||
+            team.executionKinds?.some(
+              (kind) => kind === "dev" || kind === "ui",
+            ),
+        )
+        .map(([id, team]) => ({
+          id,
+          name: team.name,
+          members: [...new Set([team.lead, ...team.members])],
+        }));
+      return {
+        developmentTeams,
+        designMaintainers: designers
+          ? [...new Set([designers.lead, ...designers.members])].map(
+              (account) => ({
+                account,
+                lead: account === designers.lead,
+                ...(viewer?.account === account && viewer.realname
+                  ? { realname: viewer.realname }
+                  : {}),
+              }),
+            )
+          : undefined,
+      };
+    },
+    get roles() {
+      return config.roles;
+    },
+    updateRoles(roles: TeamConfig["roles"]) {
+      config.roles = roles;
+    },
+    intakeCatalog() {
+      const products = Object.entries(config.products)
+        .filter(
+          ([, product]) => product.enabled !== false && !product.probeOnly,
+        )
+        .map(([id, product]) => ({
+          id: Number(id),
+          name: product.name,
+          modules: Object.entries(config.modules)
+            .filter(([key]) => key.startsWith(id + ":"))
+            .map(([key, module]) => ({
+              id: Number(key.split(":")[1]),
+              path: module.name,
+              designLead:
+                module.designLead ?? config.moduleDefaults[id]?.designLead,
+              devLead: module.devLead ?? config.moduleDefaults[id]?.devLead,
+            })),
+        }));
+      return { products };
+    },
     directory,
     management,
     async decomposeStories(input: unknown) {
@@ -266,6 +338,13 @@ async function assemble(runtime: WorkbenchRuntime | undefined) {
 }
 
 export type Workbench = Awaited<ReturnType<typeof assemble>>;
+
+export function openAuthenticatedWorkbench(
+  runtime: WorkbenchRuntime,
+  optionalTeamConfig = false,
+) {
+  return assemble(runtime, true, optionalTeamConfig);
+}
 
 export function createWorkbench(runtime?: WorkbenchRuntime) {
   let pending: Promise<Workbench> | undefined;

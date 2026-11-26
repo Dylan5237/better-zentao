@@ -1,0 +1,241 @@
+﻿/* The v11 stylesheet supplies the application layout. These rules connect native dialogs,
+   account setup and responsive keyboard navigation to that layout. */
+:root {
+  --canvas: var(--bg-canvas);
+  --surface: var(--bg-surface);
+  --surface-alt: var(--bg-subtle);
+  --ink: var(--ink-primary);
+  --muted: var(--ink-muted);
+  --text: var(--ink-primary);
+  --text-muted: var(--ink-secondary);
+  --text-soft: var(--ink-muted);
+  --field-line: var(--border-strong);
+  --line: var(--border-hairline);
+  --border: var(--border-hairline);
+  --primary: var(--accent);
+  --primary-soft: var(--accent-soft);
+  --primary-border: var(--accent-border);
+  --accent-strong: var(--accent-hover);
+  --warning: var(--warn);
+  --warning-bg: var(--warn-soft);
+  --danger-bg: var(--danger-soft);
+}
+[hidden],
+dialog:not([open]) {
+  display: none !important;
+}
+#workspace {
+  display: contents;
+}
+@media (min-width: 1141px) {
+  /* Keep the grouped role switcher anchored when the live data caption is shorter. */
+  .bzt-topbar .bzt-brand {
+    min-width: 349.390625px;
+  }
+}
+#role-nav {
+  display: contents;
+}
+#role-nav .is-active .rec-dot {
+  display: none;
+}
+.bzt-sidebar.is-collapsed
+  :is(
+    .quick-search-text,
+    kbd,
+    .nav-group-label,
+    .sidebar-role-card,
+    .sidebar-perm-note,
+    .nav-item-label,
+    .rec-dot,
+    .nav-ro-tag,
+    .nav-badge,
+    .sidebar-footer-note
+  ) {
+  display: none;
+}
+.sidebar-role-title {
+  display: block;
+  line-height: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+}
+.sidebar-role-title:hover {
+  text-decoration: underline;
+}
+.portal-drawer,
+.portal-dialog,
+.portal-popup {
+  color: var(--ink-primary);
+  padding: 0;
+}
+.portal-drawer {
+  position: fixed;
+  inset: 0 0 0 auto;
+  margin: 0;
+  max-height: 100dvh;
+  overflow: hidden;
+  border: 0;
+  border-left: 1px solid var(--border-strong);
+}
+.portal-dialog,
+.portal-popup {
+  margin: auto;
+}
+.portal-dialog::backdrop,
+.portal-drawer::backdrop,
+.portal-popup::backdrop {
+  background: var(--bg-backdrop);
+}
+.portal-dialog .modal-body {
+  min-height: 0;
+  overflow: auto;
+}
+.management-drawer-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+.drawer-head-left .header-glyph {
+  color: var(--accent);
+}
+.portal-popup.cmd-palette {
+  margin: 12vh auto auto;
+}
+.cmd-item {
+  color: inherit;
+}
+.login-card,
+.role-setup {
+  background: var(--bg-surface);
+  color: var(--ink-primary);
+}
+.sk-startup .sk-lines { margin-top: 22px; gap: 17px; }
+.sk-query { display: grid; min-width: 0; gap: 15px; }
+.sk-command { display: flex; align-items: center; gap: 9px; }
+.sk-command .sk-avatar { width: 15px; height: 15px; }
+.sk-command .sk-text { max-width: 62%; }
+.sk-role-stack { position: relative; }
+.sk-role-overlay { position: absolute; inset: 0; pointer-events: none; }
+.sk-role-stack:has(.sk-role-options) > fieldset { visibility: hidden; }
+.sk-role-overlay .sk-role-options { margin: 0; height: 100%; padding-top: 10px; }
+.sk-role-options .sk-avatar { width: 17px; height: 17px; }
+.sk-nav-slot:empty { display: none; }
+.sk-nav-slot .sk-chip { display: block; width: 21px; height: 15px; }
+.login-panel form,
+.role-setup .role-options {
+  padding-top: 10px;
+}
+.bzt-main:has(.role-setup),
+.bzt-main:has(.empty-panel) {
+  overflow: auto;
+}
+.role-setup,
+.empty-panel {
+  max-width: 800px;
+  margin: clamp(16px, 6vh, 64px) auto;
+}
+.role-setup-actions {
+  gap: 10px;
+}
+#account-dialog {
+  width: min(380px, 92vw);
+}
+#account-dialog .modal-body {
+  display: block;
+}
+#session-account {
+  margin-bottom: 14px;
+}
+#account-start {
+  margin-inline-start: 4px;
+}
+.skip-link:not(:focus) {
+  clip-path: inset(50%);
+  height: 1px;
+  width: 1px;
+  overflow: hidden;
+}
+.bzt-main:focus {
+  outline: none;
+}
+input,
+textarea,
+select {
+  color: var(--ink-primary);
+}
+@media (max-width: 760px) {
+  body {
+    overflow: auto;
+  }
+  .bzt-app {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+  .bzt-body {
+    flex-direction: column;
+    overflow: visible;
+  }
+  .bzt-topbar {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 10px;
+  }
+  .role-switcher {
+    order: 3;
+    max-width: 100%;
+    overflow: auto;
+  }
+  .bzt-brand-sub {
+    font-size: 10px;
+  }
+  .bzt-topbar-actions {
+    gap: 3px;
+  }
+  .bzt-sidebar,
+  .bzt-sidebar.is-collapsed {
+    width: 100%;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-hairline);
+  }
+  .bzt-sidebar .sidebar-top-row {
+    padding: 4px 8px;
+    flex-direction: row;
+  }
+  .sidebar-scroll {
+    display: flex;
+    align-items: center;
+    overflow-x: auto;
+    padding: 3px 8px;
+    gap: 2px;
+  }
+  .sidebar-scroll .nav-group-label,
+  .sidebar-scroll .nav-divider,
+  .sidebar-role-card,
+  .sidebar-footer,
+  .sidebar-perm-note {
+    display: none;
+  }
+  .sidebar-scroll .bzt-nav-item {
+    width: auto;
+    flex-shrink: 0;
+  }
+  .bzt-main {
+    padding: 12px 10px 24px;
+    overflow: visible;
+  }
+  .bzt-sidebar.is-collapsed .sidebar-scroll {
+    display: none;
+  }
+}
+
+@media (min-width: 761px) {
+  #account-start.only-compact {
+    display: none;
+  }
+}

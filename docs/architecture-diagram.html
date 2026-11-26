@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>better-zentao 系统架构与实现状态全景图</title>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      font-family: 'JetBrains Mono', 'Cascadia Mono', 'PingFang SC', 'Microsoft YaHei', monospace;
+      background: #020617;
+      color: #f8fafc;
+    }
+
+    body {
+      padding: 2rem;
+    }
+
+    .container {
+      max-width: 1280px;
+      margin: 0 auto;
+    }
+
+    .header {
+      margin-bottom: 1.5rem;
+    }
+
+    .header-row {
+      display: flex;
+      align-items: center;
+      gap: 0.875rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .pulse-dot {
+      width: 12px;
+      height: 12px;
+      background: #34d399;
+      border-radius: 50%;
+      box-shadow: 0 0 10px rgba(52, 211, 153, 0.7);
+      animation: pulse 2s infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.45; }
+    }
+
+    h1 {
+      font-size: 1.45rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #f8fafc;
+    }
+
+    .subtitle {
+      color: #94a3b8;
+      font-size: 0.84rem;
+      margin-left: 1.625rem;
+      line-height: 1.5;
+    }
+
+    .diagram-container {
+      background: rgba(15, 23, 42, 0.55);
+      border-radius: 1rem;
+      border: 1px solid #1e293b;
+      padding: 1.25rem;
+      overflow-x: auto;
+    }
+
+    svg {
+      width: 100%;
+      min-width: 1020px;
+      display: block;
+      font-family: 'JetBrains Mono', 'Cascadia Mono', 'PingFang SC', 'Microsoft YaHei', monospace;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .card {
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: 0.75rem;
+      border: 1px solid #1e293b;
+      padding: 1.25rem;
+    }
+
+    .card.emerald { border-color: rgba(52, 211, 153, 0.35); }
+    .card.amber { border-color: rgba(251, 191, 36, 0.35); }
+    .card.rose { border-color: rgba(251, 113, 133, 0.35); }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .card-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .card-dot.emerald { background: #34d399; }
+    .card-dot.amber { background: #fbbf24; }
+    .card-dot.rose { background: #fb7185; }
+
+    .card h3 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #f1f5f9;
+    }
+
+    .card ul {
+      list-style: none;
+      color: #94a3b8;
+      font-size: 0.76rem;
+      line-height: 1.55;
+    }
+
+    .card li {
+      margin-bottom: 0.42rem;
+    }
+
+    .card code {
+      color: #e2e8f0;
+      background: rgba(30, 41, 59, 0.8);
+      padding: 0.08rem 0.3rem;
+      border-radius: 0.25rem;
+      font-size: 0.72rem;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 1.5rem;
+      color: #64748b;
+      font-size: 0.74rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-row">
+        <div class="pulse-dot"></div>
+        <h1>better-zentao 系统架构与模块完成度全景图</h1>
+      </div>
+      <p class="subtitle">
+        基线 main @ 7b2d96f（P0 + P1 已合入） · 颜色严格区分完成度：绿色=已实现、琥珀=实现到一半、玫红虚线=未实现（P2/P3 规划）
+      </p>
+    </div>
+
+    <!-- Main SVG Diagram -->
+    <div class="diagram-container">
+      <svg viewBox="0 0 1200 1044" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.6"/>
+          </pattern>
+          <marker id="arrowhead-slate" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+            <polygon points="0 0, 9 3.5, 0 7" fill="#64748b"/>
+          </marker>
+          <marker id="arrowhead-emerald" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+            <polygon points="0 0, 9 3.5, 0 7" fill="#34d399"/>
+          </marker>
+          <marker id="arrowhead-amber" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+            <polygon points="0 0, 9 3.5, 0 7" fill="#fbbf24"/>
+          </marker>
+          <marker id="arrowhead-rose" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+            <polygon points="0 0, 9 3.5, 0 7" fill="#fb7185"/>
+          </marker>
+        </defs>
+
+        <!-- 1. Background Grid -->
+        <rect width="100%" height="100%" fill="url(#grid)"/>
+
+        <!-- 2. Process Boundary & Layer Frames -->
+        <!-- Outer Process Boundary: better-zentao Monolith -->
+        <rect x="20" y="124" width="1160" height="714" rx="12" fill="rgba(15, 23, 42, 0.28)" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="8,4"/>
+
+        <!-- L4 Layer Frame -->
+        <rect x="36" y="150" width="1128" height="100" rx="8" fill="rgba(15, 23, 42, 0.35)" stroke="#334155" stroke-width="1" stroke-dasharray="4,4"/>
+
+        <!-- L3 Layer Frame -->
+        <rect x="36" y="292" width="1128" height="204" rx="8" fill="rgba(15, 23, 42, 0.35)" stroke="#334155" stroke-width="1" stroke-dasharray="4,4"/>
+        <text x="48" y="308" fill="#94a3b8" font-size="9.5" font-weight="600">L3 业务服务层 src/services/（业务编排 · 服务层可调用 Domain / Rules / API / Core）</text>
+
+        <!-- L2D Layer Frame -->
+        <rect x="36" y="538" width="548" height="118" rx="8" fill="rgba(15, 23, 42, 0.35)" stroke="#334155" stroke-width="1" stroke-dasharray="4,4"/>
+        <text x="48" y="554" fill="#94a3b8" font-size="9.5" font-weight="600">L2 领域与规则层 src/domain/ · src/rules/（纯函数 · 严禁 I/O 与时钟直读）</text>
+
+        <!-- L2A Security Boundary Frame -->
+        <rect x="616" y="538" width="548" height="118" rx="8" fill="rgba(136, 19, 55, 0.08)" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="5,4"/>
+        <text x="628" y="554" fill="#fb7185" font-size="9.5" font-weight="600">L2 禅道适配层 src/api/（安全边界：唯一 fetch · 原始响应不出 api/ · #29 熔断）</text>
+
+        <!-- L1 Layer Frame -->
+        <rect x="36" y="698" width="1128" height="124" rx="8" fill="rgba(15, 23, 42, 0.35)" stroke="#334155" stroke-width="1" stroke-dasharray="4,4"/>
+
+        <!-- 3. Connection Arrows (drawn BEFORE component boxes so boxes mask overlaps cleanly) -->
+        <!-- External Callers -> L4 -->
+        <line x1="152" y1="84" x2="152" y2="174" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+        <text x="160" y="102" fill="#34d399" font-size="8.5">stdio JSON-RPC</text>
+
+        <line x1="376" y1="84" x2="376" y2="174" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+        <text x="384" y="102" fill="#34d399" font-size="8.5">CLI 命令</text>
+
+        <line x1="600" y1="84" x2="600" y2="174" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrowhead-rose)"/>
+        <text x="608" y="102" fill="#fb7185" font-size="8.5">定时触发（规划）</text>
+
+        <line x1="824" y1="84" x2="824" y2="174" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrowhead-rose)"/>
+        <text x="832" y="102" fill="#fb7185" font-size="8.5">HTTP 门户（规划）</text>
+
+        <line x1="1048" y1="84" x2="1048" y2="174" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrowhead-rose)"/>
+        <text x="1056" y="102" fill="#fb7185" font-size="8.5">Webhook / HTTP MCP</text>
+
+        <!-- L4 -> L3 Horizontal Dispatch Bus (centered in y=250..292 gap at y=271) -->
+        <line x1="152" y1="238" x2="152" y2="271" stroke="#34d399" stroke-width="1.5"/>
+        <line x1="376" y1="238" x2="376" y2="271" stroke="#34d399" stroke-width="1.5"/>
+        <line x1="152" y1="271" x2="376" y2="271" stroke="#34d399" stroke-width="1.5"/>
+        <line x1="376" y1="271" x2="1048" y2="271" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="5,4"/>
+
+        <line x1="600" y1="238" x2="600" y2="271" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,4"/>
+        <line x1="824" y1="238" x2="824" y2="271" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,4"/>
+        <line x1="1048" y1="238" x2="1048" y2="271" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,4"/>
+
+        <line x1="152" y1="271" x2="152" y2="290" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+        <line x1="376" y1="271" x2="376" y2="290" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+        <line x1="600" y1="271" x2="600" y2="290" stroke="#fb7185" stroke-width="1.3" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+        <line x1="824" y1="271" x2="824" y2="290" stroke="#fb7185" stroke-width="1.3" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+        <line x1="1048" y1="271" x2="1048" y2="290" stroke="#fb7185" stroke-width="1.3" stroke-dasharray="4,4" marker-end="url(#arrowhead-rose)"/>
+        <text x="264" y="264" fill="#34d399" font-size="8" text-anchor="middle">复用同一 L3 业务服务内核</text>
+
+        <!-- L3 Row 1 -> Internal L3 Support Bus -> Row 2 -->
+        <line x1="152" y1="378" x2="152" y2="388" stroke="#34d399" stroke-width="1.2"/>
+        <line x1="376" y1="378" x2="376" y2="388" stroke="#34d399" stroke-width="1.2"/>
+        <line x1="600" y1="378" x2="600" y2="388" stroke="#34d399" stroke-width="1.2"/>
+        <line x1="824" y1="378" x2="824" y2="388" stroke="#34d399" stroke-width="1.2"/>
+        <line x1="1048" y1="378" x2="1048" y2="388" stroke="#34d399" stroke-width="1.2"/>
+        <line x1="152" y1="408" x2="152" y2="416" stroke="#fbbf24" stroke-width="1.2"/>
+        <line x1="376" y1="408" x2="376" y2="416" stroke="#fbbf24" stroke-width="1.2"/>
+        <line x1="600" y1="408" x2="600" y2="416" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,3"/>
+        <line x1="824" y1="408" x2="824" y2="416" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,3"/>
+        <line x1="1048" y1="408" x2="1048" y2="416" stroke="#fb7185" stroke-width="1.2" stroke-dasharray="4,3"/>
+
+        <!-- L3 -> L2 (gap y=496..538) -->
+        <line x1="175" y1="496" x2="175" y2="536" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+        <line x1="445" y1="496" x2="445" y2="536" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrowhead-amber)"/>
+        <text x="310" y="520" fill="#94a3b8" font-size="8.5" text-anchor="middle">纯函数口径 &amp; 规则评估</text>
+
+        <line x1="755" y1="496" x2="755" y2="536" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+        <line x1="1025" y1="496" x2="1025" y2="536" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrowhead-amber)"/>
+        <text x="890" y="520" fill="#94a3b8" font-size="8.5" text-anchor="middle">只读查询 / 两段式写入</text>
+
+        <!-- L2/L3 -> L1 (gap y=656..698) -->
+        <line x1="222" y1="656" x2="222" y2="722" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#arrowhead-amber)"/>
+        <text x="232" y="680" fill="#fbbf24" font-size="8.5">操作回执 · 角色/查询缓存</text>
+
+        <path d="M 510 656 L 510 677 L 600 677 L 600 722" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+        <text x="556" y="671" fill="#34d399" font-size="8.5" text-anchor="middle">配置 · 时钟 · 日历</text>
+
+        <line x1="978" y1="656" x2="978" y2="722" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrowhead-emerald)"/>
+        <text x="988" y="680" fill="#34d399" font-size="8.5">zod 白名单投影 (SEC-02)</text>
+
+        <!-- L2A -> Zentao 22.6 through clean 30px gutter at x=789 (between L1 box2 ends 774 and box3 starts 804) -->
+        <line x1="789" y1="656" x2="789" y2="878" stroke="#34d399" stroke-width="1.6" marker-end="url(#arrowhead-emerald)"/>
+        <text x="799" y="863" fill="#34d399" font-size="8.5">HTTPS REST v1 / v2（仅 api/internal fetch）</text>
+
+        <!-- Process -> Downstream Collaboration Targets (P2/P3 Planned) -->
+        <line x1="310" y1="838" x2="310" y2="878" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,4" marker-end="url(#arrowhead-rose)"/>
+        <text x="320" y="863" fill="#fb7185" font-size="8.5">P2 企微/快照 · P3 集成（未实现）</text>
+
+        <!-- Process Boundary & Masked Layer Labels (drawn over arrows so lines do not strike text) -->
+        <rect x="36" y="112" width="690" height="22" rx="4" fill="#020617" stroke="#38bdf8" stroke-width="0.9"/>
+        <text x="46" y="127" fill="#38bdf8" font-size="10" font-weight="600">
+          better-zentao 单体进程 · Node 24 LTS · TS strict · 依赖方向 L4 → L3 → L2 → L1（ESLint 强制）
+        </text>
+
+        <rect x="44" y="153" width="440" height="18" rx="3" fill="#0b1324" stroke="#334155" stroke-width="0.7"/>
+        <text x="52" y="165" fill="#94a3b8" font-size="9.5" font-weight="600">L4 入口适配层 src/adapters/（仅参数解析、上下文绑定与结果投影）</text>
+
+        <rect x="44" y="701" width="352" height="18" rx="3" fill="#0b1324" stroke="#334155" stroke-width="0.7"/>
+        <text x="52" y="713" fill="#94a3b8" font-size="9.5" font-weight="600">L1 基础设施与契约底座 src/core/ · src/contracts/</text>
+
+        <!-- 4. Component Boxes (Opaque #0f172a mask + semi-transparent fill + stroke) -->
+        <!-- External Callers (Top, Slate) -->
+        <rect x="48" y="20" width="208" height="64" rx="6" fill="#0f172a"/>
+        <rect x="48" y="20" width="208" height="64" rx="6" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="152" y="40" fill="#f8fafc" font-size="11.5" font-weight="600" text-anchor="middle">AI Agents（已接模板）</text>
+        <text x="152" y="56" fill="#cbd5e1" font-size="9" text-anchor="middle">Codex · Claude · Gemini</text>
+        <text x="152" y="71" fill="#94a3b8" font-size="8" text-anchor="middle">本地个人凭据 · 零共用账号</text>
+
+        <rect x="272" y="20" width="432" height="64" rx="6" fill="#0f172a"/>
+        <rect x="272" y="20" width="432" height="64" rx="6" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="488" y="40" fill="#f8fafc" font-size="11.5" font-weight="600" text-anchor="middle">开发者终端 &amp; Windows 任务计划</text>
+        <text x="488" y="56" fill="#cbd5e1" font-size="9" text-anchor="middle">环境变量 ZENTAO_* + bzt 命令运维 / P2 定时调度触发源</text>
+        <text x="488" y="71" fill="#94a3b8" font-size="8" text-anchor="middle">需 pnpm link --global 暴露全局 bzt · 凭据不进配置 (SEC-01)</text>
+
+        <rect x="720" y="20" width="432" height="64" rx="6" fill="#0f172a"/>
+        <rect x="720" y="20" width="432" height="64" rx="6" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="936" y="40" fill="#f8fafc" font-size="11.5" font-weight="600" text-anchor="middle">浏览器工作台 &amp; 外部集成生态（规划）</text>
+        <text x="936" y="56" fill="#cbd5e1" font-size="9" text-anchor="middle">Web 门户前端（FR-23）· 企微自助 · GitLab MR · 共享团队</text>
+        <text x="936" y="71" fill="#fb7185" font-size="8" text-anchor="middle">当前仓库无前端与共享服务代码 · 待 P1–P3 建设</text>
+
+        <!-- L4 Adapters Row (y=176..238) -->
+        <!-- MCP Server: Amber (Half) -->
+        <rect x="48" y="176" width="208" height="62" rx="6" fill="#0f172a"/>
+        <rect x="48" y="176" width="208" height="62" rx="6" fill="rgba(120, 53, 15, 0.42)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="152" y="195" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">MCP Server (stdio)</text>
+        <text x="152" y="211" fill="#fde68a" font-size="8.5" text-anchor="middle">12 / 19 工具 · SKILL &amp; 77 Eval</text>
+        <text x="152" y="226" fill="#94a3b8" font-size="8" text-anchor="middle">P1 已完备 · 缺 7 个 P2 工具</text>
+
+        <!-- CLI: Amber (Half) -->
+        <rect x="272" y="176" width="208" height="62" rx="6" fill="#0f172a"/>
+        <rect x="272" y="176" width="208" height="62" rx="6" fill="rgba(120, 53, 15, 0.42)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="376" y="195" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">CLI 入口 (bzt)</text>
+        <text x="376" y="211" fill="#fde68a" font-size="8.5" text-anchor="middle">doctor/probe/install/HTML</text>
+        <text x="376" y="226" fill="#94a3b8" font-size="8" text-anchor="middle">缺 delete / digest / snapshot</text>
+
+        <!-- Scheduler: Rose dashed (Unimplemented) -->
+        <rect x="496" y="176" width="208" height="62" rx="6" fill="#0f172a"/>
+        <rect x="496" y="176" width="208" height="62" rx="6" fill="rgba(136, 19, 55, 0.36)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,3"/>
+        <text x="600" y="195" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Scheduler 定时适配</text>
+        <text x="600" y="211" fill="#fecdd3" font-size="8.5" text-anchor="middle">src/adapters/scheduler/</text>
+        <text x="600" y="226" fill="#fda4af" font-size="8" text-anchor="middle">WP-36/37: 摘要与月度快照</text>
+
+        <!-- Web Portal: Rose dashed (Unimplemented) -->
+        <rect x="720" y="176" width="208" height="62" rx="6" fill="#0f172a"/>
+        <rect x="720" y="176" width="208" height="62" rx="6" fill="rgba(136, 19, 55, 0.36)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,3"/>
+        <text x="824" y="195" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Web 门户协作工作台</text>
+        <text x="824" y="211" fill="#fecdd3" font-size="8.5" text-anchor="middle">前端工作台 + HTTP 适配</text>
+        <text x="824" y="226" fill="#fda4af" font-size="8" text-anchor="middle">FR-23 规划（零直连禅道）</text>
+
+        <!-- P3 Shared Integrations: Rose dashed (Unimplemented) -->
+        <rect x="944" y="176" width="208" height="62" rx="6" fill="#0f172a"/>
+        <rect x="944" y="176" width="208" height="62" rx="6" fill="rgba(136, 19, 55, 0.36)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,3"/>
+        <text x="1048" y="195" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">P3 共享服务与集成</text>
+        <text x="1048" y="211" fill="#fecdd3" font-size="8.5" text-anchor="middle">Streamable HTTP MCP</text>
+        <text x="1048" y="226" fill="#fda4af" font-size="8" text-anchor="middle">企微应用 · GitLab · 常驻协调</text>
+
+        <!-- L3 Row 1: 5 Fully Implemented P1 Core Services (Emerald) -->
+        <rect x="48" y="318" width="208" height="60" rx="6" fill="#0f172a"/>
+        <rect x="48" y="318" width="208" height="60" rx="6" fill="rgba(6, 78, 59, 0.45)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="152" y="337" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">DirectoryService</text>
+        <text x="152" y="352" fill="#a7f3d0" font-size="8.5" text-anchor="middle">人员/角色/产品/模块/计划</text>
+        <text x="152" y="367" fill="#94a3b8" font-size="8" text-anchor="middle">WP-13 · 缓存与重名消歧</text>
+
+        <rect x="272" y="318" width="208" height="60" rx="6" fill="#0f172a"/>
+        <rect x="272" y="318" width="208" height="60" rx="6" fill="rgba(6, 78, 59, 0.45)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="376" y="337" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">IntakeService</text>
+        <text x="376" y="352" fill="#a7f3d0" font-size="8.5" text-anchor="middle">create_story / import_stories</text>
+        <text x="376" y="367" fill="#94a3b8" font-size="8" text-anchor="middle">WP-17 · 模板 / 配对 / 补录</text>
+
+        <rect x="496" y="318" width="208" height="60" rx="6" fill="#0f172a"/>
+        <rect x="496" y="318" width="208" height="60" rx="6" fill="rgba(6, 78, 59, 0.45)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="600" y="337" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">TrackingService</text>
+        <text x="600" y="352" fill="#a7f3d0" font-size="8.5" text-anchor="middle">my / team / query / progress</text>
+        <text x="600" y="367" fill="#94a3b8" font-size="8" text-anchor="middle">WP-14 · partial 传播与回填</text>
+
+        <rect x="720" y="318" width="208" height="60" rx="6" fill="#0f172a"/>
+        <rect x="720" y="318" width="208" height="60" rx="6" fill="rgba(6, 78, 59, 0.45)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="824" y="337" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">ScheduleService</text>
+        <text x="824" y="352" fill="#a7f3d0" font-size="8.5" text-anchor="middle">get_member_schedule</text>
+        <text x="824" y="367" fill="#94a3b8" font-size="8" text-anchor="middle">WP-15 · 排期矩阵 / Top3</text>
+
+        <rect x="944" y="318" width="208" height="60" rx="6" fill="#0f172a"/>
+        <rect x="944" y="318" width="208" height="60" rx="6" fill="rgba(6, 78, 59, 0.45)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="1048" y="337" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">OperationExecutor</text>
+        <text x="1048" y="352" fill="#a7f3d0" font-size="8.5" text-anchor="middle">两段式 prepare → confirm</text>
+        <text x="1048" y="367" fill="#94a3b8" font-size="8" text-anchor="middle">WP-16 · W0-W3 / 乐观锁 / 五态</text>
+
+        <!-- Inline Support Bar centered in the 40px gap (y=378..418) -->
+        <rect x="48" y="388" width="1104" height="20" rx="4" fill="#0f172a"/>
+        <rect x="48" y="388" width="1104" height="20" rx="4" fill="rgba(6, 78, 59, 0.35)" stroke="#34d399" stroke-width="1"/>
+        <text x="600" y="401" fill="#6ee7b7" font-size="8.5" font-weight="600" text-anchor="middle">
+          已实现 L3 支撑底座：Workbench 装配 · ZentaoGateway 统一网关 · Doctor 自检 · ProbeCapture / ProbeWrite · InstallAgent 三端安装
+        </text>
+
+        <!-- L3 Row 2: Half Implemented (Amber) + Unimplemented (Rose dashed) -->
+        <rect x="48" y="418" width="208" height="60" rx="6" fill="#0f172a"/>
+        <rect x="48" y="418" width="208" height="60" rx="6" fill="rgba(120, 53, 15, 0.42)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="152" y="437" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">FlowService</text>
+        <text x="152" y="452" fill="#fde68a" font-size="8.5" text-anchor="middle">已实现: assign_story (WP-18)</text>
+        <text x="152" y="467" fill="#94a3b8" font-size="8" text-anchor="middle">缺: handoff / reschedule / close</text>
+
+        <rect x="272" y="418" width="208" height="60" rx="6" fill="#0f172a"/>
+        <rect x="272" y="418" width="208" height="60" rx="6" fill="rgba(120, 53, 15, 0.42)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="376" y="437" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">RiskService</text>
+        <text x="376" y="452" fill="#fde68a" font-size="8.5" text-anchor="middle">已实现: R01–R05 扫描 (WP-19)</text>
+        <text x="376" y="467" fill="#94a3b8" font-size="8" text-anchor="middle">缺: R06–R16 与 waivers 豁免</text>
+
+        <rect x="496" y="418" width="208" height="60" rx="6" fill="#0f172a"/>
+        <rect x="496" y="418" width="208" height="60" rx="6" fill="rgba(136, 19, 55, 0.36)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,3"/>
+        <text x="600" y="437" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">DecomposeService</text>
+        <text x="600" y="452" fill="#fecdd3" font-size="8.5" text-anchor="middle">批量拆任务 · 四模板展开</text>
+        <text x="600" y="467" fill="#fda4af" font-size="8" text-anchor="middle">WP-33 · 依赖 task.create 验证</text>
+
+        <rect x="720" y="418" width="208" height="60" rx="6" fill="#0f172a"/>
+        <rect x="720" y="418" width="208" height="60" rx="6" fill="rgba(136, 19, 55, 0.36)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,3"/>
+        <text x="824" y="437" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">ManagementService</text>
+        <text x="824" y="452" fill="#fecdd3" font-size="8.5" text-anchor="middle">plan_progress / dev_queue</text>
+        <text x="824" y="467" fill="#fda4af" font-size="8" text-anchor="middle">WP-35 · 五桶与月度快照对比</text>
+
+        <rect x="944" y="418" width="208" height="60" rx="6" fill="#0f172a"/>
+        <rect x="944" y="418" width="208" height="60" rx="6" fill="rgba(136, 19, 55, 0.36)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,3"/>
+        <text x="1048" y="437" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">NotifyService</text>
+        <text x="1048" y="452" fill="#fecdd3" font-size="8.5" text-anchor="middle">企微群机器人 · 摘要/事件</text>
+        <text x="1048" y="467" fill="#fda4af" font-size="8" text-anchor="middle">WP-37 · 去重与静默时段</text>
+
+        <!-- L2D: Domain & Rules (both Amber) -->
+        <rect x="48" y="564" width="254" height="80" rx="6" fill="#0f172a"/>
+        <rect x="48" y="564" width="254" height="80" rx="6" fill="rgba(120, 53, 15, 0.42)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="175" y="584" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Domain 领域口径 (src/domain/)</text>
+        <text x="175" y="601" fill="#fde68a" font-size="8.5" text-anchor="middle">已实现: 阶段/进展/角色/月份/模板</text>
+        <text x="175" y="616" fill="#cbd5e1" font-size="8.5" text-anchor="middle">待补: plan-summary / release 就绪</text>
+        <text x="175" y="632" fill="#94a3b8" font-size="8" text-anchor="middle">WP-11 已合入 · WP-31 待实施</text>
+
+        <rect x="318" y="564" width="254" height="80" rx="6" fill="#0f172a"/>
+        <rect x="318" y="564" width="254" height="80" rx="6" fill="rgba(120, 53, 15, 0.42)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="445" y="584" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Rules 风险规则 (src/rules/)</text>
+        <text x="445" y="601" fill="#fde68a" font-size="8.5" text-anchor="middle">已实现: R01–R05（5 / 16 条）</text>
+        <text x="445" y="616" fill="#cbd5e1" font-size="8.5" text-anchor="middle">待补: R06–R14 (P2) · R15–R16 (P3)</text>
+        <text x="445" y="632" fill="#94a3b8" font-size="8" text-anchor="middle">WP-12 已合入 · WP-32 待实施</text>
+
+        <!-- L2A: Read API (Emerald) & Write Capabilities (Amber) -->
+        <rect x="628" y="564" width="254" height="80" rx="6" fill="#0f172a"/>
+        <rect x="628" y="564" width="254" height="80" rx="6" fill="rgba(6, 78, 59, 0.45)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="755" y="584" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">只读 API + api/internal/ 传输</text>
+        <text x="755" y="601" fill="#a7f3d0" font-size="8.5" text-anchor="middle">10 域门面 · 401 单次重登 · 分页</text>
+        <text x="755" y="616" fill="#cbd5e1" font-size="8.5" text-anchor="middle">26 端点全覆盖 · 39 份脱敏夹具</text>
+        <text x="755" y="632" fill="#94a3b8" font-size="8" text-anchor="middle">WP-01 / WP-03 / WP-04 已完成</text>
+
+        <rect x="898" y="564" width="254" height="80" rx="6" fill="#0f172a"/>
+        <rect x="898" y="564" width="254" height="80" rx="6" fill="rgba(120, 53, 15, 0.42)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="1025" y="584" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">写门面 + CapabilityRegistry</text>
+        <text x="1025" y="601" fill="#fde68a" font-size="8.5" text-anchor="middle">已验 8 项 (story.create/assign...)</text>
+        <text x="1025" y="616" fill="#cbd5e1" font-size="8.5" text-anchor="middle">待验 7 项 (task/link/plan/release)</text>
+        <text x="1025" y="632" fill="#94a3b8" font-size="8" text-anchor="middle">WP-05 完成 · WP-30 探测补齐</text>
+
+        <!-- L1 Infrastructure & Contracts -->
+        <rect x="48" y="724" width="348" height="84" rx="6" fill="#0f172a"/>
+        <rect x="48" y="724" width="348" height="84" rx="6" fill="rgba(120, 53, 15, 0.42)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="222" y="745" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">LocalStore (node:sqlite DatabaseSync)</text>
+        <text x="222" y="762" fill="#fde68a" font-size="8.5" text-anchor="middle">已建 7 张 P1 表: ops/steps/intake/links/roles/seen/cache</text>
+        <text x="222" y="778" fill="#cbd5e1" font-size="8.5" text-anchor="middle">待建 6 张 P2 表: stage_req/waivers/snapshots/notify/resched</text>
+        <text x="222" y="794" fill="#94a3b8" font-size="8" text-anchor="middle">WP-10 Migration 001 完成 · 实例 + 账号目录隔离</text>
+
+        <rect x="426" y="724" width="348" height="84" rx="6" fill="#0f172a"/>
+        <rect x="426" y="724" width="348" height="84" rx="6" fill="rgba(6, 78, 59, 0.45)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="600" y="745" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">Core 运行时底座 (src/core/)</text>
+        <text x="600" y="762" fill="#a7f3d0" font-size="8.5" text-anchor="middle">Config 校验 (CFG-01–13) · Clock 注入 · WorkCalendar</text>
+        <text x="600" y="778" fill="#cbd5e1" font-size="8.5" text-anchor="middle">Logger 脱敏白名单 · HttpPolicy · BztError 中文错误码</text>
+        <text x="600" y="794" fill="#94a3b8" font-size="8" text-anchor="middle">WP-01 / WP-02 已完成 · 禁用全局 Date.now()</text>
+
+        <rect x="804" y="724" width="348" height="84" rx="6" fill="#0f172a"/>
+        <rect x="804" y="724" width="348" height="84" rx="6" fill="rgba(6, 78, 59, 0.45)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="978" y="745" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">zod 白名单 DTO &amp; Contracts</text>
+        <text x="978" y="762" fill="#a7f3d0" font-size="8.5" text-anchor="middle">13 份品牌 DTO 投影（剥离密码哈希与全员字典）</text>
+        <text x="978" y="778" fill="#cbd5e1" font-size="8.5" text-anchor="middle">contracts/tools/ 12 个 P1 工具 Strict Schema</text>
+        <text x="978" y="794" fill="#94a3b8" font-size="8" text-anchor="middle">SEC-02 硬红线 · 原始响应绝不出 api/</text>
+
+        <!-- Downstream External Systems (Bottom, Slate) -->
+        <rect x="48" y="880" width="524" height="70" rx="6" fill="#0f172a"/>
+        <rect x="48" y="880" width="524" height="70" rx="6" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="310" y="901" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">外部协作与导出目标（P2 / P3 规划）</text>
+        <text x="310" y="918" fill="#cbd5e1" font-size="8.5" text-anchor="middle">P2: 企业微信群机器人（摘要/事件） · 共享目录月度快照 JSON</text>
+        <text x="310" y="934" fill="#94a3b8" font-size="8" text-anchor="middle">P3: 企微自助提需应用 · GitLab MR 研发证据关联</text>
+
+        <rect x="616" y="880" width="536" height="70" rx="6" fill="#0f172a"/>
+        <rect x="616" y="880" width="536" height="70" rx="6" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="884" y="901" fill="#f8fafc" font-size="11" font-weight="600" text-anchor="middle">禅道开源版 22.6（公司内网部署 · REST v1 / v2）</text>
+        <text x="884" y="918" fill="#a7f3d0" font-size="8.5" text-anchor="middle">26 个只读端点已实测 · 8 项写能力在产品 #29 复验通过</text>
+        <text x="884" y="934" fill="#94a3b8" font-size="8" text-anchor="middle">个人账号认证 · 严禁共用管理员账号 (SEC-05)</text>
+
+        <!-- 5. Legend (Strictly OUTSIDE all boundary boxes: starts y=974, 24px below y=950) -->
+        <rect x="20" y="974" width="1160" height="52" rx="8" fill="rgba(15, 23, 42, 0.85)" stroke="#1e293b" stroke-width="1"/>
+        <text x="42" y="1004" fill="#f8fafc" font-size="10" font-weight="600">图例（实现状态）</text>
+
+        <rect x="175" y="992" width="18" height="14" rx="3" fill="rgba(6, 78, 59, 0.45)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="201" y="1003" fill="#a7f3d0" font-size="9" font-weight="600">已实现（P0 + P1 完备）</text>
+
+        <rect x="372" y="992" width="18" height="14" rx="3" fill="rgba(120, 53, 15, 0.42)" stroke="#fbbf24" stroke-width="1.5"/>
+        <text x="398" y="1003" fill="#fde68a" font-size="9" font-weight="600">实现到一半（P1 落地 · P2 待补）</text>
+
+        <rect x="615" y="992" width="18" height="14" rx="3" fill="rgba(136, 19, 55, 0.36)" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,2"/>
+        <text x="641" y="1003" fill="#fecdd3" font-size="9" font-weight="600">未实现（P2 / P3 规划）</text>
+
+        <rect x="815" y="992" width="18" height="14" rx="3" fill="rgba(30, 41, 59, 0.55)" stroke="#94a3b8" stroke-width="1.5"/>
+        <text x="841" y="1003" fill="#cbd5e1" font-size="9">外部调用方 / 外部系统</text>
+
+        <line x1="1005" y1="999" x2="1032" y2="999" stroke="#34d399" stroke-width="1.5"/>
+        <text x="1038" y="1003" fill="#94a3b8" font-size="8.5">已通链路</text>
+
+        <line x1="1096" y1="999" x2="1123" y2="999" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <text x="1129" y="1003" fill="#94a3b8" font-size="8.5">规划/边界</text>
+      </svg>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="cards">
+      <div class="card emerald">
+        <div class="card-header">
+          <div class="card-dot emerald"></div>
+          <h3>已实现（P0 + P1 核心闭环）</h3>
+        </div>
+        <ul>
+          <li>• <strong>L3 完整服务：</strong><code>Directory</code>、<code>Intake</code>、<code>Tracking</code>、<code>Schedule</code>、<code>OperationExecutor</code>，及 <code>Workbench</code> / <code>ZentaoGateway</code> / <code>Doctor</code> / <code>Probe</code> / <code>InstallAgent</code></li>
+          <li>• <strong>只读 API 与夹具：</strong>10 域只读门面、401 单次重登与全分页完整性、26 端点覆盖及 39 份脱敏夹具</li>
+          <li>• <strong>底座与防护：</strong>13 份 zod 白名单 DTO、<code>Config (CFG-01–13)</code>、脱敏日志、<code>SKILL.md</code> 与 3 端接入模板</li>
+          <li>• <strong>离线验证：</strong>58 个测试文件 1503 条单测通过（行覆盖率 94.41%），77 条对话评测全过</li>
+        </ul>
+      </div>
+
+      <div class="card amber">
+        <div class="card-header">
+          <div class="card-dot amber"></div>
+          <h3>实现到一半（P1 已落地 · P2 待补）</h3>
+        </div>
+        <ul>
+          <li>• <strong>入口层：</strong>MCP 已注册 12/19 工具，缺 P2 的 7 个；CLI 已备自检/探查/安装/HTML，缺 <code>delete/digest/snapshot</code></li>
+          <li>• <strong>部分服务：</strong><code>FlowService</code> 仅实现 <code>assign_story</code>（缺移交/挪月/关闭/例外）；<code>RiskService</code> 仅覆盖 R01–R05</li>
+          <li>• <strong>领域与规则：</strong><code>domain</code> 缺 <code>plan-summary</code> 与 <code>release</code> 就绪口径；<code>rules</code> 已落地 5/16 条（缺 R06–R16）</li>
+          <li>• <strong>能力与存储：</strong><code>capabilities.ts</code> 已验 8 项 / 待验 7 项；<code>LocalStore</code> 已建 7/13 张 SQLite 业务表</li>
+        </ul>
+      </div>
+
+      <div class="card rose">
+        <div class="card-header">
+          <div class="card-dot rose"></div>
+          <h3>未实现（P2 组织管理 · Web 门户 · P3）</h3>
+        </div>
+        <ul>
+          <li>• <strong>P2 核心服务：</strong><code>DecomposeService</code>（WP-33 拆任务）、<code>ManagementService</code>（WP-35 五桶与月度队列）、<code>NotifyService</code>（WP-37 企微通知）</li>
+          <li>• <strong>定时与快照：</strong><code>src/adapters/scheduler/</code> 下的每日摘要与月度承诺快照导出/只读导入（WP-36/37）</li>
+          <li>• <strong>Web 门户：</strong>并行规划的 Web 门户协作工作台（前端工作台 + HTTP 适配，复用同一 L3 内核）</li>
+          <li>• <strong>P3 集成：</strong>Streamable HTTP 多用户 MCP、企业微信自助提需应用、GitLab MR 关联与常驻风险协调</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <p class="footer">
+      better-zentao • 基于仓库源码（main @ 7b2d96f）与 docs/05、docs/10 核对生成 • 绿色=已实现 · 琥珀=实现到一半 · 玫红虚线=未实现
+    </p>
+  </div>
+</body>
+</html>

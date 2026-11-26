@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>脉序 × better-zentao · 禅道协作工作台 v3.1</title>
+    <link rel="stylesheet" href="/portal.css" />
+    <link rel="stylesheet" href="/meridian.css" />
+    <link rel="stylesheet" href="/meridian-shell.css" />
+    <link rel="stylesheet" href="/workbench-page.css" />
+    <link rel="stylesheet" href="/daily-pages.css" />
+    <link rel="stylesheet" href="/management-pages.css" />
+    <link rel="stylesheet" href="/skeleton.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <div id="startup" class="startup" role="status" aria-label="本机会话">
+      <div class="login-card sk-startup sk-delayed" aria-hidden="true">
+        <div class="login-panel">
+          <strong class="bzt-brand">脉序 × better-zentao</strong>
+          <div class="sk-lines">
+            <span class="sk-block sk-title"></span>
+            <span class="sk-block sk-field"></span>
+            <span class="sk-block sk-field"></span>
+            <span class="sk-block sk-button"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <noscript>请启用 JavaScript 后使用禅道工作台。</noscript>
+
+    <main id="login-page" class="login-page" hidden>
+      <div class="login-card">
+        <div class="login-panel">
+          <div class="bzt-brand">
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 28 28"
+              fill="none"
+              aria-hidden="true"
+            >
+              <rect
+                width="28"
+                height="28"
+                rx="7"
+                fill="currentColor"
+                fill-opacity=".08"
+              />
+              <circle
+                cx="14"
+                cy="14"
+                r="8.25"
+                stroke="currentColor"
+                stroke-opacity=".26"
+                stroke-width="1.4"
+              />
+              <path
+                d="M7.5 19.2C9.8 13.1 14.5 8.8 20.5 8.8"
+                stroke="var(--accent)"
+                stroke-width="2.3"
+                stroke-linecap="round"
+              />
+              <circle cx="20.5" cy="8.8" r="2.2" fill="var(--accent)" />
+              <circle
+                cx="9.2"
+                cy="18.2"
+                r="1.4"
+                fill="currentColor"
+                fill-opacity=".65"
+              /></svg
+            ><strong>脉序 × better-zentao</strong>
+          </div>
+          <h1 class="page-title">登录禅道</h1>
+          <p id="launch-required" class="notice" role="status" hidden>
+            请从本机启动器打开工作台，再填写禅道地址并登录。
+          </p>
+          <form
+            id="login-form"
+            method="post"
+            action="/api/login"
+            aria-describedby="login-status"
+          >
+            <label id="login-base-url-field" class="field" hidden>
+              <span>禅道地址</span>
+              <input
+                id="login-base-url"
+                name="baseUrl"
+                type="url"
+                autocomplete="url"
+                placeholder="https://zentao.example.com"
+                disabled
+              />
+            </label>
+            <label class="field">
+              <span>禅道账号</span>
+              <input
+                id="login-account"
+                name="account"
+                type="text"
+                autocomplete="username"
+                required
+              />
+            </label>
+            <label class="field">
+              <span>禅道密码</span>
+              <input
+                id="login-password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+              />
+            </label>
+            <button id="login-button" class="btn btn-primary" type="submit">
+              登录
+            </button>
+          </form>
+          <p id="login-status" class="login-status" role="status"></p>
+        </div>
+      </div>
+    </main>
+
+    <div id="portal-shell" class="bzt-app" hidden>
+      <a class="skip-link" href="#work-area">跳到工作区</a>
+      <header class="bzt-topbar">
+        <div class="bzt-brand">
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 28 28"
+            fill="none"
+            aria-hidden="true"
+          >
+            <rect
+              width="28"
+              height="28"
+              rx="7"
+              fill="currentColor"
+              fill-opacity=".08"
+            />
+            <circle
+              cx="14"
+              cy="14"
+              r="8.25"
+              stroke="currentColor"
+              stroke-opacity=".26"
+              stroke-width="1.4"
+            />
+            <path
+              d="M7.5 19.2C9.8 13.1 14.5 8.8 20.5 8.8"
+              stroke="var(--accent)"
+              stroke-width="2.3"
+              stroke-linecap="round"
+            />
+            <circle cx="20.5" cy="8.8" r="2.2" fill="var(--accent)" />
+            <circle
+              cx="9.2"
+              cy="18.2"
+              r="1.4"
+              fill="currentColor"
+              fill-opacity=".65"
+            />
+          </svg>
+          <div class="bzt-brand-text">
+            <div class="bzt-brand-title">
+              <span>脉序 × better-zentao</span
+              ><span class="bzt-version-pill mono">v3.1</span>
+            </div>
+            <div class="bzt-brand-sub">禅道 22.6 协作工作台 · 本机门户</div>
+          </div>
+        </div>
+        <nav
+          id="role-tabs"
+          class="role-switcher"
+          aria-label="当前账号的角色视角"
+        ></nav>
+        <div class="bzt-topbar-actions">
+          <button
+            type="button"
+            id="guide-button"
+            class="btn-secondary btn-sm"
+            hidden
+          >
+            <span>评审说明</span>
+          </button>
+          <button
+            type="button"
+            id="shortcuts-button"
+            class="btn-primary btn-sm"
+            hidden
+          >
+            <span>一句话助手</span>
+          </button>
+          <button
+            type="button"
+            id="account-start"
+            class="btn-secondary btn-sm"
+            hidden
+          >
+            我的账号
+          </button>
+          <button
+            type="button"
+            id="theme-button"
+            class="icon-btn-subtle"
+            aria-label="切换深浅主题"
+            title="切换深浅主题 (T)"
+          ></button>
+          <button
+            type="button"
+            id="reset-view"
+            class="icon-btn-subtle"
+            aria-label="重置界面偏好"
+            title="恢复当前职责默认界面"
+          ></button>
+        </div>
+      </header>
+      <div class="bzt-body">
+        <aside id="sidebar" class="bzt-sidebar">
+          <div class="sidebar-top-row">
+            <button
+              type="button"
+              class="quick-search-pill"
+              id="command-button"
+              aria-label="快速检索 / 命令"
+              title="全局命令与快速检索 (⌘K)"
+            >
+              <span class="quick-search-text">快速检索 / 命令</span
+              ><kbd>⌘K</kbd>
+            </button>
+            <button
+              type="button"
+              class="icon-btn-subtle"
+              id="collapse-button"
+              aria-label="收起导航栏"
+              title="收起导航栏"
+            ></button>
+          </div>
+          <div class="sidebar-scroll">
+            <div class="nav-group-label" id="nav-heading">5 + 1 极简导航</div>
+            <nav id="role-nav" aria-labelledby="nav-heading"></nav>
+            <div id="fb-perm-note" class="sidebar-perm-note" hidden>
+              已按业务反馈者权限隐藏内部研发与管理菜单
+            </div>
+            <section class="sidebar-role-card">
+              <div class="sidebar-role-card-head">
+                <span id="role-group" class="role-chip"></span
+                ><span id="as-of" class="mono sidebar-asof"></span>
+              </div>
+              <button
+                type="button"
+                id="account-menu"
+                class="sidebar-role-title"
+                aria-label="账号与职责"
+                title="账号与职责"
+              ></button>
+              <p id="role-focus" class="sidebar-role-focus"></p>
+              <div class="sidebar-mode-box">
+                <div class="sidebar-mode-title">
+                  <span>交互模式档位</span
+                  ><span id="role-code" class="mono"></span>
+                </div>
+                <div
+                  id="side-modes"
+                  class="sidebar-mode-pills"
+                  role="group"
+                  aria-label="角色交互模式档位"
+                ></div>
+              </div>
+            </section>
+          </div>
+          <div class="sidebar-footer">
+            <span class="sidebar-footer-note">权限按角色与禅道账号收口</span
+            ><button
+              type="button"
+              class="icon-btn-subtle"
+              id="key-guide"
+              aria-label="键盘快捷键"
+              title="键盘快捷键 (?)"
+            ></button>
+          </div>
+        </aside>
+        <main id="work-area" class="bzt-main" tabindex="-1">
+          <p id="session-status" class="notice" role="status" hidden></p>
+          <div id="workspace"></div>
+        </main>
+      </div>
+      <dialog
+        id="account-dialog"
+        class="portal-dialog write-modal"
+        aria-label="账号与职责"
+      >
+        <div class="modal-header">
+          <strong>账号与职责</strong
+          ><button
+            class="icon-btn-subtle"
+            id="account-close"
+            type="button"
+            aria-label="关闭"
+          ></button>
+        </div>
+        <div class="modal-body">
+          <p id="session-account"></p>
+          <button id="role-settings-button" class="btn-secondary" type="button">
+            我的职责
+          </button>
+          <button id="logout-button" class="btn-secondary" type="button">
+            退出
+          </button>
+        </div>
+      </dialog>
+    </div>
+  </body>
+</html>

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   prepareConfigEditorData,
   teamConfigKeys,
@@ -15,7 +16,7 @@ const script = String.raw`
   const notice = document.getElementById("directory-notice");
   const fields = ["products", "moduleDefaults", "modules", "teams", "roles", "aliases"];
   const leads = { designLead: "设计主管", devLead: "研发主管", testLead: "测试主管" };
-  const roles = { PM: "产品管理", PJ: "项目管理", DM: "设计主管", RM: "研发主管", QA_LEAD: "测试主管" };
+  const roles = { PM: "产品管理", PJ: "项目管理", DM: "设计主管", RM: "研发主管", QA_LEAD: "测试主管", FB: "业务反馈者", DS: "设计人员", RD: "研发人员", QA: "测试人员" };
   const states = ["design", "runtime", "delivery", "other"];
   const kinds = ["design", "dev", "ui"];
   const searchKey = (value) => value.normalize("NFKC").toLowerCase().replace(/\s+/gu, "");
@@ -415,24 +416,47 @@ const script = String.raw`
     const file = el("input");
     file.type = "file";
     file.accept = ".json,application/json";
+    let revision = 0;
     file.addEventListener("change", async () => {
       const selected = file.files?.[0];
+      const request = ++revision;
+      const current = () => file.isConnected && request === revision;
+      previewArea.removeAttribute("aria-busy");
+      copy.disabled = download.disabled = errors.length > 0;
       if (!selected) return;
+      previewArea.setAttribute("aria-busy", "true");
+      copy.disabled = download.disabled = true;
       try {
-        const input = JSON.parse((await selected.text()).replace(/^\uFEFF/u, ""));
+        const content = await selected.text();
+        if (!current()) return;
+        const input = JSON.parse(content.replace(/^\uFEFF/u, ""));
         if (unsafe(input) || !validImport(input)) throw new Error();
         config = input;
         render();
         status.textContent = "已导入团队配置。 " + status.textContent;
       } catch {
+        if (!current()) return;
         file.value = "";
         status.textContent = "导入失败。请检查 JSON、编辑区字段和疑似凭据。";
+      } finally {
+        if (current()) {
+          previewArea.removeAttribute("aria-busy");
+          copy.disabled = download.disabled = errors.length > 0;
+        }
       }
     });
     const json = privateData ? "" : JSON.stringify(config, null, 2) + "\n";
     const preview = el("textarea");
     preview.readOnly = true;
     preview.value = json;
+    preview.id = "config-json";
+    const previewArea = el("div", undefined, "import-preview");
+    const pending = el("div", undefined, "import-placeholder sk-delayed");
+    pending.setAttribute("aria-hidden", "true");
+    for (const kind of ["short", "text", "text", "short", "text", "short"]) {
+      pending.append(el("span", undefined, "sk-block sk-" + kind));
+    }
+    previewArea.append(preview, pending);
     const copy = button("复制 JSON", async () => {
       try {
         await navigator.clipboard.writeText(json);
@@ -455,7 +479,9 @@ const script = String.raw`
       status.textContent = "已发起下载。";
     }, "primary");
     copy.disabled = download.disabled = errors.length > 0;
-    box.append(label("导入 JSON", file), label("JSON 预览", preview));
+    const previewLabel = el("label", "JSON 预览", "field");
+    previewLabel.htmlFor = preview.id;
+    box.append(label("导入 JSON", file), previewLabel, previewArea);
     grid(box, copy, download);
   }
 
@@ -498,6 +524,7 @@ const script = String.raw`
 
 export function renderTeamConfigEditorHtml(input: ConfigEditorData): string {
   const data = prepareConfigEditorData(input);
+  const skeletonCss = readFileSync(new URL("../../../../web/skeleton.css", import.meta.url), "utf8");
   const scriptHash = createHash("sha256").update(script).digest("base64");
   const json = JSON.stringify({ ...data, configKeys: teamConfigKeys })
     .replaceAll("<", "\\u003c")
@@ -515,6 +542,7 @@ export function renderTeamConfigEditorHtml(input: ConfigEditorData): string {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-${scriptHash}'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
 <title>团队配置编辑器</title>
 <style>
+  ${skeletonCss}
   :root { color-scheme: dark; font: 15px/1.55 system-ui, sans-serif; background: #10141a; color: #ecf0f6; }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -548,6 +576,10 @@ export function renderTeamConfigEditorHtml(input: ConfigEditorData): string {
   .error { color: #ffadad; }
   #directory-notice { padding: .65rem .85rem; margin-top: 1rem; border-left: .25rem solid #d2a35c; background: #28251f; }
   textarea { min-height: 17rem; resize: vertical; font-family: ui-monospace, monospace; }
+  .import-preview { position: relative; --skeleton-fill: #566579; }
+  .import-preview textarea { display: block; width: 100%; }
+  .import-placeholder { display: none; position: absolute; inset: 0; padding: .8rem; background: #1a222c; border: 1px solid #566579; border-radius: .45rem; align-content: start; gap: .6rem; pointer-events: none; }
+  .import-preview[aria-busy="true"] .import-placeholder { display: grid; }
 </style>
 </head>
 <body>

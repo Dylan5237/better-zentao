@@ -56,6 +56,10 @@
     }
   },
   "roles": {
+    "FB": ["acct_feedback"],
+    "DS": ["acct_ds_a"],
+    "RD": ["acct_rd_a"],
+    "QA": ["acct_qa_a"],
     "PM": ["acct_pm"],
     "PJ": ["acct_pj"],
     "DM": ["acct_dm_fe"],

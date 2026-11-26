@@ -1,0 +1,321 @@
+/* Native inputs and data states used alongside the v11 page layouts. */
+.management-tab-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: inherit;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.management-section,
+.management-config {
+  display: contents;
+}
+
+.management-queue-card {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 180px;
+}
+
+.management-queue-card > .panel-card {
+  flex: 1;
+  min-width: 0;
+}
+
+.management-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 10px;
+}
+
+.management-toolbar > .management-field {
+  width: clamp(130px, 16vw, 205px);
+  max-width: 100%;
+}
+
+.management-toolbar .toolbar-note,
+.management-toolbar .row-actions {
+  align-self: center;
+}
+
+.management-end {
+  justify-content: flex-end;
+}
+
+.management-page .toolbar-row > .row-actions {
+  min-width: 0;
+  flex-shrink: 1;
+  flex-wrap: wrap;
+}
+
+.management-page .toolbar-row .toolbar-note {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.management-page .seg-tab svg,
+.management-page .bzt-alert svg,
+.management-review .perm-mode-banner svg {
+  flex-shrink: 0;
+}
+
+.management-page .perm-mode-banner-left svg,
+.management-review .perm-mode-banner-left svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.management-page .bzt-alert.tone-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: var(--danger-border);
+}
+
+.management-page .bzt-alert ul {
+  margin-top: 4px;
+  padding-inline-start: 17px;
+  list-style: disc;
+}
+
+.management-isolation:empty,
+.management-versions:empty,
+.management-page .toolbar-row > .segmented-tabs:empty {
+  display: none;
+}
+
+.management-isolation .link-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: normal;
+}
+
+.management-selection {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.management-selection .bzt-badge {
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+}
+
+.management-decompose td .management-field > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.management-decompose td .bzt-input {
+  min-width: 112px;
+}
+
+.management-evidence {
+  color: var(--ink-muted);
+  font-size: 12px;
+  margin-block: 2px;
+  flex-shrink: 0;
+}
+
+.management-evidence > summary {
+  cursor: pointer;
+}
+
+.management-matrix-output {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.management-matrix-output .member-cell {
+  min-width: 126px;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.management-schedule-scope {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.management-schedule-scope > span {
+  flex: 1;
+  min-width: 165px;
+}
+
+.management-schedule-scope .management-field {
+  display: block;
+}
+
+.management-schedule-scope .management-field > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.management-matrix-output .member-cell button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-align: start;
+}
+
+.management-matrix-output .heatmap-table th {
+  max-width: 145px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.management-matrix-output .heat-cell {
+  min-width: 48px;
+}
+
+.management-suggest {
+  flex-shrink: 0;
+  align-items: flex-end;
+}
+
+.management-suggest > button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.management-page .gate-hero.is-pending {
+  background: var(--bg-surface);
+  border-color: var(--border-hairline);
+}
+
+.management-page .traffic-lamp.is-pending {
+  background: var(--ink-faint);
+  box-shadow: 0 0 0 5px var(--bg-subtle);
+}
+
+.management-page .gate-title .bzt-badge {
+  height: auto;
+  margin-inline-start: 8px;
+  white-space: normal;
+}
+
+.management-page .gate-cards-grid,
+.management-page .plans-bento {
+  display: grid;
+  gap: 12px;
+}
+
+.management-page .plans-col {
+  min-width: 0;
+}
+
+.management-page summary.accordion-head {
+  cursor: pointer;
+  gap: 12px;
+  text-align: start;
+}
+
+.management-page details[open] > summary.accordion-head svg {
+  transform: rotate(180deg);
+}
+
+.management-page .management-ring .viz-ring-label {
+  font-size: 12px;
+}
+
+.management-review .markdown-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.management-drawer-body .chat-bubble {
+  overflow-wrap: anywhere;
+}
+
+.management-drawer-body .chat-bubble .btn-secondary {
+  margin-top: 8px;
+}
+
+.management-drawer-body .agent-composer {
+  align-items: center;
+}
+
+@media (max-width: 1140px), (max-height: 619px) {
+  .management-tab-body {
+    overflow: visible;
+  }
+
+  .management-queue-card > .panel-card,
+  .management-page .matrix-split .vp-card {
+    overflow: visible;
+  }
+
+  .management-page .gate-cards-grid,
+  .management-page .plans-bento {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .management-page .plans-col {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .management-review .review-body-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .management-review .decisions-grid-2 {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+}
+
+@media (max-width: 540px) {
+  .management-page .bucket-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .management-page .gate-hero-left {
+    min-width: 0;
+  }
+
+  .management-page .gate-hero > button {
+    white-space: normal;
+    height: auto;
+    min-height: 32px;
+  }
+
+  .management-page .panel-head,
+  .management-review .decision-card-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .management-review .vote-progress-strip {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .management-review .vote-bar-track {
+    width: 100%;
+  }
+
+  .management-review .flow-grid.is-compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

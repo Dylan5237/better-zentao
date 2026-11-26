@@ -12,13 +12,15 @@
   },
   "files": [
     "dist",
+    "web",
     "skills",
     "templates"
   ],
   "scripts": {
+    "web": "node --env-file-if-exists=.env dist/adapters/cli/bzt.js web",
     "build": "tsc -p tsconfig.build.json",
     "eval": "node scripts/eval.ts",
-    "lint": "eslint src scripts test && prettier --check --end-of-line auto src scripts test eslint.config.mjs vitest.config.ts package.json tsconfig*.json config/*.json",
+    "lint": "eslint src scripts test web && prettier --check --end-of-line auto src scripts test web eslint.config.mjs vitest.config.ts package.json tsconfig*.json config/*.json",
     "typecheck": "tsc --noEmit",
     "test": "pnpm run build && vitest run --coverage",
     "test:smoke": "vitest run --mode smoke"

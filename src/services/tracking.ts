@@ -2341,7 +2341,10 @@ export class TrackingService {
     return finish(matched.filter((item) => item !== undefined));
   }
 
-  async getStoryProgress(raw: unknown): Promise<GetStoryProgressOutput> {
+  async getStoryProgress(
+    raw: unknown,
+    { raisedByMe = false } = {},
+  ): Promise<GetStoryProgressOutput> {
     const input = parseInput(getStoryProgressInputSchema, raw);
     const { client, store } = this.options;
     const {
@@ -2403,10 +2406,26 @@ export class TrackingService {
     }
     if (!ids.length && !state.gaps.length)
       throw new BztError("NOT_FOUND", "没有找到相关的研发需求。");
-    const details =
+    let details =
       storyId === undefined
         ? await Promise.all(ids.map((id) => state.detail(id)))
         : [await state.requiredDetail(storyId)];
+    // CR-002：反馈者按编号或受理回执打开详情时，也沿用「我提出或反馈」的范围。
+    if (raisedByMe) {
+      const me = await state.me();
+      details = await Promise.all(
+        details.map(async (row) => {
+          if (!row || !me) return undefined;
+          if (row.openedBy === me.account) return row;
+          const people = await state.roles(row);
+          return feedbackMatches(row, people, me.account, me.realname)
+            ? row
+            : undefined;
+        }),
+      );
+      if (!details.some(Boolean) && !state.gaps.length)
+        throw new BztError("NOT_FOUND", "没有找到本人提出或反馈的相关需求。");
+    }
     const story = details[0];
     if (!story || ids.length !== 1)
       return finish({

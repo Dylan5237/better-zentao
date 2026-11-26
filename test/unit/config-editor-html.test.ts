@@ -79,6 +79,14 @@ describe("CR-001 团队配置页面", () => {
     });
   });
 
+  it("本地文件导入在原 JSON 预览区等待读取，仍支持离线和减少动态效果", () => {
+    const html = renderTeamConfigEditorHtml({ ...data, config: {} });
+    expect(html).toContain("import-preview");
+    expect(html).toContain("aria-busy");
+    expect(html).toContain("prefers-reduced-motion");
+    expect(html).toContain("sk-pulse");
+  });
+
   it("保留非编辑配置段，且目录的额外字段不进入页面", () => {
     const config = {
       calendar: {

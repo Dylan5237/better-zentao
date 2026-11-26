@@ -21,6 +21,8 @@ Thumbs.db
 # v3.0 local state, SQLite & private team config
 *.db
 *.sqlite*
+.*.bzt-roles.lock
+.*.bzt-roles-*.tmp
 .better-zentao/
 config/team.local.json
 test/eval/report.md

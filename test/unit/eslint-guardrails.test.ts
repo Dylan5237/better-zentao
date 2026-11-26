@@ -73,6 +73,18 @@ describe("WP-00 实际 ESLint 配置自检", () => {
     ["访问 window", "void window;"],
   ] as const;
   const blocked = fixtures([
+    [
+      "门户监听入口不能导入 HTTP 客户端",
+      "src/adapters/web/server.ts",
+      'import { request } from "node:http"; void request;',
+      "no-restricted-imports",
+    ],
+    [
+      "其它门户适配器不能监听 HTTP",
+      "src/adapters/web/check.ts",
+      'import { createServer } from "node:http"; void createServer;',
+      "no-restricted-imports",
+    ],
     ...["domain", "services"].flatMap((layer) =>
       globalAccess.map<[string, string, string, string]>(([name, source]) => [
         `${layer} ${name}`,

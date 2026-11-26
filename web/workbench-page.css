@@ -1,0 +1,140 @@
+.workbench-body,
+.workbench-native-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: inherit;
+  min-height: 0;
+  min-width: 0;
+}
+
+.workbench-panel-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workbench-maintained-panel .workbench-panel-heading {
+  width: 100%;
+}
+
+.workbench-rm-alerts {
+  display: grid;
+  gap: inherit;
+  flex: 0 0 auto;
+  max-height: min(144px, 18vh);
+  overflow-y: auto;
+}
+
+.workbench-home .item-row,
+.workbench-story-open,
+.workbench-native-title {
+  text-align: left;
+}
+
+.workbench-home .item-row-sub {
+  display: block;
+}
+
+.workbench-home .item-row-title,
+.workbench-home .item-row-sub,
+.workbench-home .kpi-foot,
+.workbench-home .page-title-row {
+  overflow-wrap: anywhere;
+}
+
+.workbench-home .kpi-foot svg,
+.workbench-home .bzt-hint-strip svg,
+.workbench-rm-alert svg {
+  flex: 0 0 auto;
+}
+
+.workbench-home .workbench-danger {
+  color: var(--danger);
+}
+
+.workbench-home .workbench-success {
+  color: var(--success);
+}
+
+.workbench-home .workbench-warn {
+  color: var(--warn);
+}
+
+.workbench-feedback-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workbench-lamp-unknown {
+  background: var(--ink-muted);
+  box-shadow: 0 0 0 4px var(--bg-subtle);
+}
+
+.workbench-home a.btn-secondary {
+  text-decoration: none;
+}
+
+.workbench-native-empty {
+  padding: 24px 12px !important;
+  text-align: center;
+  color: var(--ink-muted);
+}
+
+.workbench-home .workbench-evidence {
+  display: block;
+  flex: 0 0 auto;
+  max-height: min(160px, 20vh);
+  overflow: auto;
+  margin: 0;
+}
+
+.workbench-evidence summary {
+  cursor: pointer;
+}
+
+.workbench-evidence ul {
+  padding-inline-start: 1.25em;
+  list-style: disc;
+}
+
+@media (max-width: 1140px), (max-height: 619px) {
+  .workbench-home .vp-grid-2 {
+    display: grid;
+    gap: inherit;
+  }
+
+  .workbench-home .vp-card {
+    max-height: none;
+  }
+
+  .workbench-home .vp-scroll,
+  .workbench-home .vp-table-scroll {
+    overflow: auto;
+  }
+}
+
+@media (max-width: 650px) {
+  .workbench-home .page-title-row,
+  .workbench-home .page-head-actions,
+  .workbench-home .row-actions {
+    flex-wrap: wrap;
+  }
+
+  .workbench-home .kpi-grid-3,
+  .workbench-home .kpi-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workbench-home .item-row {
+    flex-wrap: wrap;
+  }
+
+  .workbench-home .item-row-main {
+    flex-basis: 100%;
+  }
+}

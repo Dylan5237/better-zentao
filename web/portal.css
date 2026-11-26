@@ -1,0 +1,341 @@
+:root {
+  --canvas: var(--bg);
+  --ink: var(--text);
+  --muted: var(--text-soft);
+  --line: var(--border);
+  --field-line: var(--border-strong);
+  --accent: var(--primary);
+  --accent-strong: #1d4ed8;
+  --accent-soft: var(--primary-soft);
+  --focus: var(--primary);
+  --radius: 12px;
+  --warning: var(--warn);
+  --warning-bg: var(--warn-soft);
+  --danger-bg: var(--danger-soft);
+}
+[hidden] {
+  display: none !important;
+}
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+.login-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.login-card {
+  width: min(100%, 420px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: white;
+  box-shadow: var(--shadow-card);
+}
+.login-panel {
+  padding: 28px;
+}
+.login-panel h1 {
+  margin: 22px 0 16px;
+}
+.login-panel form {
+  display: grid;
+  gap: 14px;
+}
+.login-status:empty {
+  display: none;
+}
+.startup {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 24px;
+  color: var(--muted);
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 10;
+  inset: 10px auto auto 10px;
+  transform: translateY(calc(-100% - 20px));
+  padding: 9px 14px;
+  background: var(--surface);
+  border-radius: 8px;
+}
+.skip-link:focus {
+  transform: none;
+}
+
+.workspace-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.workspace-header .muted {
+  margin-top: 7px;
+}
+.workspace-header .btn {
+  flex: none;
+}
+.workspace-body {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+.muted {
+  color: var(--muted);
+}
+.empty-panel {
+  max-width: 650px;
+  margin: clamp(18px, 6vw, 72px) auto 0;
+  padding: clamp(24px, 5vw, 42px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+}
+.empty-panel p {
+  margin-top: 12px;
+}
+
+.role-setup {
+  max-width: 760px;
+  margin: clamp(12px, 4vw, 48px) auto 0;
+  padding: clamp(18px, 4vw, 34px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.role-setup > .muted {
+  margin-top: 8px;
+}
+.role-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+}
+.role-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.role-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.role-option:has(input:disabled) {
+  cursor: default;
+}
+.role-option input {
+  width: 17px;
+  height: 17px;
+  margin: 4px 0 0;
+}
+.role-option small {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.875rem;
+}
+.role-setup-actions {
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+.role-setup .notice {
+  margin-top: 12px;
+}
+
+.filter-panel,
+.workspace-body > form,
+.write-form,
+.view-results > section {
+  padding: clamp(14px, 2.4vw, 20px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.filter-grid,
+.write-form .form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr));
+  align-items: end;
+  gap: 12px;
+}
+.field,
+.write-form label:not(.filter-check) {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 620;
+}
+:is(.login-panel, .filter-panel, .write-form)
+  :is(
+    input:not([type="checkbox"], [type="radio"], [type="hidden"]),
+    select,
+    textarea
+  ) {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 7px 10px;
+  border: 1px solid var(--field-line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 400;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+textarea {
+  min-height: 84px;
+  resize: vertical;
+}
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
+}
+.filter-check {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  gap: 8px;
+  font-size: 0.875rem;
+}
+.filter-actions,
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 15px;
+}
+.write-form {
+  display: grid;
+  gap: 14px;
+}
+
+.notice {
+  padding: 11px 14px;
+  background: var(--accent-soft);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--accent-strong);
+  overflow-wrap: anywhere;
+}
+.notice small {
+  display: block;
+  margin-top: 4px;
+}
+.notice-error,
+.notice.error {
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.notice-warning,
+.notice.warning {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+#session-status:not([hidden]) {
+  max-width: 1160px;
+  margin: 0 auto 14px;
+}
+
+.view-results {
+  display: grid;
+  min-width: 0;
+  gap: 15px;
+  overflow-wrap: anywhere;
+}
+.view-results :is(section, details) {
+  min-width: 0;
+}
+.view-results :is(h2, h3) + * {
+  margin-top: 8px;
+}
+.table-wrap {
+  min-width: 0;
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: start;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+  background: var(--surface);
+}
+.data-table :is(th, td) {
+  padding: 9px 11px;
+  text-align: start;
+  vertical-align: top;
+  min-width: 6ch;
+}
+.data-table th {
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  font-weight: 650;
+}
+.data-table tr + tr td {
+  border-top: 1px solid var(--line);
+}
+.data-table tbody tr:hover {
+  background: var(--primary-soft);
+}
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  gap: 9px;
+  margin: 0;
+}
+.metric {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-alt);
+}
+.metric dt {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+.metric dd {
+  margin: 1px 0 0;
+  font-size: 1.14rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.read-prose {
+  margin-block: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-alt);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
+@media (max-width: 600px) {
+  .role-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .workspace-header {
+    flex-wrap: wrap;
+  }
+}
