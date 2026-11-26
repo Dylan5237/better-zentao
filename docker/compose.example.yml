@@ -2,7 +2,9 @@
 # 注意：
 # 1. Server 1.0 限定单进程单副本 + 本地持久化卷（禁止跨主机 NFS/SMB 共享 SQLite）。
 # 2. 首次部署默认 readOnly: true，隔离验证后再由管理员显式开启写入。
-# 3. 切勿将包含真实密码、Token 或内网凭据的文件提交到仓库。
+# 3. 在 Compose 双容器模式下，config-runtime/server.json 中 host 应设为 "0.0.0.0"（仅暴露于 bzt_internal 内部网，不映射宿主机端口），
+#    且 trustedProxies 须包含 reverse-proxy 容器在 bzt_internal 网络中的地址。
+# 4. 切勿将包含真实密码、Token 或内网凭据的文件提交到仓库。
 
 services:
   bzt-server:

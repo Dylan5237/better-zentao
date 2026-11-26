@@ -74,40 +74,53 @@ export async function exchangeZentaoToken(options: {
   const normalized = normalizeZentaoBaseUrl(options.baseUrl);
   if (!normalized) throw new BztError("INVALID_INPUT", "禅道基础地址不合法。");
   const url = new URL(tokenPath.slice(1), normalized.href).href;
+  const timeoutMs = resolveZentaoTimeout(options.env);
   const started = options.clock();
   const perform = async () => {
-    let response: Response;
-    try {
-      response = await (options.fetch ?? fetch)(url, {
-        method: "POST",
-        // SSRF 防线：凭据绝不随重定向转发（docs/06 §2.2）。
-        redirect: "error",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(credentials.data),
-      });
-    } catch {
+    const controller = new AbortController();
+    const expired = Promise.withResolvers<"timeout">();
+    const timer = setTimeout(() => {
+      expired.resolve("timeout");
+      controller.abort();
+    }, timeoutMs);
+    const exchange = async (): Promise<
+      | { kind: "ok"; status: number; text: string }
+      | { kind: "http-error"; status: number }
+      | { kind: "network" }
+    > => {
       try {
-        writeHttpLog(
-          {
-            method: "POST",
-            pathTemplate: tokenPath,
-            status: 0,
-            durationMs: Math.max(0, options.clock() - started),
-          },
-          options.logSink,
-          options.env,
-        );
+        const response = await (options.fetch ?? fetch)(url, {
+          method: "POST",
+          // SSRF 防线：凭据绝不随重定向转发（docs/06 §2.2）。
+          redirect: "error",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(credentials.data),
+          signal: controller.signal,
+        });
+        if (!response.ok || controller.signal.aborted) {
+          void response.body?.cancel().catch(() => {});
+          return { kind: "http-error", status: response.status };
+        }
+        return {
+          kind: "ok",
+          status: response.status,
+          text: await response.text(),
+        };
       } catch {
-        // 日志输出失败不掩盖原始错误。
+        return { kind: "network" };
       }
-      throw new BztError("ZENTAO_UNAVAILABLE", "无法连接禅道。");
-    }
+    };
+    const outcome = await Promise.race([exchange(), expired.promise]).finally(
+      () => clearTimeout(timer),
+    );
+    const status =
+      outcome === "timeout" || outcome.kind === "network" ? 0 : outcome.status;
     try {
       writeHttpLog(
         {
           method: "POST",
           pathTemplate: tokenPath,
-          status: response.status,
+          status,
           durationMs: Math.max(0, options.clock() - started),
         },
         options.logSink,
@@ -116,16 +129,21 @@ export async function exchangeZentaoToken(options: {
     } catch {
       // 日志输出失败不掩盖认证响应。
     }
-    if (!response.ok) {
-      void response.body?.cancel().catch(() => {});
-      if (response.status >= 400 && response.status < 500) throw authFailed();
+    if (outcome === "timeout") {
+      throw new BztError("ZENTAO_TIMEOUT", "禅道认证请求超时。");
+    }
+    if (outcome.kind === "network") {
+      throw new BztError("ZENTAO_UNAVAILABLE", "无法连接禅道。");
+    }
+    if (outcome.kind === "http-error") {
+      if (outcome.status >= 400 && outcome.status < 500) throw authFailed();
       throw new BztError("ZENTAO_UNAVAILABLE", "无法连接禅道。", {
-        status: response.status,
+        status: outcome.status,
       });
     }
     let payload: unknown;
     try {
-      payload = JSON.parse(await response.text());
+      payload = JSON.parse(outcome.text);
     } catch {
       throw authFailed();
     }

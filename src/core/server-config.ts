@@ -70,7 +70,7 @@ export const serverConfigSchema = z
       .prefault({}),
     cache: z
       .strictObject({
-        reportTtlSeconds: positiveInt.default(60),
+        reportTtlSeconds: positiveInt.max(300).default(60),
       })
       .prefault({}),
     http: z
@@ -101,6 +101,17 @@ export const serverConfigSchema = z
         path: ["externalOrigin"],
         message: "HTTP 外部源仅在显式设置 allowInsecureHttp: true 时允许。",
       });
+    }
+    const seenUrls = new Set<string>();
+    for (const [id, instance] of Object.entries(config.instances)) {
+      if (seenUrls.has(instance.baseUrl)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["instances", id, "baseUrl"],
+          message: "同一禅道地址不能重复登记为多个实例 ID。",
+        });
+      }
+      seenUrls.add(instance.baseUrl);
     }
   });
 

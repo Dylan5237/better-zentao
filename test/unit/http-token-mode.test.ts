@@ -270,4 +270,45 @@ describe("SRV-CONC-02 分区读取并发池", () => {
     }
     expect(await Promise.all(work)).toEqual([undefined, undefined, "token"]);
   });
+
+  it("Gate C P1-5 换 Token 超时及时中止，读池等待队列超限立即拒绝", async () => {
+    const hanging = vi.fn<typeof fetch>(() => new Promise(() => {}));
+    await expect(
+      exchangeZentaoToken({
+        baseUrl: "https://zentao.example.test/",
+        account: "acct_a",
+        password: "synthetic-password",
+        clock,
+        env: { ZENTAO_TIMEOUT_MS: "50" },
+        fetch: hanging,
+      }),
+    ).rejects.toMatchObject({ code: "ZENTAO_TIMEOUT" });
+
+    const pool = createPartitionedReadPool({
+      ...poolOptions,
+      perInstanceLimit: 1,
+      perUserLimit: 1,
+      maxQueueSize: 1,
+    });
+    const blocked = Promise.withResolvers<void>();
+    const active = pool.withReadSlot(
+      { instanceHash: "instance-a", account: "acct_a" },
+      () => blocked.promise,
+    );
+    const queued = pool.withReadSlot(
+      { instanceHash: "instance-a", account: "acct_a" },
+      async () => "ok",
+    );
+    try {
+      await expect(
+        pool.withReadSlot(
+          { instanceHash: "instance-a", account: "acct_a" },
+          async () => "overflow",
+        ),
+      ).rejects.toMatchObject({ code: "ZENTAO_UNAVAILABLE" });
+    } finally {
+      blocked.resolve();
+      await Promise.allSettled([active, queued]);
+    }
+  });
 });

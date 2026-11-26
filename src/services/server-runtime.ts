@@ -24,6 +24,13 @@ import { createPartitionedReadPool } from "../core/http-policy.ts";
 import { loadServerConfig, type ServerConfig } from "../core/server-config.ts";
 
 export { loadServerConfig, type Clock, type ConfigEnv, type ServerConfig };
+
+export function isServerConflictError(error: unknown): boolean {
+  return (
+    error instanceof BztError &&
+    (error.code === "PLAN_STALE" || error.details?.conflict === true)
+  );
+}
 import {
   canonicalAccountDir,
   instanceHashOf,
@@ -532,10 +539,14 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
           env: { ...baseEnv, ZENTAO_BASE_URL: session.baseUrl },
           logSink,
           writeCoordinator,
+          assertBeforeDispatch: () => {
+            if (session.revoked)
+              throw new BztError("AUTH_FAILED", "本次会话已结束。");
+          },
         });
 
         // 集中端独立处理 get_operation 与 confirm_operation（F-07 / SRV-OP-01）：
-        // 未执行预览绑定发起会话与角色；已派发回执对原主体跨重启可读。
+        // 未执行预览绑定发起会话、角色与配置版本；已派发回执对原主体且具备对应工具权限的角色跨重启可读。
         if (request.tool === "get_operation") {
           const parsed = allTools.get_operation.input.safeParse(request.input);
           if (!parsed.success || !parsed.data.opId)
@@ -549,11 +560,15 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
               const meta = storedInstanceSchema.safeParse(
                 JSON.parse(record.planJson),
               );
+              const roleAllowsKind = page.actions.some(
+                (action) => action === record.kind,
+              );
               ownedDispatched =
                 record.actor === session.account &&
                 meta.success &&
                 meta.data.instanceHash === session.instanceHash &&
-                record.executedAt !== null;
+                record.executedAt !== null &&
+                roleAllowsKind;
             } catch {
               ownedDispatched = false;
             }
@@ -563,9 +578,10 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
           const receipt = allTools.get_operation.output.parse(
             wb.getOperation(parsed.data),
           );
+          const projected = await projectLinks(session, receipt);
           if (session.revoked)
             throw new BztError("AUTH_FAILED", "本次会话已结束。");
-          return await projectLinks(session, receipt);
+          return projected;
         }
 
         if (request.tool === "confirm_operation") {
@@ -575,8 +591,14 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
           if (!parsed.success)
             throw new BztError("PERMISSION_DENIED", "当前职责无权执行该操作。");
           const grant = session.previews.get(parsed.data.opId);
-          if (!grant || grant.role !== page.id)
+          if (
+            !grant ||
+            grant.role !== page.id ||
+            grant.configVersion !== team.version
+          ) {
+            if (grant) session.previews.delete(parsed.data.opId);
             throw new BztError("PERMISSION_DENIED", "无权确认该操作计划。");
+          }
           if (parsed.data.previewAck !== true)
             throw new BztError("PREVIEW_REQUIRED", "请先确认已阅读预览。");
           const result = allTools.confirm_operation.output.parse(
@@ -588,9 +610,10 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
             )
           )
             session.userContext.snapshots.invalidate();
+          const projected = await projectLinks(session, result);
           if (session.revoked)
             throw new BztError("AUTH_FAILED", "本次会话已结束。");
-          return await projectLinks(session, result);
+          return projected;
         }
 
         const sessionPreviews = new Map<string, PortalRole>();
@@ -640,9 +663,15 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
             configVersion: team.version,
           });
         }
-        return request.readMode === "cached" && !reportExists(value)
-          ? value
-          : await projectLinks(session, value);
+        const projected =
+          request.readMode === "cached" && !reportExists(value)
+            ? value
+            : await projectLinks(session, value);
+        if (session.revoked) {
+          session.userContext.snapshots.invalidate();
+          throw new BztError("AUTH_FAILED", "本次会话已结束。");
+        }
+        return projected;
       } catch (error) {
         if (session.revoked) {
           throw new BztError("AUTH_FAILED", "本次会话已结束。");

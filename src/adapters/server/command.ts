@@ -8,6 +8,7 @@ export async function runServeCommand(
   runtime: WorkbenchRuntime & {
     stdout: (text: string) => void;
     stderr: (text: string) => void;
+    onShutdown?: (cleanup: () => Promise<void> | void) => void;
   },
 ): Promise<number> {
   let parsed;
@@ -64,6 +65,7 @@ export async function runServeCommand(
     runtime.stderr("无法启动集中服务，请检查端口占用与数据目录锁。\n");
     return 1;
   }
+  runtime.onShutdown?.(() => server.close());
   if (config.allowInsecureHttp) {
     runtime.stderr(
       "警告：当前处于显式 HTTP 调试模式，请勿在不可信网络中使用真实凭据。\n",

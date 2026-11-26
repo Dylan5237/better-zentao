@@ -9,6 +9,7 @@ export interface PartitionedReadPoolOptions {
   readonly perInstanceLimit: number;
   readonly perUserLimit: number;
   readonly authReserve: number;
+  readonly maxQueueSize?: number;
 }
 
 export interface ReadSlotRequest {
@@ -33,12 +34,14 @@ export function createPartitionedReadPool(options: PartitionedReadPoolOptions) {
       perInstanceLimit: concurrencySetting,
       perUserLimit: concurrencySetting,
       authReserve: concurrencySetting,
+      maxQueueSize: concurrencySetting.default(64),
     })
     .safeParse(options);
   if (!setting.success)
     throw new BztError("INVALID_INPUT", "分区读取并发池配置不合法。");
 
-  const { perInstanceLimit, perUserLimit, authReserve } = setting.data;
+  const { perInstanceLimit, perUserLimit, authReserve, maxQueueSize } =
+    setting.data;
   const instanceInFlight = new Map<string, number>();
   const userInFlight = new Map<string, number>();
   const authInFlight = new Map<string, number>();
@@ -112,6 +115,12 @@ export function createPartitionedReadPool(options: PartitionedReadPoolOptions) {
     if (hasCapacity(request)) {
       acquire(request);
     } else {
+      if (waiting.length >= maxQueueSize) {
+        throw new BztError(
+          "ZENTAO_UNAVAILABLE",
+          "上游请求排队已满，请稍后重试。",
+        );
+      }
       await new Promise<void>((resolve) => {
         waiting.push({ resolve, request });
       });

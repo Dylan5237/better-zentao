@@ -20,6 +20,7 @@ interface CliRuntime {
   readonly homeDir?: string;
   readonly clock: () => number;
   readonly nodeVersion: string;
+  readonly onShutdown?: (cleanup: () => Promise<void> | void) => void;
 }
 
 const help = `用法

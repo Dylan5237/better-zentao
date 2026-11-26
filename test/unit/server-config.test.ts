@@ -106,6 +106,31 @@ it("拒绝空实例登记表", async () => {
   await expect(async () => loadServerConfig(file, {})).rejects.toThrow();
 });
 
+it("Gate C P1-3/4 拒绝超过 300 秒的报表缓存 TTL 与重复登记同一禅道地址", async () => {
+  const { serverConfigSchema } =
+    await import("../../src/core/server-config.ts");
+  expect(
+    serverConfigSchema.safeParse({
+      ...source(),
+      cache: { reportTtlSeconds: 301 },
+    }).success,
+  ).toBe(false);
+  const base = source();
+  expect(
+    serverConfigSchema.safeParse({
+      ...base,
+      instances: {
+        ...base.instances,
+        instanceAlias: {
+          name: "Duplicate URL",
+          baseUrl: "https://zentao-a.invalid/",
+          teamConfigPath: join(root, "team-b.json"),
+        },
+      },
+    }).success,
+  ).toBe(false);
+});
+
 it.each(["password", "accessToken", "clientSecret"])(
   "CFG-10 拒绝嵌套凭据字段 %s 且不回显其值",
   async (key) => {

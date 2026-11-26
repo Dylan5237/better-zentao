@@ -104,7 +104,18 @@ export function createPortalSnapshots(
   ) {
     if (bypassTools?.has(tool)) {
       if (mode === "cached") return { ok: false };
-      return fetchReport();
+      try {
+        return await fetchReport();
+      } catch (error) {
+        if (
+          error instanceof BztError &&
+          (error.code === "AUTH_FAILED" || error.code === "PERMISSION_DENIED")
+        ) {
+          // 授权优先于缓存：直读对象被明确拒绝时，立即失效该用户已缓存的聚合报表。
+          invalidate();
+        }
+        throw error;
+      }
     }
     const key = prefix + hash([configRevision, role, tool, input]);
     const old = load(key, row);
@@ -205,17 +216,19 @@ export function createPortalSnapshots(
     };
   }
 
+  function invalidate() {
+    generation++;
+    inFlight.clear();
+    try {
+      cache.trimPrefix(prefix, 0);
+    } catch {
+      // 缓存清理失败不能掩盖已经完成的禅道操作。
+    }
+  }
+
   return {
     read,
     check,
-    invalidate() {
-      generation++;
-      inFlight.clear();
-      try {
-        cache.trimPrefix(prefix, 0);
-      } catch {
-        // 缓存清理失败不能掩盖已经完成的禅道操作。
-      }
-    },
+    invalidate,
   };
 }

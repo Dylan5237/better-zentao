@@ -123,6 +123,7 @@ export interface ServerWorkbenchOptions {
   readonly env: ConfigEnv;
   readonly logSink?: (line: string) => void;
   readonly writeCoordinator?: TargetWriteCoordinator;
+  readonly assertBeforeDispatch?: () => void;
 }
 
 export function createServerWorkbench(options: ServerWorkbenchOptions) {
@@ -140,6 +141,7 @@ function assembleFromParts({
   env,
   logSink,
   writeCoordinator,
+  assertBeforeDispatch,
 }: ServerWorkbenchOptions) {
   const common = { client, config, clock, baseUrl, store };
   const directory = new DirectoryService({
@@ -172,6 +174,7 @@ function assembleFromParts({
       channel: "mcp",
       instanceVersion,
       writeCoordinator,
+      assertBeforeDispatch,
     });
   const history = createExecutor();
 

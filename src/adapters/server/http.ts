@@ -8,6 +8,7 @@ import { z } from "zod";
 import { portalMonthSchema } from "../../services/portal.ts";
 import {
   createServerRuntime,
+  isServerConflictError,
   type Clock,
   type ConfigEnv,
   type ServerConfig,
@@ -374,6 +375,9 @@ export async function startServer(options: StartServerOptions) {
       const projected = runtime.projectError(error);
       if (projected.code === "AUTH_FAILED") {
         clearSessionCookie(res);
+      }
+      if (isServerConflictError(error)) {
+        return reply(res, 409, projected);
       }
       return businessError(res, projected);
     }

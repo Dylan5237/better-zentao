@@ -434,3 +434,75 @@ it("SRV-LIFE-03 重启释放数据目录锁，旧 Cookie 一律失效", async ()
     instanceId: "instanceA",
   });
 });
+
+it("Gate C P1-1 退出发生在确认预检期间时中止派发，不向禅道发送写入", async () => {
+  const client = browser(await fixture.start({ readOnly: false }));
+  await login(client);
+  const opId = await prepare(client);
+  fixture.advance(3001);
+  const upstream = fixture.upstream();
+  const slow = upstream.pauseNextDetail();
+  const pending = client.call(confirmation(opId));
+  try {
+    await Promise.race([
+      slow.started,
+      pending.then(() => {
+        throw new Error("确认预检未命中暂停点。");
+      }),
+    ]);
+    const loggedOut = await client.send("/api/logout", {});
+    expect(loggedOut.status).toBe(200);
+  } finally {
+    slow.release();
+  }
+  const result = await pending;
+  expect(result.status).toBe(401);
+  expect(upstream.writes()).toEqual([]);
+});
+
+it("Gate C P1-3 详情返回 403 时同步失效已缓存的聚合报表", async () => {
+  const client = browser(await fixture.start());
+  await login(client);
+  const upstream = fixture.upstream();
+  const { initialTitle } = upstream.instances.instanceA;
+  expectReport(await client.call(report), initialTitle);
+  upstream.fail("instanceA", "alice", storyPath, 403);
+  expectPermissionDenied(await client.call(detail));
+  const cached = await client.call({ ...report, readMode: "cached" });
+  expect(JSON.stringify(cached.body)).not.toContain(initialTitle);
+});
+
+it("Gate C P1-4 配置版本变更作废旧预览，撤权后切低权限角色不可读原回执", async () => {
+  const client = browser(await fixture.start({ readOnly: false }));
+  await login(client);
+  const opId = await prepare(client);
+  fixture.advance(3001);
+
+  const file = fixture.teamPath("instanceA");
+  await writeFile(
+    file,
+    JSON.stringify({
+      roles: { RM: ["alice", "bob"], RD: ["alice", "bob"] },
+      timeState: { dueSoonWorkdays: 4 },
+    }),
+  );
+  expectPermissionDenied(await client.call(confirmation(opId)));
+  expect(fixture.upstream().writes()).toEqual([]);
+
+  const opId2 = await prepare(client);
+  fixture.advance(3001);
+  expect((await client.call(confirmation(opId2))).status).toBe(200);
+
+  await writeFile(
+    file,
+    JSON.stringify({ roles: { RM: ["bob"], RD: ["alice", "bob"] } }),
+  );
+  expectPermissionDenied(await client.call(operation(opId2)));
+  expectPermissionDenied(
+    await client.call({
+      role: "RD",
+      tool: "get_operation",
+      input: { opId: opId2 },
+    }),
+  );
+});

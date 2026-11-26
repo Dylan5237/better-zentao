@@ -115,6 +115,8 @@ interface ExecutorOptions {
   instanceVersion?: string | undefined;
   /** CR-008 §4.4：跨账号同目标写入协调器，可选注入。 */
   writeCoordinator?: TargetWriteCoordinator | undefined;
+  /** CR-008 Gate C：派发写请求前的最终会话/授权校验钩子。 */
+  assertBeforeDispatch?: (() => void) | undefined;
 }
 
 const fingerprintSchema = targetSnapshot.omit({ spec: true }).extend({
@@ -579,7 +581,9 @@ export class OperationExecutor {
   }
 
   private busy(): BztError {
-    return new BztError("INVALID_INPUT", "本地操作正在执行，请稍后查询回执。");
+    return new BztError("INVALID_INPUT", "本地操作正在执行，请稍后查询回执。", {
+      conflict: true,
+    });
   }
 
   private checkExpiry(record: OperationRecord): void {
@@ -671,11 +675,13 @@ export class OperationExecutor {
     const dispatch = async () => {
       await this.checkTargets(opId, targets, current, eligible, plan);
       this.checkExpiry(record);
+      this.options.assertBeforeDispatch?.();
       this.store.operations.updateStatus(opId, {
         status: record.status,
         executedAt: record.executedAt ?? this.options.clock(),
       });
       for (const row of eligible) {
+        this.options.assertBeforeDispatch?.();
         const step = plan.steps[row.seq - 1];
         if (!step) continue;
         if (

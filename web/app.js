@@ -999,12 +999,17 @@ function mountPortal(
     }
   };
   const sectionKey = () =>
-    "bzt.portal.section/" +
-    encodeURIComponent(session.identity?.instanceId ?? "") +
-    "/" +
-    encodeURIComponent(session.identity?.account ?? "") +
-    "/" +
-    (session.role?.id ?? "");
+    session.identity?.instanceId
+      ? "bzt.portal.section/" +
+        encodeURIComponent(session.identity.instanceId) +
+        "/" +
+        encodeURIComponent(session.identity.account ?? "") +
+        "/" +
+        (session.role?.id ?? "")
+      : "bzt.portal.section/" +
+        encodeURIComponent(session.identity?.account ?? "") +
+        "/" +
+        (session.role?.id ?? "");
   function readSavedSection() {
     try {
       const raw = sessionStorage.getItem(sectionKey());
