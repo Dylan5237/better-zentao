@@ -171,11 +171,17 @@ function requestError(result: FailedAttempt): BztError {
   return new BztError("ZENTAO_UNAVAILABLE", "禅道返回异常状态。", { status });
 }
 
+const executionAccessDenied = z.object({
+  status: z.literal("fail"),
+  message: z.enum(["您无权访问该迭代！", "您无权访问该迭代!"]),
+});
+
 function decodeJson<T>(
   text: string,
   schema: z.ZodType<T>,
   schemaFields?: readonly string[],
   allowReceiptMessage = false,
+  executionTasks = false,
 ): T {
   let payload: unknown;
   let decoded: z.ZodSafeParseResult<T> | undefined;
@@ -184,7 +190,22 @@ function decodeJson<T>(
     decoded = schema.safeParse(payload);
   } catch (error) {
     if (error instanceof BztError) throw error;
+    // ZenTao 22.6 may append a task list after rejecting an inaccessible execution.
+    if (executionTasks) {
+      const prefix = /^\s*(\{[^{}]{1,400}\})\s*(?:\{|$)/u.exec(text)?.[1];
+      if (prefix) {
+        try {
+          payload = JSON.parse(prefix);
+        } catch {
+          /* 保留正常的解码失败。 */
+        }
+        if (!executionAccessDenied.safeParse(payload).success)
+          payload = undefined;
+      }
+    }
   }
+  if (executionTasks && executionAccessDenied.safeParse(payload).success)
+    throw new BztError("PERMISSION_DENIED", "当前账号没有该迭代的查看权限。");
   // 即使端点解码异常，响应中明确的业务失败仍可安全识别。
   assertNoBusinessError(
     payload,
@@ -386,7 +407,13 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       capture?.observeSession(session.token);
       const result = await withReadSlot(() => send(prepared, session.token));
       if (result.kind === "success") {
-        const body = decodeJson(result.text, schema, request.schemaFields);
+        const body = decodeJson(
+          result.text,
+          schema,
+          request.schemaFields,
+          false,
+          request.pathTemplate === "/api.php/v1/executions/{id}/tasks",
+        );
         return capture ? { status: result.status, body } : body;
       }
       if (result.kind === "http-error" && result.status === 401) {

@@ -269,6 +269,28 @@ it("AC-20/21/22/25 按到期和就绪状态分组并推进已读游标", async (
   assertNoSensitiveData(result, ["discard-this-field"]);
 });
 
+it("CR-007 工作台与需求查询使用同一选中月份，历史列表排除月外同类记录", async () => {
+  const { service } = setup();
+  const groups = ["action", "new"];
+  const november = await service.getMyWork(
+    { groups, markSeen: false },
+    "2026-11",
+  );
+  const october = await service.getMyWork(
+    { groups, markSeen: false },
+    "2026-10",
+  );
+  expect(november.data.action.overdue).toMatchObject([{ id: 11 }]);
+  expect(october.data.action.overdue).toEqual([]);
+  expect(october.scope.filters).toMatchObject({ month: "2026-10" });
+  expect(
+    (await service.queryStories({ type: "requirement" }, "2026-11")).data.items,
+  ).toMatchObject([{ id: 41 }]);
+  expect(
+    (await service.queryStories({ type: "requirement" }, "2026-10")).data.items,
+  ).toEqual([]);
+});
+
 it("AC-23/24/26 团队只统计叶子和串行当前顺位，并报告执行读取失败", async () => {
   const { service } = setup({
     failedExecution: true,

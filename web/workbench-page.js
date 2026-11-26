@@ -69,7 +69,7 @@ const profiles = {
     reads: [
       work("action", "waiting_ready", "new"),
       ["team", "团队逾期任务", "get_team_work", { view: "overdue" }],
-      ["queue", "本月研发队列", "get_monthly_dev_queue", {}],
+      ["queue", "月度研发队列", "get_monthly_dev_queue", {}],
     ],
     render: renderDevelopmentLead,
   },
@@ -1654,7 +1654,7 @@ function homeQueries(ctx, profile, selectedTeam) {
   if (id === "PJ" && native) {
     reads.push([
       "iteration",
-      "本月迭代过程指标",
+      "月度迭代过程指标",
       "get_plan_progress",
       { view: "iteration", month: "本月" },
     ]);
@@ -1704,7 +1704,10 @@ function showEvidence(parent, reads, pending = false) {
       if (!result.gaps?.length)
         gaps.push(result.source + " · 读到的范围不完整");
     }
-    if (result.truncated) gaps.push(`${result.source} · 部分记录已截断`);
+    if (result.truncated)
+      gaps.push(
+        `${result.source} · 部分记录未展示。可按产品、维护人或登记日期进一步筛选。`,
+      );
     if (result.scope?.asOf && (!observed || result.scope.asOf < observed))
       observed = result.scope.asOf;
     for (const hint of result.hints ?? []) notes.push(hint);
@@ -1832,6 +1835,7 @@ export async function renderWorkbench(container, ctx) {
   }
   async function load(team) {
     if (!ctx.current()) return;
+    ctx.onSync?.(() => load(team));
     const version = ++generation;
     const current = () => ctx.current() && version === generation;
     const queries = homeQueries(ctx, profile, team);
@@ -1839,32 +1843,34 @@ export async function renderWorkbench(container, ctx) {
       queries.map(([key, source]) => [key, { source }]),
     );
     const reads = { ...sources };
-    const finish = beginSkeleton(
-      body,
-      (doc) => {
-        const scene = doc.createElement("div");
-        scene.className = "workbench-body workbench-skeleton";
-        renderContent(
-          scene,
-          { ...ctx, pending: true, setBadge: undefined },
-          sources,
-          team,
-        );
-        const previous = evidenceByTeam.get(team);
-        if (!showEvidence(scene, reads, true)) {
-          if (previous)
-            evidenceSkeleton(scene, previous.className, previous.height);
-          else if (ctx.role.id === "DM" && mode !== "zentao")
-            evidenceSkeleton(
+    const finish = ctx.isSyncing?.()
+      ? () => {}
+      : beginSkeleton(
+          body,
+          (doc) => {
+            const scene = doc.createElement("div");
+            scene.className = "workbench-body workbench-skeleton";
+            renderContent(
               scene,
-              "bzt-alert workbench-evidence workbench-pending-note",
+              { ...ctx, pending: true, setBadge: undefined },
+              sources,
+              team,
             );
-        }
-        showTeam(team);
-        return scene;
-      },
-      { signal: ctx.signal, current },
-    );
+            const previous = evidenceByTeam.get(team);
+            if (!showEvidence(scene, reads, true)) {
+              if (previous)
+                evidenceSkeleton(scene, previous.className, previous.height);
+              else if (ctx.role.id === "DM" && mode !== "zentao")
+                evidenceSkeleton(
+                  scene,
+                  "bzt-alert workbench-evidence workbench-pending-note",
+                );
+            }
+            showTeam(team);
+            return scene;
+          },
+          { signal: ctx.signal, current },
+        );
     try {
       await Promise.all(
         queries.map(async (input) => {

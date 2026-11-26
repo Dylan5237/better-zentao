@@ -6,6 +6,8 @@ import {
   deadlineEndOfDayMs,
   formatLocalDate,
   isWorkday,
+  monthDateRange,
+  overlapsDateRange,
   nextWorkday,
   parseZentaoDateTime,
 } from "../../src/core/calendar.ts";
@@ -16,6 +18,13 @@ const calendar = () => createWorkCalendar(fixture);
 const invalidInput = expect.objectContaining({ code: "INVALID_INPUT" });
 
 describe("WP-01 工作日历（04 §4.1、09 §2）", () => {
+  it("CR-007 按完整自然月计算边界，包含闰日和重叠边界", () => {
+    const range = monthDateRange("2028-02");
+    expect(range).toEqual({ start: "2028-02-01", end: "2028-02-29" });
+    expect(overlapsDateRange(range, "2028-02-29", "2028-03-02")).toBe(true);
+    expect(overlapsDateRange(range, "2028-01-03", "2028-01-31")).toBe(false);
+    expect(() => monthDateRange("2028-13")).toThrow();
+  });
   it("默认周一到周五为工作日，也支持自定义周工作日", () => {
     const defaults = createWorkCalendar();
     expect(isWorkday("2026-12-09", defaults)).toBe(true);

@@ -152,6 +152,31 @@ it("AC-40 默认前端团队四周矩阵，只计未完成叶子，逾期和未�
   });
 });
 
+it("CR-007 所选自然月限定排期区间，末周封顶且不计月外任务", async () => {
+  const { service } = setup([
+    task(1, { deadline: "2026-10-31" }),
+    task(2, { deadline: "2026-11-23" }),
+    task(3, { deadline: "2026-11-30" }),
+    task(4, { deadline: "2026-12-01" }),
+  ]);
+  const result = await service.getMemberSchedule({ members: ["a"] }, "2026-11");
+  expect(result.scope.filters).toMatchObject({
+    month: "2026-11",
+    start: "2026-11-01",
+    end: "2026-11-30",
+  });
+  const member = result.data.members[0];
+  expect(member?.overdue.map(({ id }) => id)).toEqual([2]);
+  expect(member?.buckets.at(-1)).toMatchObject({
+    start: "2026-11-29",
+    end: "2026-11-30",
+    taskCount: 1,
+  });
+  expect(
+    member?.buckets.reduce((sum, bucket) => sum + bucket.taskCount, 0),
+  ).toBe(1);
+});
+
 it("AC-41 下周三前的一天任务按容量、逾期数和账号稳定选出前三", async () => {
   const tasks = [
     task(1, { assignedTo: "a", deadline: "2026-11-23", left: 0 }),

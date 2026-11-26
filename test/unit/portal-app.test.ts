@@ -113,13 +113,11 @@ describe("CR-002 WEB-01 至 WEB-04 门户界面", () => {
     expect(
       buildReadInput("get_member_schedule", "RM", {
         members: "a, b",
-        weeks: "3",
         estimateHours: "6.5",
         deadline: "2026-12-04",
       }),
     ).toEqual({
       members: ["a", "b"],
-      weeks: 3,
       format: "table",
       newTask: { estimateHours: 6.5, deadline: "2026-12-04" },
     });

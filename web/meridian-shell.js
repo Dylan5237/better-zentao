@@ -237,7 +237,7 @@ export function createMeridianShell({
   function drawSidebar(identity, role) {
     nav.replaceChildren();
     byId("nav-heading").textContent =
-      role.id === "FB" ? "业务反馈入口" : "5 + 1 极简导航";
+      role.id === "FB" ? "业务反馈入口" : "工作导航";
     byId("fb-perm-note").hidden = role.id !== "FB";
     const [key, , groupLabel] = groups.find((g) => g[3].includes(role.id));
     const chip = byId("role-group");
@@ -524,8 +524,6 @@ export function createMeridianShell({
     dialog.showModal();
   }
   for (const [id, symbol, size] of [
-    ["guide-button", "BookOpen", 14],
-    ["shortcuts-button", "Sparkles", 14],
     ["command-button", "Search", 13],
     ["reset-view", "RotateCcw", 14],
     ["key-guide", "Keyboard", 15],

@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { z } from "zod";
+export { calendarMonth as portalMonthSchema } from "../core/calendar.ts";
 import { allTools } from "../contracts/tools/index.ts";
 import {
   loadFileConfig,
@@ -7,6 +8,12 @@ import {
   type TeamConfig,
 } from "../core/config.ts";
 import { BztError } from "../core/errors.ts";
+import { instanceWebRouteDto } from "../core/dto/org.ts";
+import { portalLinkProjector } from "./portal-links.ts";
+import {
+  createPortalSnapshots,
+  type PortalReadMode,
+} from "./portal-snapshots.ts";
 import { createPortalRoleSettings } from "./portal-role-settings.ts";
 import {
   openAuthenticatedWorkbench,
@@ -95,6 +102,14 @@ const rolePages = {
 type PortalRole = keyof typeof rolePages;
 type PageTool = (typeof rolePages)[PortalRole]["actions"][number];
 type PortalTool = PageTool | "confirm_operation" | "get_operation";
+const snapshotTools = new Set<string>([
+  ...personal,
+  "get_team_work",
+  "get_member_schedule",
+  "get_plan_progress",
+  "get_monthly_dev_queue",
+  "scan_workflow_risks",
+]);
 interface RolePage {
   id: PortalRole;
   label: string;
@@ -136,22 +151,25 @@ async function dispatch(
   tool: PortalTool,
   raw: unknown,
   role: PortalRole,
+  fresh = false,
+  month?: string,
 ) {
+  const tracking = fresh ? w.portalReadSources.freshTracking : w.tracking;
   switch (tool) {
     case "get_my_work":
-      return w.tracking.getMyWork(raw);
+      return tracking.getMyWork(raw, month);
     case "get_team_work":
-      return w.tracking.getTeamWork(raw);
+      return tracking.getTeamWork(raw, month);
     case "get_story_progress":
-      return w.tracking.getStoryProgress(raw, { raisedByMe: role === "FB" });
+      return tracking.getStoryProgress(raw, { raisedByMe: role === "FB" });
     case "query_stories":
-      return w.tracking.queryStories(raw);
+      return tracking.queryStories(raw, month);
     case "get_plan_progress":
       return w.management.getPlanProgress(raw);
     case "get_monthly_dev_queue":
       return w.management.getMonthlyDevQueue(raw);
     case "get_member_schedule":
-      return w.schedule.getMemberSchedule(raw);
+      return w.schedule.getMemberSchedule(raw, month);
     case "scan_workflow_risks":
       return w.risk.scanWorkflowRisks(raw);
     case "create_story":
@@ -184,15 +202,34 @@ export function runPortalAction(
     tool: PortalTool,
     raw: unknown,
     role: PortalRole,
+    fresh?: boolean,
+    month?: string,
   ) => Promise<unknown>,
   account: string,
   readRoles: () => Promise<RolePage[]>,
   previews = new Map<string, PortalRole>(),
+  snapshots?: {
+    read(
+      role: string,
+      tool: string,
+      input: unknown,
+      mode: PortalReadMode,
+      fetchReport: () => Promise<unknown>,
+    ): Promise<unknown>;
+    invalidate(): void;
+  },
 ) {
   // 跨入口共用操作库，Web 确认须绑定用户在此会话及职责下看到的预览。
-  return async (role: string, name: string, input: unknown) => {
+  return async (
+    role: string,
+    name: string,
+    input: unknown,
+    mode: PortalReadMode = "default",
+    month?: string,
+  ) => {
     const page = (await readRoles()).find((r) => r.id === role);
-    if (!page) return denied();
+    if (!page || (mode !== "default" && !snapshotTools.has(name)))
+      return denied();
     if (name === "confirm_operation" || name === "get_operation") {
       const query = allTools[name].input.safeParse(input);
       if (
@@ -206,9 +243,17 @@ export function runPortalAction(
         !("previewAck" in query.data && query.data.previewAck === true)
       )
         throw new BztError("PREVIEW_REQUIRED", "请先确认已阅读预览。");
-      return allTools[name].output.parse(
+      const result = allTools[name].output.parse(
         await execute(name, query.data, page.id),
       );
+      if (
+        name === "confirm_operation" &&
+        ["confirmed", "partial", "unknown"].includes(
+          z.object({ status: z.string() }).parse(result).status,
+        )
+      )
+        snapshots?.invalidate();
+      return result;
     }
     if (!allowed(name, page)) return denied();
     const fields = formFields.safeParse(input);
@@ -245,11 +290,25 @@ export function runPortalAction(
       if (data.newTask) return denied();
       data.members = [account];
     }
+    const reportMonth =
+      name !== "get_story_progress" && snapshotTools.has(name)
+        ? month
+        : undefined;
+    if (
+      reportMonth &&
+      (name === "get_plan_progress" || name === "get_monthly_dev_queue")
+    )
+      data.month = reportMonth;
     if (
       name === "scan_workflow_risks" &&
       ["DM", "DS", "RD", "QA"].includes(role)
     )
       data.scope = { ...formFields.parse(data.scope ?? {}), mine: true };
+    if (reportMonth && name === "scan_workflow_risks")
+      data.scope = {
+        ...formFields.parse(data.scope ?? {}),
+        month: reportMonth,
+      };
     if (
       name === "set_story_meta" &&
       !z
@@ -263,9 +322,23 @@ export function runPortalAction(
         .safeParse(data).success
     )
       return denied();
-    const result = allTools[name].output.parse(
-      await execute(name, data, page.id),
-    );
+    const read = async () =>
+      allTools[name].output.parse(
+        await (reportMonth
+          ? execute(name, data, page.id, mode === "sync", reportMonth)
+          : mode === "sync"
+            ? execute(name, data, page.id, true)
+            : execute(name, data, page.id)),
+      );
+    if (snapshots && snapshotTools.has(name))
+      return snapshots.read(
+        role,
+        name,
+        reportMonth ? { ...data, reportMonth } : data,
+        mode,
+        read,
+      );
+    const result = await read();
     const prepared = previewId.safeParse(result);
     if (prepared.success) previews.set(prepared.data.opId, page.id);
     return result;
@@ -290,6 +363,48 @@ export async function loginPortal(
   });
   const w = await openAuthenticatedWorkbench(options, true);
   try {
+    const { cache, sampleActivity, instance, baseUrl, currentMonth } =
+      w.portalReadSources;
+    const snapshots = createPortalSnapshots(
+      cache,
+      runtime.clock,
+      sampleActivity,
+    );
+    let linkProjector:
+      Promise<ReturnType<typeof portalLinkProjector>> | undefined;
+    async function linkSettings() {
+      const key = "portal-link-route-v1";
+      try {
+        const saved = cache.get(key);
+        if (saved) return instanceWebRouteDto.parse(JSON.parse(saved));
+      } catch {
+        // 路由缓存损坏时重新读取实例配置。
+      }
+      const info = await instance();
+      try {
+        cache.set(key, JSON.stringify(info), 7 * 24 * 60 * 60_000);
+      } catch {
+        // 数据读取不依赖路由缓存。
+      }
+      return info;
+    }
+    async function projectLinks(value: unknown) {
+      linkProjector ??= linkSettings().then(
+        (info) =>
+          portalLinkProjector(
+            baseUrl,
+            info.requestType,
+            info.moduleVar,
+            info.methodVar,
+          ),
+        () => {
+          linkProjector = undefined;
+          return portalLinkProjector(baseUrl);
+        },
+      );
+      return (await linkProjector)(value);
+    }
+    let configRevision = "";
     // 工作台已经将表单账号与禅道回读的登录身份核对一致。
     const mayEdit = configuredOwner
       ? configuredOwner === loginAccount
@@ -301,6 +416,9 @@ export async function loginPortal(
     const identity = {
       account: loginAccount,
       displayName: w.viewer?.realname || loginAccount,
+      get dataMonth() {
+        return currentMonth();
+      },
       roles: portalRoles(initial?.table ?? w.roles, loginAccount),
       get releaseCalendar(): Workbench["releaseCalendar"] | undefined {
         return this.roles.some((role) => role.id !== "FB")
@@ -350,6 +468,7 @@ export async function loginPortal(
 
     async function readRoles() {
       const { config } = await loadFileConfig(options);
+      configRevision = JSON.stringify(config);
       return updateRoles(config.roles);
     }
 
@@ -362,6 +481,18 @@ export async function loginPortal(
       return { ...identity };
     }
 
+    const call = runPortalAction(
+      (tool, input, role, fresh, month) =>
+        dispatch(w, tool, input, role, fresh, month),
+      loginAccount,
+      readRoles,
+      previews,
+      {
+        read: (role, tool, input, mode, fetchReport) =>
+          snapshots.read(role, tool, input, mode, fetchReport, configRevision),
+        invalidate: () => snapshots.invalidate(),
+      },
+    );
     return {
       identity,
       close: w.close,
@@ -379,17 +510,37 @@ export async function loginPortal(
         },
       }),
       projectError: (error: unknown) => projectToolError(error, options.env),
-      call: runPortalAction(
-        (tool, input, role) => dispatch(w, tool, input, role),
-        loginAccount,
-        readRoles,
-        previews,
-      ),
+      async call(
+        role: string,
+        tool: string,
+        input: unknown,
+        mode?: PortalReadMode,
+        month?: string,
+      ) {
+        const value = await call(
+          role,
+          tool,
+          input,
+          mode,
+          month ?? currentMonth(),
+        );
+        return mode === "cached" && !reportExists(value)
+          ? value
+          : projectLinks(value);
+      },
+      async checkUpdates(role: string, acknowledge?: string, section?: string) {
+        if (!(await readRoles()).some(({ id }) => id === role)) return denied();
+        return snapshots.check(role, acknowledge, section);
+      },
     };
   } catch (error) {
     w.close();
     throw error;
   }
+}
+
+function reportExists(value: unknown) {
+  return z.object({ ok: z.literal(true) }).safeParse(value).success;
 }
 
 function portalConfig(runtime: WorkbenchRuntime) {

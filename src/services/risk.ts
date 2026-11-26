@@ -32,6 +32,7 @@ import type { TeamConfig } from "../core/config.ts";
 import type { StoryDetail } from "../core/dto/story.ts";
 import type { Task } from "../core/dto/task.ts";
 import { BztError } from "../core/errors.ts";
+import { readGapReason } from "./read-gap.ts";
 import type { LocalStore } from "../core/store/index.ts";
 import { resolveStoryRoles } from "../domain/roles.ts";
 import {
@@ -116,7 +117,7 @@ async function read<T>(gaps: Gaps, source: string, load: () => T | Promise<T>) {
     return await load();
   } catch (error) {
     if (!(error instanceof BztError)) throw error;
-    gaps.push({ source, reason: "读取失败（" + error.code + "）。" });
+    gaps.push({ source, reason: readGapReason(source, error) });
     return undefined;
   }
 }

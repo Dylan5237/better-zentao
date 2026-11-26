@@ -5,6 +5,7 @@ import {
   currentUserDto,
   departmentNodeDto,
   instanceConfigDto,
+  instanceWebRouteDto,
   userDto,
 } from "../core/dto/org.ts";
 import type {
@@ -19,17 +20,30 @@ import { getReadClient } from "./internal/read-client.ts";
 import { pageSchema } from "./internal/read-page.ts";
 
 const userPage = pageSchema("users", userDto, true);
+const instanceRequest = {
+  pathTemplate: "/index.php",
+  query: { mode: "getconfig" },
+} as const;
 
 export async function getInstanceConfig(
   client: ZentaoReadClient,
 ): Promise<InstanceConfig> {
   return getReadClient(client).http.read(
     {
-      pathTemplate: "/index.php",
-      query: { mode: "getconfig" },
+      ...instanceRequest,
       schemaFields: Object.keys(instanceConfigDto.in.shape),
     },
     instanceConfigDto,
+  );
+}
+
+export function getInstanceWebRoute(client: ZentaoReadClient) {
+  return getReadClient(client).http.read(
+    {
+      ...instanceRequest,
+      schemaFields: Object.keys(instanceWebRouteDto.in.shape),
+    },
+    instanceWebRouteDto,
   );
 }
 

@@ -2,12 +2,10 @@ import { icon } from "./meridian-icons.js";
 import { createMeridianShell } from "./meridian-shell.js";
 import { beginSkeleton, skeletonBlock } from "./skeleton.js";
 import { querySkeleton, roleOptionsSkeleton } from "./portal-skeleton.js";
-import {
-  sectionsFor,
-  renderGuide,
-  renderReview,
-  renderShortcuts,
-} from "./review-page.js";
+import { sectionsFor as prototypeSections } from "./review-page.js";
+
+const sectionsFor = (role) =>
+  prototypeSections(role).filter(({ id }) => id !== "review-board");
 const roleHome = {
   FB: {
     title: "我提出的需求",
@@ -77,7 +75,6 @@ const checkbox = (name, label) => ({ name, label, type: "checkbox" });
 const product = textField("product", "产品", "名称或编号");
 const team = textField("team", "团队", "名称或代号");
 const moduleField = textField("module", "模块", "名称、路径或编号");
-const month = { name: "month", label: "月份", type: "month" };
 const plan = textField("plan", "计划", "名称或编号");
 const members = textField("members", "成员账号", "多个账号用逗号隔开");
 const version = textField("version", "版本", "禅道版本标识");
@@ -93,7 +90,6 @@ const reads = {
     fields: [
       textField("keyword", "关键词", "需求标题或关键词"),
       product,
-      month,
       moduleField,
       plan,
       version,
@@ -175,10 +171,9 @@ const reads = {
   },
   get_member_schedule: {
     label: "成员排期",
-    description: "查看禅道可见投入和未来排期，可按预计工时试算人选。",
+    description: "查看所选月份禅道可见的排期，可按预计工时试算人选。",
     fields: [
       members,
-      number("weeks", "查看周数"),
       select("bucket", "汇总方式", [
         ["week", "按周"],
         ["day", "按日"],
@@ -198,7 +193,6 @@ const reads = {
         ["iteration", "迭代指标"],
       ]),
       product,
-      month,
       { ...plan, when: ["view", "plan"] },
       { ...version, when: ["view", "release"] },
       {
@@ -218,7 +212,7 @@ const reads = {
   get_monthly_dev_queue: {
     label: "月度研发队列",
     description: "查看待接收、开发中、结转和计划与迭代衔接情况。",
-    fields: [team, month, checkbox("includeNotReady", "同时显示未就绪需求")],
+    fields: [team, checkbox("includeNotReady", "同时显示未就绪需求")],
   },
   scan_workflow_risks: {
     label: "流程风险",
@@ -227,7 +221,6 @@ const reads = {
       product,
       team,
       moduleField,
-      month,
       select("minSeverity", "最低严重程度", [
         ["info", "提示"],
         ["low", "低"],
@@ -636,7 +629,7 @@ export function createPortalSession(send = fetch) {
           role = latest.roles[0];
           return true;
         },
-        async call(tool, input) {
+        async call(tool, input, readMode, month) {
           check();
           if (
             !roleAtOpen.actions.includes(tool) &&
@@ -650,7 +643,13 @@ export function createPortalSession(send = fetch) {
             const result = await requestJson(send, "/api/call", {
               account: accountAtOpen,
               signal,
-              body: { role: roleAtOpen.id, tool, input },
+              body: {
+                role: roleAtOpen.id,
+                tool,
+                input,
+                ...(readMode && { readMode }),
+                ...(month && { month }),
+              },
             });
             check();
             return result;
@@ -658,6 +657,20 @@ export function createPortalSession(send = fetch) {
             check();
             throw error;
           }
+        },
+        async checkUpdates(section, acknowledge) {
+          check();
+          const result = await requestJson(send, "/api/updates", {
+            account: accountAtOpen,
+            signal,
+            body: {
+              role: roleAtOpen.id,
+              section,
+              ...(acknowledge && { acknowledge }),
+            },
+          });
+          check();
+          return result;
         },
       };
     },
@@ -820,20 +833,23 @@ function mountPortal(
   const portal = byId("portal-shell");
   const accountDisplay = byId("session-account");
   const roleTabs = byId("role-tabs");
-  const guideButton = byId("guide-button");
-  const shortcutsButton = byId("shortcuts-button");
+  const reportPeriod = byId("report-period");
+  const reportMonth = byId("report-month");
+  const reportMonthReset = byId("report-month-reset");
   const roleSettings = byId("role-settings-button");
   const nav = byId("role-nav");
   const workspace = byId("workspace");
   const sessionStatus = byId("session-status");
+  const syncButton = byId("sync-data");
+  const updateLabel = byId("data-update");
   const sessionUpdates =
     typeof BroadcastChannel === "function"
       ? new BroadcastChannel("bzt-portal-session")
       : undefined;
   let page;
   let overlay;
-  let reviewAccount;
-  const meetingRecords = new Map();
+  let selectedMonth;
+  let periodAccount;
   const badges = new Map();
   const badgeRevisions = new Map();
   let readRevision = 0;
@@ -846,6 +862,116 @@ function mountPortal(
   let pendingReturnStory;
   let needsSectionRefresh = false;
   let badgeReads;
+  let badgeTimer;
+  let currentView;
+  let activity;
+  let activityScope;
+  let activityTimer;
+  let viewSavedAt;
+
+  function currentMonth() {
+    const now = new Date();
+    return (
+      session.identity?.dataMonth ??
+      `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+    );
+  }
+
+  function showPeriod() {
+    reportMonth.value = selectedMonth ?? currentMonth();
+    reportMonthReset.hidden = reportMonth.value === currentMonth();
+  }
+
+  function resetBadges() {
+    badgeReads?.abort();
+    clearTimeout(badgeTimer);
+    badges.clear();
+    badgeRevisions.clear();
+    for (const badge of nav.querySelectorAll(".nav-badge, .sk-nav-slot"))
+      badge.remove();
+  }
+
+  function loadBadges() {
+    badgeReads = new AbortController();
+    const ctx = viewContext(badgeReads.signal);
+    badgeTimer = setTimeout(() => void readNavCounts(ctx), 1000);
+  }
+
+  function changeMonth(value) {
+    const month = value || currentMonth();
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/u.test(month) || month.startsWith("0000")) {
+      showPeriod();
+      return;
+    }
+    selectedMonth = month === currentMonth() ? undefined : month;
+    showPeriod();
+    resetBadges();
+    const { tab, ...filters } = currentInitial;
+    openSection(currentSection, {
+      ...filters,
+      ...(tab &&
+        !workspace.querySelector(
+          ".management-tab-body, .daily-story-results",
+        ) && { tab }),
+    });
+    loadBadges();
+  }
+
+  reportMonth.onchange = () => changeMonth(reportMonth.value);
+  reportMonthReset.onclick = () => changeMonth(currentMonth());
+
+  function showDataStatus() {
+    syncButton.hidden = !currentView?.canSync();
+    const changed = activity?.changed === true;
+    updateLabel.hidden = syncButton.hidden || !changed;
+    updateLabel.dataset.changed = String(changed);
+    updateLabel.textContent = changed ? "检测到待办有更新" : "";
+    syncButton.title = viewSavedAt
+      ? "本页最早快照：" + new Date(viewSavedAt).toLocaleString("zh-CN")
+      : "从禅道同步当前页面的数据";
+  }
+
+  async function checkActivity(acknowledge) {
+    if (document.hidden || !activityScope?.current() || !currentView?.canSync())
+      return;
+    const scope = activityScope;
+    const section = currentSection;
+    const view = currentView;
+    try {
+      const next = await scope.checkUpdates(section, acknowledge);
+      if (activityScope !== scope || !scope.current() || currentView !== view)
+        return;
+      if (next.available) activity = next;
+      showDataStatus();
+    } catch {
+      // 后台探测失败时保留已显示的快照和提醒。
+    }
+  }
+
+  syncButton.onclick = async () => {
+    const view = currentView;
+    if (!view?.canSync() || syncButton.disabled) return;
+    const revision = activity?.revision;
+    syncButton.disabled = true;
+    syncButton.textContent = "同步中…";
+    try {
+      const result = await view.sync();
+      if (currentView !== view || !view.current()) return;
+      if (result?.failed || result?.retained)
+        shell.toast("有数据未能同步，请稍后重试。", "warning");
+      else if (result?.reads) {
+        if (result.partial)
+          shell.toast("已同步，禅道仍有数据缺口。", "warning");
+        else shell.toast("本页数据已同步", "success");
+        if (revision) void checkActivity(revision);
+      }
+    } catch {
+      if (view.current()) shell.toast("同步失败，请稍后重试。", "warning");
+    } finally {
+      syncButton.disabled = false;
+      syncButton.textContent = "同步本页";
+    }
+  };
   const sectionKey = () =>
     "bzt.portal.section/" +
     encodeURIComponent(session.identity?.account ?? "") +
@@ -905,6 +1031,10 @@ function mountPortal(
     shell.clear();
     closeOverlay();
     page?.abort();
+    currentView = undefined;
+    viewSavedAt = undefined;
+    activity = undefined;
+    showDataStatus();
     workspace.replaceChildren();
   }
 
@@ -914,8 +1044,7 @@ function mountPortal(
     byId("account-start").classList.toggle("only-compact", Boolean(role));
     roleTabs.hidden = !role;
     roleSettings.hidden = !identity.roleSetup || !role;
-    guideButton.hidden = !role;
-    shortcutsButton.hidden = !role;
+    reportPeriod.hidden = !role;
   }
 
   async function syncSession() {
@@ -955,12 +1084,14 @@ function mountPortal(
     sessionStatus.textContent = identity ? message : "";
     sessionStatus.hidden = !sessionStatus.textContent;
     nav.replaceChildren();
-    badgeReads?.abort();
-    badges.clear();
-    badgeRevisions.clear();
-    if (reviewAccount !== identity?.account) {
-      meetingRecords.clear();
-      reviewAccount = identity?.account;
+    resetBadges();
+    clearInterval(activityTimer);
+    activityScope = undefined;
+    activity = undefined;
+    showDataStatus();
+    if (periodAccount !== identity?.account) {
+      selectedMonth = undefined;
+      periodAccount = identity?.account;
     }
     if (!identity) {
       accountDialog.close();
@@ -972,15 +1103,11 @@ function mountPortal(
     accountDisplay.textContent = "当前账号 · " + identity.account;
     passwordInput.value = "";
     showRoleOptions(identity, role);
+    showPeriod();
     sidebar.hidden = !role;
     nav.hidden = !role;
     if (role) {
       shell.drawSidebar(identity, role);
-      setBadge(
-        "review-board",
-        16 -
-          [...meetingRecords.values()].filter((record) => record.status).length,
-      );
       const saved = readSavedSection();
       const restored =
         saved?.id &&
@@ -988,17 +1115,9 @@ function mountPortal(
           ? saved
           : { id: "workbench" };
       openSection(restored.id, restored.tab ? { tab: restored.tab } : {});
-      badgeReads = new AbortController();
-      const badgeContext = viewContext(badgeReads.signal);
-      const idleTimer = setTimeout(
-        () => void readNavCounts(badgeContext),
-        1000,
-      );
-      badgeReads.signal.addEventListener(
-        "abort",
-        () => clearTimeout(idleTimer),
-        { once: true },
-      );
+      loadBadges();
+      activityScope = session.scope();
+      activityTimer = setInterval(() => void checkActivity(), 5 * 60_000);
     } else if (identity.roleSetup) {
       showRoleSetup();
     } else {
@@ -1020,8 +1139,7 @@ function mountPortal(
     byId("account-start").classList.remove("only-compact");
     nav.hidden = true;
     roleTabs.hidden = true;
-    guideButton.hidden = true;
-    shortcutsButton.hidden = true;
+    reportPeriod.hidden = true;
     roleSettings.hidden = true;
 
     const form = make("form", undefined, "role-setup");
@@ -1308,7 +1426,7 @@ function mountPortal(
         current: () => ctx.current() && !badges.has(id),
       });
       try {
-        await ctx.call(tool, input);
+        await ctx.call(tool, input, "cached");
       } catch {
         /* Unavailable counts stay blank. */
       } finally {
@@ -1382,14 +1500,6 @@ function mountPortal(
         undefined,
         drawer ? "drawer-head-left" : "modal-head-title",
       );
-      if (render === renderGuide || render === renderShortcuts) {
-        const glyph = icon(
-          render === renderGuide ? "BookOpen" : "Sparkles",
-          17,
-        );
-        glyph.classList.add("header-glyph");
-        heading.append(glyph);
-      }
       heading.append(make("strong", label));
       head.append(heading, close);
       content = make(
@@ -1429,24 +1539,47 @@ function mountPortal(
     activeStory = { id, tab };
   }
 
-  function viewContext(signal) {
+  function viewContext(signal, pageView = false) {
     const scope = session.scope(signal);
     const role = session.role;
+    const month = selectedMonth ?? currentMonth();
     function recoverSession(error) {
       if (!scope.current()) return;
       if (error.status === 401) void restore("请重新登录禅道。");
       if (accountChanged(error)) void restore("登录账号已切换，已刷新工作台。");
     }
-    const call = async (name, input) => {
+    let reload;
+    let syncing;
+    const call = async (name, input, mode) => {
       const revision = ++readRevision;
+      const batch = Object.hasOwn(reads, name) ? syncing : undefined;
       try {
-        const result = await scope.call(name, input);
+        const result = await scope.call(
+          name,
+          input,
+          mode ?? (batch ? "sync" : undefined),
+          Object.hasOwn(reads, name) ? month : undefined,
+        );
         if (scope.current()) {
+          if (pageView && result.snapshot?.savedAt !== undefined) {
+            viewSavedAt = Math.min(
+              viewSavedAt ?? Infinity,
+              result.snapshot.savedAt,
+            );
+            showDataStatus();
+          }
+          if (batch) {
+            batch.reads++;
+            batch.failed ||= result.ok !== true;
+            batch.retained ||= result.snapshot?.retained === true;
+            batch.partial ||= result.completeness === "partial";
+          }
           shell.date(result.scope?.asOf);
           countFromReport(name, input, result, revision);
         }
         return result;
       } catch (error) {
+        if (batch) batch.failed = true;
         if (scope.current() && error.status === 403) {
           try {
             if (await scope.refreshIfRevoked())
@@ -1462,10 +1595,15 @@ function mountPortal(
     };
     return {
       role,
+      month,
       account: session.identity.account,
       displayName: session.identity.displayName || session.identity.account,
       releaseCalendar:
-        role.id !== "FB" ? session.identity.releaseCalendar : undefined,
+        role.id !== "FB"
+          ? session.identity.releaseCalendar?.filter(({ date }) =>
+              date.startsWith(month),
+            )
+          : undefined,
       designMaintainers:
         role.id === "DM" ? session.identity.designMaintainers : undefined,
       developmentTeams: ["DM", "PM", "PJ", "RM"].includes(role.id)
@@ -1483,6 +1621,34 @@ function mountPortal(
       current: scope.current,
       signal,
       call,
+      onSync(callback) {
+        reload = callback;
+        if (pageView) showDataStatus();
+      },
+      canSync: () => Boolean(reload),
+      isSyncing: () => Boolean(syncing),
+      async sync() {
+        if (!reload || syncing || !scope.current()) return;
+        const previousDate = viewSavedAt;
+        viewSavedAt = undefined;
+        const batch = {
+          reads: 0,
+          failed: false,
+          retained: false,
+          partial: false,
+        };
+        syncing = batch;
+        try {
+          await reload();
+          return batch;
+        } finally {
+          if (scope.current()) {
+            viewSavedAt ??= previousDate;
+            showDataStatus();
+          }
+          syncing = undefined;
+        }
+      },
       navigate: openSection,
       openTool,
       openStory,
@@ -1529,10 +1695,10 @@ function mountPortal(
       stories: renderStories,
       schedule: renderSchedule,
       "release-risks": renderReleaseRisks,
-      "review-board": (content, ctx) =>
-        renderReview(content, ctx, meetingRecords),
     }[id];
-    const ctx = viewContext(page.signal);
+    const ctx = viewContext(page.signal, true);
+    currentView = ctx;
+    showDataStatus();
     const asOf = byId("as-of");
     const finishDate =
       id === "workbench" && !asOf.textContent
@@ -1541,7 +1707,14 @@ function mountPortal(
             current: () => ctx.current() && !asOf.textContent,
           })
         : undefined;
-    void runView(renderer, workspace, ctx, initial).finally(finishDate);
+    void runView(renderer, workspace, ctx, initial).finally(() => {
+      finishDate?.();
+      if (!ctx.current()) return;
+      const timer = setTimeout(() => void checkActivity(), 3_000);
+      ctx.signal.addEventListener("abort", () => clearTimeout(timer), {
+        once: true,
+      });
+    });
   }
 
   function openTool(tool, initial = {}, options = {}) {
@@ -1586,7 +1759,7 @@ function mountPortal(
     body.append(form, results);
     let lastInput;
     let busy = false;
-    async function run(input) {
+    async function run(input, mode) {
       if (busy || !ctx.current()) return;
       lastInput = input;
       busy = true;
@@ -1598,10 +1771,12 @@ function mountPortal(
         ctx,
       );
       try {
-        const result = await call(tool, input);
+        const result = await call(tool, input, mode);
         if (!ctx.current()) return;
         results.replaceChildren();
         renderRead(results, tool, result);
+        if (result.snapshot?.retained)
+          results.prepend(notice("同步失败，仍显示上次保存的数据。"));
       } catch (error) {
         if (ctx.current()) results.replaceChildren(queryError(tool, error));
       } finally {
@@ -1627,23 +1802,12 @@ function mountPortal(
         );
     });
     refresh.addEventListener("click", () => {
-      if (lastInput) void run(lastInput);
+      if (lastInput) void run(lastInput, "sync");
     });
     if (Object.keys(initial).length || tool === "get_my_work")
       form.requestSubmit();
   }
 
-  guideButton.addEventListener("click", () =>
-    openOverlay("评审说明与 15 分钟走查路线", true, renderGuide),
-  );
-  shortcutsButton.addEventListener("click", () =>
-    openOverlay(
-      "一句话体验助手 · " +
-        (session.identity.displayName || session.identity.account),
-      true,
-      renderShortcuts,
-    ),
-  );
   roleSettings.addEventListener("click", () => {
     accountDialog.close();
     showRoleSetup();

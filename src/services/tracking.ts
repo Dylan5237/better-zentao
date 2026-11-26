@@ -37,6 +37,8 @@ import {
   countWorkdaysBetween,
   createWorkCalendar,
   formatLocalDate,
+  monthDateRange,
+  overlapsDateRange,
   parseZentaoDateTime,
 } from "../core/calendar.ts";
 import type { Clock } from "../core/clock.ts";
@@ -52,6 +54,7 @@ import {
 } from "../core/dto/story.ts";
 import type { Task, TaskDetail } from "../core/dto/task.ts";
 import { BztError } from "../core/errors.ts";
+import { readGapReason } from "./read-gap.ts";
 import type { LocalStore } from "../core/store/index.ts";
 import { htmlFragments } from "../domain/html-fragments.ts";
 import { planOverlapDays } from "../domain/month.ts";
@@ -75,6 +78,7 @@ import {
 } from "./structured-notes.ts";
 
 interface TrackingOptions {
+  readonly fresh?: boolean;
   readonly client: ZentaoReadClient;
   readonly config: TeamConfig;
   readonly clock: Clock;
@@ -396,7 +400,7 @@ class TrackingRead {
       if (!(error instanceof BztError) || error.code === "AMBIGUOUS_ENTITY")
         throw error;
       if (!missingIsEmpty || error.code !== "NOT_FOUND")
-        this.gap(source, `读取失败（${error.code}）。`);
+        this.gap(source, readGapReason(source, error));
       return undefined;
     }
   }
@@ -427,7 +431,7 @@ class TrackingRead {
     if (!cache || ttl === 0) return load();
     try {
       const raw = cache.get(key);
-      if (raw) {
+      if (raw && !this.options.fresh) {
         const parsed = z
           .object({ observedAt: z.int(), value: schema })
           .safeParse(JSON.parse(raw));
@@ -674,9 +678,15 @@ class TrackingRead {
     return this.executionList;
   }
 
-  async allTasks() {
+  async allTasks(range?: ReturnType<typeof monthDateRange>) {
     const executions = await this.allExecutions();
-    return this.loadTasks(executions.map(({ id }) => id));
+    return this.loadTasks(
+      executions
+        .filter(
+          ({ begin, end }) => !range || overlapsDateRange(range, begin, end),
+        )
+        .map(({ id }) => id),
+    );
   }
 
   private async loadTasks(executions: number[]) {
@@ -1127,6 +1137,36 @@ function overlapsExecution(
   );
 }
 
+function activeStoryMonth(
+  story: Pick<
+    Story,
+    "openedDate" | "assignedDate" | "lastEditedDate" | "closedDate"
+  >,
+  month: string,
+  timezone: string,
+) {
+  return [
+    story.openedDate,
+    story.assignedDate,
+    story.lastEditedDate,
+    story.closedDate,
+  ].some(
+    (date) => date != null && formatLocalDate(date, timezone).startsWith(month),
+  );
+}
+
+function scheduledInMonth(
+  task: WorkTask,
+  range?: ReturnType<typeof monthDateRange>,
+) {
+  if (!range || (!task.estStarted && !task.deadline)) return true;
+  return overlapsDateRange(
+    range,
+    task.estStarted ?? task.deadline,
+    task.deadline ?? task.estStarted,
+  );
+}
+
 function threshold(
   workdays: number,
   standard: number,
@@ -1512,6 +1552,7 @@ function workItems(
   members: Set<string>,
   tasksComplete: boolean,
   rows: WorkTask[],
+  range?: ReturnType<typeof monthDateRange>,
 ) {
   const work = summarizeLeafWork(rows, { ...state.time, tasksComplete });
   const index = indexById(rows);
@@ -1519,6 +1560,7 @@ function workItems(
   for (const gap of work.gaps) {
     if (gap.kind === "task_list") continue;
     const task = index.get(gap.taskId);
+    if (task && !scheduledInMonth(task, range)) continue;
     if (
       gap.kind === "team" &&
       task &&
@@ -1536,7 +1578,7 @@ function workItems(
   }
   const leaves = work.leaves.flatMap(({ taskId, participants }) => {
     const task = index.get(taskId);
-    return task
+    return task && scheduledInMonth(task, range)
       ? participants
           .filter(
             ({ account, active }) => active === true && members.has(account),
@@ -1551,7 +1593,12 @@ function workItems(
   const parents: ParentRisk[] = work.parentRisks.flatMap(
     ({ taskId, allChildrenFinished }) => {
       const task = index.get(taskId);
-      if (!task?.assignedTo || !members.has(task.assignedTo)) return [];
+      if (
+        !task?.assignedTo ||
+        !members.has(task.assignedTo) ||
+        !scheduledInMonth(task, range)
+      )
+        return [];
       return [
         {
           task: state.taskItem(task, task.assignedTo, stageIndex),
@@ -1597,7 +1644,7 @@ export class TrackingService {
     }
   }
 
-  async getTeamWork(raw: unknown): Promise<GetTeamWorkOutput> {
+  async getTeamWork(raw: unknown, month?: string): Promise<GetTeamWorkOutput> {
     const {
       team,
       members,
@@ -1606,6 +1653,7 @@ export class TrackingService {
       groupBy: group = "member",
     } = parseInput(getTeamWorkInputSchema, raw);
     const state = new TrackingRead(this.options);
+    const range = month && monthDateRange(month);
     const data: GetTeamWorkOutput["data"] = {
       groups: [],
       totals: { overdue: 0, dueSoon: 0, open: 0 },
@@ -1617,6 +1665,7 @@ export class TrackingService {
       product,
       view,
       groupBy: group,
+      ...(month && { month }),
     };
     const finish = () =>
       state.finish(
@@ -1663,7 +1712,7 @@ export class TrackingService {
     filters.teams = teams.map(({ id }) => id);
     filters.product = scope.product?.id ?? product;
     const productId = scope.product?.id;
-    const pages = await state.allTasks();
+    const pages = await state.allTasks(range || undefined);
     await state.hydrateWorkTasks();
     const rows = [...state.tasks.values()].sort((a, b) => a.id - b.id);
     for (const task of rows) {
@@ -1676,6 +1725,7 @@ export class TrackingService {
       accounts,
       pages.every((page) => page?.truncated === false),
       rows,
+      range || undefined,
     );
     const detailIds = new Set<number>();
     for (const { task, item } of work.leaves) {
@@ -1758,7 +1808,7 @@ export class TrackingService {
     return finish();
   }
 
-  async getMyWork(raw: unknown): Promise<GetMyWorkOutput> {
+  async getMyWork(raw: unknown, month?: string): Promise<GetMyWorkOutput> {
     const {
       groups = myWorkGroupSchema.options,
       horizonDays,
@@ -1766,6 +1816,7 @@ export class TrackingService {
       markSeen = true,
     } = parseInput(getMyWorkInputSchema, raw);
     const state = new TrackingRead(this.options, horizonDays);
+    const range = month ? monthDateRange(month) : undefined;
     const { client, store } = this.options;
     const selected = new Set(groups);
     const data: GetMyWorkOutput["data"] = {
@@ -1789,6 +1840,7 @@ export class TrackingService {
       horizonDays: state.time.dueSoonWorkdays,
       since,
       markSeen,
+      ...(month && { month }),
     };
     const hints: string[] = [];
     const finish = (): GetMyWorkOutput => ({
@@ -1830,8 +1882,8 @@ export class TrackingService {
       assignedAt > sinceMs &&
       assignedAt <= state.now;
 
-    const [pages, stories, review, contributions] = await Promise.all([
-      needsTasks ? state.allTasks() : [],
+    const [pages, allStories, review, contributions] = await Promise.all([
+      needsTasks ? state.allTasks(range) : [],
       // 游标不能越过来源列表的观察时间。
       state.stories(undefined, "story", selected.has("new") && markSeen),
       selected.has("action")
@@ -1868,6 +1920,7 @@ export class TrackingService {
       new Set([me.account]),
       pages.every((page) => page?.truncated === false),
       candidateTasks,
+      range,
     );
     // docs/07 §3.2 新增用分配列表判定。此后补取的详情、角色或 Bug 均是辅助证据。
     const newInputsComplete = !state.gaps.some(({ source }) =>
@@ -1887,6 +1940,30 @@ export class TrackingService {
     const ownStoryIds = new Set(
       work.leaves.flatMap(({ item }) => (item.story ? [item.story.id] : [])),
     );
+    const stories = month
+      ? (
+          await Promise.all(
+            allStories.map(async (story) => {
+              if (
+                ownStoryIds.has(story.id) ||
+                activeStoryMonth(story, month, this.options.config.timezone)
+              )
+                return story;
+              if (!story.plan?.length) return undefined;
+              const plans = await state.plans(story.product);
+              return plans.some(
+                (plan) =>
+                  story.plan?.includes(plan.id) && overlapsPlan(plan, month),
+              )
+                ? story
+                : undefined;
+            }),
+          )
+        ).filter((story) => story !== undefined)
+      : allStories;
+    const storyIdsInMonth = month
+      ? new Set(stories.map(({ id }) => id))
+      : undefined;
     const [maintainedIds, feedbackIds] = await Promise.all([
       selected.has("maintained")
         ? state.maintainedCandidates(stories, me.account)
@@ -1925,8 +2002,11 @@ export class TrackingService {
     }
     if (selected.has("can_start"))
       for (const id of ownStoryIds) candidates.add(id);
-    if (selected.has("action")) for (const id of reviewIds) candidates.add(id);
-    for (const id of contributionIds) candidates.add(id);
+    if (selected.has("action"))
+      for (const id of reviewIds)
+        if (!storyIdsInMonth || storyIdsInMonth.has(id)) candidates.add(id);
+    for (const id of contributionIds)
+      if (!storyIdsInMonth || storyIdsInMonth.has(id)) candidates.add(id);
     const uninspectedMaintained = selected.has("maintained")
       ? stories.filter(
           ({ id, status }) => status !== "closed" && !candidates.has(id),
@@ -1938,7 +2018,9 @@ export class TrackingService {
         `需求列表不含正文角色标签；本次已按提出人、当前处理人、模块设计主管与本地角色缓存筛选，另有 ${uninspectedMaintained} 条未关闭需求未读取正文标签，仅由正文标签指定维护人且尚未入本地缓存的需求可能漏列。`,
       );
       hints.push(
-        `另有 ${uninspectedMaintained} 条未关闭需求未读取正文角色标签；如需全量核对仅由正文标签指定维护人的需求，请调用 query_stories(role="maintainer") 刷新本地角色缓存。`,
+        month
+          ? `所选月有 ${uninspectedMaintained} 条未关闭需求尚未核对正文角色标签。可在「需求查询」选择「维护人」，并按产品筛选核对。`
+          : `另有 ${uninspectedMaintained} 条未关闭需求未读取正文角色标签；如需全量核对仅由正文标签指定维护人的需求，请调用 query_stories(role="maintainer") 刷新本地角色缓存。`,
       );
     }
 
@@ -2098,7 +2180,10 @@ export class TrackingService {
     }
   }
 
-  async queryStories(raw: unknown): Promise<QueryStoriesOutput> {
+  async queryStories(
+    raw: unknown,
+    portalMonth?: string,
+  ): Promise<QueryStoriesOutput> {
     const input = parseInput(queryStoriesInputSchema, raw);
     const { client, store } = this.options;
     const state = new TrackingRead(this.options);
@@ -2119,7 +2204,7 @@ export class TrackingService {
       status = ["unclosed"],
       unlinked,
     } = input;
-    const month = monthOf(input.month, state.today);
+    const month = portalMonth ?? monthOf(input.month, state.today);
     const limit = Math.min(100, input.limit ?? 20);
     const filters: Record<string, unknown> = {
       ...input,
@@ -2166,6 +2251,10 @@ export class TrackingService {
     const rows = await state.stories(scope.product?.id, type);
     const candidates = rows.filter(
       (row) =>
+        (!portalMonth ||
+          type !== "requirement" ||
+          row.openedDate == null ||
+          activeStoryMonth(row, portalMonth, this.options.config.timezone)) &&
         (!category || row.category === category) &&
         (!scope.module ||
           row.module == null ||
@@ -2298,6 +2387,9 @@ export class TrackingService {
         )
           return undefined;
         if (month) {
+          const activeInMonth =
+            portalMonth &&
+            activeStoryMonth(story, portalMonth, this.options.config.timezone);
           const raisedInMonth =
             (feedbackBy || story.type === "requirement") &&
             openedDates.some((date) => date.startsWith(month));
@@ -2306,7 +2398,7 @@ export class TrackingService {
             (plan) =>
               story.plan?.includes(plan.id) && overlapsPlan(plan, month),
           );
-          if (!raisedInMonth && !plannedInMonth) {
+          if (!activeInMonth && !raisedInMonth && !plannedInMonth) {
             if (references.length) await state.allExecutions();
             const overlaps = references.map(({ id }) => {
               const execution = state.executionDates.get(id);

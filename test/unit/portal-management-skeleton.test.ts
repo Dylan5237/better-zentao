@@ -179,7 +179,7 @@ describe("本地门户管理页异步占位", () => {
     const ctx = context("RM", ["get_monthly_dev_queue", "decompose_stories"]);
     renderSchedule(root, ctx);
     const team = root.button("测试研发组");
-    expect(root.textContent).toContain("本月待研发与批量拆解");
+    expect(root.textContent).toContain("月度待研发与批量拆解");
     expect(root.textContent).toContain("上月遗留");
     expect(root.withClass("management-skel-queue-table")).toHaveLength(0);
     await showPlaceholders();
@@ -207,7 +207,7 @@ describe("本地门户管理页异步占位", () => {
       tab: "matrix",
       newTask: { estimateHours: 5 },
     });
-    expect(root.textContent).toContain("未来 4 周成员工时热力矩阵");
+    expect(root.textContent).toContain("月度成员工时热力矩阵");
     expect(root.button("试算人选").disabled).toBe(false);
     await showPlaceholders();
     const matrix = root.withClass("management-skel-matrix")[0];

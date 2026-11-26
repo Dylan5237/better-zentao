@@ -6,7 +6,9 @@ import {
   type ServerResponse,
 } from "node:http";
 import { z } from "zod";
+import { portalMonthSchema } from "../../services/portal.ts";
 import { projectToolError } from "../../services/workbench.ts";
+import type { PortalReadMode } from "../../services/portal-snapshots.ts";
 
 interface Connection {
   identity: {
@@ -14,7 +16,18 @@ interface Connection {
     roles: readonly { id: string; label: string; actions: readonly string[] }[];
     roleSetup?: RoleSetup;
   };
-  call(role: string, tool: string, input: unknown): Promise<unknown>;
+  call(
+    role: string,
+    tool: string,
+    input: unknown,
+    mode?: PortalReadMode,
+    month?: string,
+  ): Promise<unknown>;
+  checkUpdates?(
+    role: string,
+    acknowledge?: string,
+    section?: string,
+  ): Promise<unknown>;
   readRoles(): Promise<Connection["identity"]["roles"]>;
   readIdentity?(): Promise<Connection["identity"]>;
   readRoleSetup?(): Promise<RoleSetup | undefined>;
@@ -65,6 +78,18 @@ const action = z.strictObject({
   role: z.string().min(1),
   tool: z.string().min(1),
   input: z.record(z.string(), z.unknown()),
+  readMode: z.enum(["default", "cached", "sync"]).optional(),
+  month: portalMonthSchema.optional(),
+});
+const updateRequest = z.strictObject({
+  role: z.string().min(1).max(16),
+  section: z
+    .enum(["workbench", "intake", "stories", "schedule", "release-risks"])
+    .optional(),
+  acknowledge: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/u)
+    .optional(),
 });
 const empty = z.strictObject({});
 const assets = new Map<string, readonly [string, string]>([
@@ -211,6 +236,7 @@ export async function startPortal({
         "/api/logout",
         "/api/session",
         "/api/call",
+        "/api/updates",
         "/api/roles",
       ].includes(path)
     )
@@ -325,7 +351,7 @@ export async function startPortal({
       return failure(res, 401, "AUTH_FAILED", "请先登录。");
     if (loggingIn) return busy();
     if (savingRoles || (path === "/api/roles" && active.busy)) return busy();
-    active.lastUsed = clock();
+    if (path !== "/api/updates") active.lastUsed = clock();
     if (
       path !== "/api/session" &&
       req.headers["x-bzt-account"] !==
@@ -350,6 +376,18 @@ export async function startPortal({
       }
       const body = await json(req);
       if (session !== active) return ended();
+      if (path === "/api/updates") {
+        const fields = updateRequest.safeParse(body);
+        if (!fields.success || !active.connection.checkUpdates)
+          return failure(res, 400, "INVALID_INPUT", "同步检查参数不合法。");
+        return respond(
+          await active.connection.checkUpdates(
+            fields.data.role,
+            fields.data.acknowledge,
+            fields.data.section,
+          ),
+        );
+      }
       if (path === "/api/roles") {
         if (!active.connection.saveRoles)
           return failure(
@@ -381,8 +419,10 @@ export async function startPortal({
       const fields = action.safeParse(body);
       if (!fields.success)
         return failure(res, 400, "INVALID_INPUT", "表单参数不合法。");
-      const { role, tool, input } = fields.data;
-      return respond(await active.connection.call(role, tool, input));
+      const { role, tool, input, readMode, month } = fields.data;
+      return respond(
+        await active.connection.call(role, tool, input, readMode, month),
+      );
     } catch (error) {
       if (session !== active) return ended();
       const projected = active.connection.projectError(error);

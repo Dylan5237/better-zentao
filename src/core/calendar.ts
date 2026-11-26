@@ -87,6 +87,28 @@ export const civilDate = z.iso
   .date()
   .refine((value) => parseDay(value) !== undefined);
 
+export const calendarMonth = z
+  .string()
+  .regex(/^(?!0000)\d{4}-(?:0[1-9]|1[0-2])$/u);
+
+export function monthDateRange(month: string) {
+  const checked = calendarMonth.parse(month);
+  const year = Number(checked.slice(0, 4));
+  const index = Number(checked.slice(5));
+  return {
+    start: checked + "-01",
+    end: formatDay(year, index, daysInMonth(year, index)),
+  };
+}
+
+export function overlapsDateRange(
+  range: { start: string; end: string },
+  begin?: string | null,
+  end?: string | null,
+) {
+  return (!begin || begin <= range.end) && (!end || end >= range.start);
+}
+
 export const calendarConfig = z.strictObject({
   workdays: z
     .array(z.int().min(1).max(7))

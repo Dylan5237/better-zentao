@@ -34,6 +34,21 @@ export const instanceConfigDto = z
   })
   .transform((config) => brandDto(config, instanceConfigBrand));
 
+const instanceWebRouteBrand: unique symbol = Symbol("InstanceWebRoute");
+export const instanceWebRouteDto = z
+  .object({
+    requestType: z.string().optional(),
+    moduleVar: z
+      .string()
+      .regex(/^[A-Za-z]\w{0,31}$/u)
+      .optional(),
+    methodVar: z
+      .string()
+      .regex(/^[A-Za-z]\w{0,31}$/u)
+      .optional(),
+  })
+  .transform((config) => brandDto(config, instanceWebRouteBrand));
+
 export const currentUserDto = z
   .object({
     profile: z.object(directoryIdentity),

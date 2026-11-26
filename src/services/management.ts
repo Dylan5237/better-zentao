@@ -34,6 +34,7 @@ import { walkProductPlans, type ProductPlan } from "../core/dto/plan.ts";
 import type { Story, StoryDetail } from "../core/dto/story.ts";
 import type { Task } from "../core/dto/task.ts";
 import { BztError } from "../core/errors.ts";
+import { readGapReason } from "./read-gap.ts";
 import type { LocalStore, SnapshotWithItems } from "../core/store/index.ts";
 import {
   isDevExecutionInMonth,
@@ -279,7 +280,7 @@ class ManagementRead {
     } catch (error) {
       this.gap(
         source,
-        `读取失败${error instanceof BztError ? `（${error.code}）` : ""}。`,
+        error instanceof BztError ? readGapReason(source, error) : "读取失败。",
       );
       return undefined;
     }

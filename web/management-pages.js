@@ -283,8 +283,9 @@ function showEvidence(parent, report, title = "统计口径与数据依据") {
 function loading(output, ctx, load, draw, pending) {
   let serial = 0;
   let finishPrevious;
-  return async (input) => {
+  return async function rerun(input) {
     if (!ctx.current()) return;
+    ctx.onSync?.(() => rerun(input));
     const attempt = ++serial;
     const current = () => ctx.current() && serial === attempt;
     finishPrevious?.();
@@ -367,8 +368,12 @@ function mountTabs(
   const body = add(page, "div", undefined, "management-tab-body");
   const buttons = new Map();
   const panels = new Map();
+  const reloads = new Map();
+  let activeTab;
   function activate(id, options = {}) {
     if (!ctx.current()) return;
+    activeTab = id;
+    ctx.onSync?.(reloads.get(id));
     try {
       sessionStorage.setItem(tabStoreKey, id);
     } catch {
@@ -387,12 +392,23 @@ function mountTabs(
     body.replaceChildren();
     const fresh = add(body, "div", undefined, "management-section");
     panels.set(id, fresh);
-    draw(fresh, ctx, options, {
-      activate,
-      label: (text) => {
-        buttons.get(id).textContent = text;
+    draw(
+      fresh,
+      {
+        ...ctx,
+        onSync(callback) {
+          reloads.set(id, callback);
+          if (activeTab === id) ctx.onSync?.(callback);
+        },
       },
-    });
+      options,
+      {
+        activate,
+        label: (text) => {
+          buttons.get(id).textContent = text;
+        },
+      },
+    );
   }
   for (const [id, label, , glyph] of tabs)
     buttons.set(
@@ -763,7 +779,7 @@ function queue(parent, ctx, initial) {
       "当前角色为只读查看：批量拆解阶段任务、退回误指派草稿、月底挪月及历史任务清理仅研发主管（RM）可执行。",
     );
   if (!allowed(ctx, "get_monthly_dev_queue")) {
-    notice(parent, "当前职责没有读取本月研发队列的权限。");
+    notice(parent, "当前职责没有读取月度研发队列的权限。");
     return;
   }
   const toolbar = add(parent, "div", undefined, "toolbar-row");
@@ -771,10 +787,6 @@ function queue(parent, ctx, initial) {
   const end = add(toolbar, "div", undefined, "row-actions");
   const isolation = add(end, "div", undefined, "management-isolation");
   const form = add(parent, "form", undefined, "management-toolbar");
-  const month = field(form, "month", "月份", {
-    type: "month",
-    value: initial.month,
-  });
   const team = field(form, "team", "团队", {
     value: initial.team,
     placeholder: "名称或代号",
@@ -799,7 +811,7 @@ function queue(parent, ctx, initial) {
       control.className = `seg-tab${active ? " is-active" : ""}`;
       control.setAttribute("aria-pressed", String(active));
     }
-    return run({ ...pick({ month, team }), includeNotReady: true });
+    return run({ ...pick({ team }), includeNotReady: true });
   };
   for (const [id, name] of tabs)
     controls.set(
@@ -815,7 +827,7 @@ function queue(parent, ctx, initial) {
       ),
     );
   submit(form, "查询月度队列", refresh);
-  if (teams.length) toggleForm(end, form, "筛选月份与团队", month);
+  if (teams.length) toggleForm(end, form, "筛选团队", team);
   void refresh();
 }
 
@@ -878,7 +890,7 @@ function drawMatrix(output, report, self) {
     add(
       identity,
       "span",
-      `4 周已排 ${hoursText(load)}h / 总容量 ${hoursText(capacity)}h`,
+      `区间已排 ${hoursText(load)}h / 总容量 ${hoursText(capacity)}h`,
       "ledger-sub",
     );
     if (missing) badge(identity, `缺工时 ${missing}`, "warn");
@@ -895,7 +907,7 @@ function drawMatrix(output, report, self) {
         cell.textContent = "—";
         continue;
       }
-      // 排期契约只返回成员的四周总容量，颜色按周均参考，不推定每周实际可用工时。
+      // 排期契约只返回区间总容量，颜色按周均参考。
       const ratio =
         weeklyCapacityReference > 0
           ? slot.leftHours / weeklyCapacityReference
@@ -973,7 +985,7 @@ function matrix(parent, ctx, initial, tabs) {
       "研发工时热力矩阵仅向主管与管理层开放",
       "工作量用于安排排期。当前职责可在月度队列查看需求的排期归属。",
     );
-    button(panel, "返回本月待研发队列", () => tabs.activate("queue"));
+    button(panel, "返回月度待研发队列", () => tabs.activate("queue"));
     return;
   }
 
@@ -988,8 +1000,8 @@ function matrix(parent, ctx, initial, tabs) {
     scope,
     "span",
     self
-      ? `个人排期视角（N16 隐私保护）：仅展示本人（${ctx.displayName ?? ctx.account}）未来 4 周排期与叶子任务。`
-      : "口径说明（N16）：统计禅道可见的叶子任务。颜色按 4 周容量的周均值参考，最终指派由研发主管决定。",
+      ? `仅展示本人（${ctx.displayName ?? ctx.account}）在所选月份的排期与叶子任务。`
+      : "统计所选月份内禅道可见的叶子任务。颜色按区间周均容量参考，最终指派由研发主管决定。",
   );
   const teams =
     ctx.developmentTeams?.filter(({ members }) => members.length) ?? [];
@@ -1024,7 +1036,7 @@ function matrix(parent, ctx, initial, tabs) {
   );
   const left = card(
     split,
-    self ? "我的未来 4 周个人排期负荷" : "未来 4 周成员工时热力矩阵",
+    self ? "我的月度排期负荷" : "月度成员工时热力矩阵",
     "vp-card",
   );
   const output = add(left.body, "div", undefined, "management-matrix-output");
@@ -1040,7 +1052,6 @@ function matrix(parent, ctx, initial, tabs) {
       ? [ctx.account]
       : [...new Set(fromField.length ? fromField : teamMembers)];
     return run({
-      weeks: 4,
       bucket: "week",
       ...(accounts.length && { members: accounts }),
       ...(!self && newTask && { newTask }),
@@ -1182,10 +1193,10 @@ export function renderSchedule(container, ctx, initial = {}) {
   const self = personalScope(ctx);
   const canWrite = canDecompose(ctx);
   const tabs = [
-    ["queue", "本月待研发与批量拆解", queue, "Layers"],
+    ["queue", "月度待研发与批量拆解", queue, "Layers"],
     [
       "matrix",
-      self ? "我的 4 周个人排期" : "4 周排期热力矩阵与临时指派",
+      self ? "我的月度排期" : "月度排期热力矩阵与临时指派",
       matrix,
       "Users",
     ],
@@ -1196,8 +1207,8 @@ export function renderSchedule(container, ctx, initial = {}) {
     {
       title: "拆解与排期",
       subtitle: self
-        ? "查看本月待研发队列，并在「我的 4 周个人排期」查看本人负荷与叶子任务（N16 隐私保护）"
-        : "一站式建齐【研发】【接口】【测试】【验收】【交付】任务，看清未来 4 周成员可用容量",
+        ? "查看所选月份的待研发队列、本人负荷与叶子任务"
+        : "一站式建齐【研发】【接口】【测试】【验收】【交付】任务，查看所选月份的成员可用容量",
       access: canWrite ? "可操作（研发主管）" : "只读查看",
       readOnly: !canWrite,
     },
@@ -1835,10 +1846,6 @@ function risks(parent, ctx, initial, tabs) {
     value: initial.team,
     placeholder: "名称或代号",
   });
-  const month = field(form, "month", "月份", {
-    type: "month",
-    value: initial.month,
-  });
   const mine = mineRisks(ctx);
   if (mine) add(settings, "span", "巡检范围为本人相关记录", "toolbar-note");
   let rules = Array.isArray(initial.rules)
@@ -1862,7 +1869,7 @@ function risks(parent, ctx, initial, tabs) {
   );
   const refresh = () =>
     run({
-      scope: { ...pick({ product, team, month }), ...(mine && { mine: true }) },
+      scope: { ...pick({ product, team }), ...(mine && { mine: true }) },
       ...(rules.length && { rules }),
     });
   submit(form, "重新巡检", refresh);
@@ -1929,7 +1936,9 @@ function commitmentCard(parent, ctx, data, mount) {
         add(
           content,
           "p",
-          data ? "本月已读取记录中暂无挪月顺延留痕。" : "挪月记录暂未读取。",
+          data
+            ? "所选月份已读取记录中暂无挪月顺延留痕。"
+            : "挪月记录暂未读取。",
           "empty-inline",
         );
         return;
@@ -2262,10 +2271,6 @@ function plans(parent, ctx, initial) {
     value: initial.product,
     placeholder: "名称或编号",
   });
-  const month = field(form, "month", "月份", {
-    type: "month",
-    value: initial.month,
-  });
   const plan = field(form, "plan", "L3 计划", {
     value: initial.plan,
     placeholder: "名称或编号",
@@ -2289,13 +2294,13 @@ function plans(parent, ctx, initial) {
     (result) => drawPlans(output, ctx, result),
     (mount) => drawPlans(output, ctx, undefined, mount),
   );
-  const refresh = () => run(pick({ product, month, plan }));
+  const refresh = () => run(pick({ product, plan }));
   submit(form, "查询计划与承诺", refresh);
   toggleForm(toolbar, form, "筛选计划与承诺", product);
   button(form, "迭代指标", () =>
     ctx.openTool("get_plan_progress", {
       view: "iteration",
-      ...pick({ product, month }),
+      ...pick({ product }),
     }),
   );
   void refresh();

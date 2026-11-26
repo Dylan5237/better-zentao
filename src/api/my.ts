@@ -1,5 +1,6 @@
 import {
   myContributeQuery,
+  myPageDtoFor,
   myWorkQuery,
   toMyContributePage,
   toMyWorkPage,
@@ -11,6 +12,40 @@ import {
 import { BztError } from "../core/errors.ts";
 import type { ZentaoReadClient } from "./client.ts";
 import { readMyPage } from "./internal/my-response.ts";
+import { getReadClient } from "./internal/read-client.ts";
+
+/** One page per mode. This is a change hint, not a full work report. */
+export async function sampleMyActivity(client: ZentaoReadClient) {
+  const { http, timezone } = getReadClient(client);
+  return Promise.all(
+    (["task", "story"] as const).map(async (mode) => {
+      const page = await http.read(
+        {
+          pathTemplate: "/api.php/v2/my/work",
+          query: { mode, browseType: "assignedTo", pageID: 1, recPerPage: 8 },
+          schemaFields: ["tasks", "stories", "pager", "todoCount"],
+        },
+        myPageDtoFor(mode, timezone),
+      );
+      return {
+        mode,
+        total: page.total,
+        counts: page.todoCount,
+        items: page.items
+          .slice(0, 8)
+          .sort((a, b) => a.id - b.id)
+          .map((item) => [
+            item.id,
+            item.status,
+            item.assignedTo,
+            item.assignedDate,
+            "lastEditedDate" in item ? item.lastEditedDate : undefined,
+            "deadline" in item ? item.deadline : undefined,
+          ]),
+      };
+    }),
+  );
+}
 
 export async function listMyWork(
   client: ZentaoReadClient,

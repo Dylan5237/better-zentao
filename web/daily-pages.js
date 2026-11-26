@@ -611,7 +611,10 @@ export async function renderIntake(container, ctx, initial = {}) {
       finishList();
     }
   }
-  if (can(ctx, "query_stories")) return load();
+  if (can(ctx, "query_stories")) {
+    ctx.onSync?.(load);
+    return load();
+  }
   put(list, "p", "当前职责没有读取此清单的权限。", "empty-inline");
 }
 
@@ -1242,6 +1245,9 @@ export async function renderStories(container, ctx, initial = {}) {
     boardBody.hidden = !board;
     ledgerPanel.hidden = active !== "all-stories";
     workflow.hidden = active !== "flow";
+    ctx.onSync?.(
+      active === "flow" || !can(ctx, "query_stories") ? undefined : load,
+    );
     if (active === "flow") return;
     const status = board ? boardStatus : ledgerStatus;
     status.replaceChildren();
@@ -1712,7 +1718,16 @@ export async function renderStoryDrawer(container, ctx, id, tab = "full") {
   const chip = put(head, "div", undefined, "drawer-head-left");
   put(chip, "span", `#${id}`, "mono drawer-code");
   const marks = put(chip, "div", undefined, "daily-story-meta");
-  const close = button(head, "", () => ctx.close(), "icon-btn-subtle", "X");
+  const actions = put(head, "div", undefined, "row-actions");
+  const sync = button(actions, "同步详情", async () => {
+    sync.disabled = true;
+    try {
+      await show(true);
+    } finally {
+      sync.disabled = false;
+    }
+  });
+  const close = button(actions, "", () => ctx.close(), "icon-btn-subtle", "X");
   close.setAttribute("aria-label", "关闭详情抽屉");
   const title = put(container, "div", undefined, "drawer-title-block");
   const label = put(title, "h3", `需求 #${id}`);
@@ -1751,15 +1766,17 @@ export async function renderStoryDrawer(container, ctx, id, tab = "full") {
   const requests = new Map();
   let request = 0;
 
-  function get(view) {
-    if (!requests.has(view)) {
-      const job = ctx
-        .call(
-          "get_story_progress",
-          view === "dev"
-            ? { storyId: id, view: "dev" }
-            : { storyId: id, format: "card" },
-        )
+  function get(view, fresh) {
+    if (fresh || !requests.has(view)) {
+      const input =
+        view === "dev"
+          ? { storyId: id, view: "dev" }
+          : { storyId: id, format: "card" };
+      const job = (
+        fresh
+          ? ctx.call("get_story_progress", input, "sync")
+          : ctx.call("get_story_progress", input)
+      )
         .then(accepted)
         .catch((error) => {
           requests.delete(view);
@@ -1770,21 +1787,24 @@ export async function renderStoryDrawer(container, ctx, id, tab = "full") {
     return requests.get(view);
   }
 
-  async function show() {
+  async function show(fresh = false) {
     const panel = active;
     const pending = ++request;
     const current = () =>
       ctx.current() && content.isConnected && pending === request;
     if (!current()) return;
-    content.replaceChildren();
-    const finish = beginSkeleton(content, (doc) => drawerSkeleton(doc, panel), {
-      signal: ctx.signal,
-      current,
-    });
+    const finish = fresh
+      ? () => {}
+      : beginSkeleton(content, (doc) => drawerSkeleton(doc, panel), {
+          signal: ctx.signal,
+          current,
+        });
     try {
-      const result = await get(panel === "dev" ? "dev" : "full");
+      const result = await get(panel === "dev" ? "dev" : "full", fresh);
       if (!current()) return;
       content.replaceChildren();
+      if (result.snapshot?.retained)
+        notice(content, "同步失败，仍显示上次保存的详情。", "warn");
       statusOf(content, result);
       const { data } = result;
       if (data.story) {
@@ -1819,7 +1839,9 @@ export async function renderStoryDrawer(container, ctx, id, tab = "full") {
     } catch (error) {
       if (current()) {
         content.replaceChildren();
-        outcome(content, error.message || "无法读取需求详情。", show);
+        outcome(content, error.message || "无法读取需求详情。", () =>
+          show(true),
+        );
       }
     } finally {
       finish();

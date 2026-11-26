@@ -877,6 +877,18 @@ describe("WP-10 cache_kv", () => {
     expect(bob.cache.get("story:42")).toBe("bob-value");
     expect(other.cache.get("story:42")).toBe("other-value");
 
+    alice.cache.set("portal-report-v1:old", "old", 20_000);
+    alice.cache.set("portal-report-v1:new", "new", 40_000);
+    bob.cache.set("portal-report-v1:old", "bob", 20_000);
+    alice.cache.trimPrefix("portal-report-v1:", 1);
+    expect(alice.cache.get("portal-report-v1:old")).toBeUndefined();
+    expect(alice.cache.get("portal-report-v1:new")).toBe("new");
+    alice.cache.trimPrefix("portal-report-v1:", 0);
+    expect(alice.cache.get("portal-report-v1:new")).toBeUndefined();
+    expect(alice.cache.get("story:42")).toBe("alice-value");
+    expect(bob.cache.get("portal-report-v1:old")).toBe("bob");
+    bob.cache.trimPrefix("portal-report-v1:", 0);
+
     alice.close();
     bob.close();
     other.close();

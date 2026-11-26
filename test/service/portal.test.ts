@@ -14,6 +14,45 @@ import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 import { z } from "zod";
 
 describe("CR-002 WEB-01 至 WEB-04", () => {
+  it("CR-007 月份加入快照筛选，同时保持风险巡检只读本人的职责范围", async () => {
+    const execute = vi.fn(async () => {
+      throw new Error("scope verified");
+    });
+    const read = vi.fn(
+      async (_role, _tool, _input, _mode, load: () => Promise<unknown>) =>
+        load(),
+    );
+    const run = runPortalAction(
+      execute,
+      "alice",
+      async () => portalRoles({ QA: ["alice"] }, "alice"),
+      undefined,
+      { read, invalidate: vi.fn() },
+    );
+    const query = { scope: { month: "2026-09", mine: false } };
+    await expect(
+      run("QA", "scan_workflow_risks", query, "sync", "2026-11"),
+    ).rejects.toThrow("scope verified");
+    expect(read).toHaveBeenCalledWith(
+      "QA",
+      "scan_workflow_risks",
+      {
+        scope: { month: "2026-11", mine: true },
+        reportMonth: "2026-11",
+      },
+      "sync",
+      expect.any(Function),
+    );
+    expect(execute).toHaveBeenCalledWith(
+      "scan_workflow_risks",
+      {
+        scope: { month: "2026-11", mine: true },
+      },
+      "QA",
+      true,
+      "2026-11",
+    );
+  });
   it("个人排期强制限定本人、拒绝临时指派，设计主管可读队列和版本", async () => {
     const execute = vi.fn(async () => {
       throw new Error("scope verified");

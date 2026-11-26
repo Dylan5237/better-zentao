@@ -647,6 +647,28 @@ export class CacheRepository {
       "清理过期缓存",
     );
   }
+
+  public trimPrefix(prefix: string, keep: number): void {
+    assertCacheKey(prefix);
+    execute(
+      this.database,
+      `DELETE FROM cache_kv
+       WHERE instance_hash = ? AND account = ? AND "key" IN (
+         SELECT "key" FROM cache_kv
+         WHERE instance_hash = ? AND account = ? AND instr("key", ?) = 1
+         ORDER BY expires_at DESC, "key" LIMIT -1 OFFSET ?
+       )`,
+      [
+        this.instanceHash,
+        this.account,
+        this.instanceHash,
+        this.account,
+        prefix,
+        keep,
+      ],
+      "清理旧快照",
+    );
+  }
 }
 export {
   NotificationsRepository,

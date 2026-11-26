@@ -149,6 +149,7 @@ describe("CR-003 INIT-02 至 INIT-04 本地门户职责设置", () => {
       expect(await session.readIdentity()).toEqual({
         account: "alice",
         displayName: "设计",
+        dataMonth: "2026-11",
         roles: [],
       });
       expect(session.readRoleSetup).toBeUndefined();

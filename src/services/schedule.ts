@@ -14,7 +14,9 @@ import {
   createWorkCalendar,
   formatLocalDate,
   isWorkday,
+  monthDateRange,
   nextWorkday,
+  overlapsDateRange,
   type WorkCalendar,
 } from "../core/calendar.ts";
 import type { Clock } from "../core/clock.ts";
@@ -22,6 +24,7 @@ import type { TeamConfig } from "../core/config.ts";
 import type { Execution } from "../core/dto/execution.ts";
 import type { Task, TaskDetail } from "../core/dto/task.ts";
 import { BztError } from "../core/errors.ts";
+import { readGapReason } from "./read-gap.ts";
 import { summarizeLeafWork } from "../domain/task.ts";
 import { DirectoryService } from "./directory.ts";
 
@@ -76,7 +79,7 @@ async function read<T>(
     return await load();
   } catch (error) {
     if (!(error instanceof BztError)) throw error;
-    state.gaps.push({ source, reason: `读取失败（${error.code}）。` });
+    state.gaps.push({ source, reason: readGapReason(source, error) });
     return undefined;
   }
 }
@@ -191,7 +194,10 @@ export class ScheduleService {
     this.directory = new DirectoryService(options);
   }
 
-  async getMemberSchedule(raw: unknown): Promise<GetMemberScheduleOutput> {
+  async getMemberSchedule(
+    raw: unknown,
+    month?: string,
+  ): Promise<GetMemberScheduleOutput> {
     const parsed = getMemberScheduleInputSchema.safeParse(raw);
     if (!parsed.success)
       throw new BztError(
@@ -206,14 +212,20 @@ export class ScheduleService {
     const today = formatLocalDate(now, config.timezone);
     const calendar = createWorkCalendar(config.calendar);
     const weeks = input.weeks ?? config.schedule.weeks;
-    const dayCount = weeks * 7;
-    const end = addWorkdays(today, dayCount - 1, allDays);
+    const period = month ? monthDateRange(month) : undefined;
+    const start = period?.start ?? today;
+    const end = period?.end ?? addWorkdays(today, weeks * 7 - 1, allDays);
+    const dayCount = workdaysIn(start, end, allDays);
     const width = input.bucket === "week" ? 7 : 1;
     const ranges: DateRange[] = Array.from(
-      { length: dayCount / width },
+      { length: Math.ceil(dayCount / width) },
       (_, index) => ({
-        start: addWorkdays(today, index * width, allDays),
-        end: addWorkdays(today, index * width + width - 1, allDays),
+        start: addWorkdays(start, index * width, allDays),
+        end: addWorkdays(
+          start,
+          Math.min(index * width + width, dayCount) - 1,
+          allDays,
+        ),
       }),
     );
     const newTask = input.newTask;
@@ -239,6 +251,7 @@ export class ScheduleService {
           baseUrl,
           state,
           hints,
+          period,
         )
       : [];
     const hasMissingHours = matrix.some(
@@ -257,8 +270,10 @@ export class ScheduleService {
     if (state.gaps.length)
       hints.push("读取不完整，排期和容量仅反映已读取的数据。");
     if (newTask && state.gaps.length) hints.push("数据补齐后可生成指派建议。");
+    if (newTask && period && period.end < today)
+      hints.push("所选月份已结束，切换至当前或未来月份可查看指派建议。");
     const suggestions =
-      newTask && !state.gaps.length
+      newTask && !state.gaps.length && (!period || period.end >= today)
         ? matrix
             .map((work) =>
               suggestionFor(
@@ -287,7 +302,13 @@ export class ScheduleService {
       },
       scope: {
         asOf: `${formatLocalDate(now, "UTC")}T${utcTime.format(now)}Z`,
-        filters: { ...input, weeks, start: today, end, ...(team && { team }) },
+        filters: {
+          ...input,
+          ...(month ? { month } : { weeks }),
+          start,
+          end,
+          ...(team && { team }),
+        },
         timeBasis: `按业务时区（${config.timezone}）的截止日期分桶，容量按工作日日历计算。缺工时仅计任务数。${workBasis}。`,
       },
       completeness: state.gaps.length ? "partial" : "complete",
@@ -382,13 +403,18 @@ export class ScheduleService {
     baseUrl: URL,
     state: ReadState,
     hints: string[],
+    period?: DateRange,
   ): Promise<MemberWork[]> {
     const { client, config } = this.options;
     const executions = await readRows(state, "executions", () =>
       listExecutionsIncludingClosed(client),
     );
     const uniqueExecutions = new Map(
-      executions.map((execution) => [execution.id, execution]),
+      executions
+        .filter(
+          ({ begin, end }) => !period || overlapsDateRange(period, begin, end),
+        )
+        .map((execution) => [execution.id, execution]),
     );
     const lists = await readInBatches(
       [...uniqueExecutions.values()],
@@ -406,12 +432,26 @@ export class ScheduleService {
         .map((row) => [row.task.id, row]),
     );
     const tasks = [...rows.values()].map(({ task }) => task);
+    const inPeriod = (taskId: number) => {
+      const task = rows.get(taskId)?.task;
+      return Boolean(
+        task &&
+        (!period ||
+          overlapsDateRange(
+            period,
+            task.estStarted ?? task.deadline,
+            task.deadline ?? task.estStarted,
+          )),
+      );
+    };
     const context = { today, calendar, timezone: config.timezone };
     const leafWork = summarizeLeafWork(tasks, context);
     const teams = new Map<number, TaskDetail["team"]>();
     const multiIds = leafWork.leaves.filter(
       ({ taskId, time }) =>
-        time.status !== "completed" && rows.get(taskId)?.task.mode === "multi",
+        time.status !== "completed" &&
+        inPeriod(taskId) &&
+        rows.get(taskId)?.task.mode === "multi",
     );
     await readInBatches(multiIds, async ({ taskId }) => {
       const detail = await read(state, `task:${taskId}:detail`, () =>
@@ -426,6 +466,7 @@ export class ScheduleService {
         )
       : leafWork;
     for (const gap of summary.gaps) {
+      if (!("taskId" in gap) || !inPeriod(gap.taskId)) continue;
       if (gap.kind === "children")
         state.gaps.push({
           source: `task:${gap.taskId}:children`,
@@ -438,8 +479,10 @@ export class ScheduleService {
         });
     }
     const accounts = new Set(people.map(({ account }) => account));
-    const overdueParents = summary.parentRisks.filter(({ taskId }) =>
-      accounts.has(rows.get(taskId)?.task.assignedTo ?? ""),
+    const overdueParents = summary.parentRisks.filter(
+      ({ taskId }) =>
+        inPeriod(taskId) &&
+        accounts.has(rows.get(taskId)?.task.assignedTo ?? ""),
     );
     if (overdueParents.length)
       hints.push(
@@ -450,7 +493,8 @@ export class ScheduleService {
       );
 
     const capacityHours =
-      workdaysIn(today, end, calendar) * config.schedule.dailyHours;
+      workdaysIn(period?.start ?? today, end, calendar) *
+      config.schedule.dailyHours;
     const work = new Map<string, MemberWork>(
       people.map((person) => [
         person.account,
@@ -475,7 +519,7 @@ export class ScheduleService {
     const leaves = summary.leaves.sort((a, b) => a.taskId - b.taskId);
     for (const { taskId, time, participants } of leaves) {
       const row = rows.get(taskId);
-      if (!row || time.status === "completed") continue;
+      if (!row || !inPeriod(taskId) || time.status === "completed") continue;
       for (const { account, active } of participants) {
         const item = work.get(account);
         if (item && active === null)
@@ -490,6 +534,7 @@ export class ScheduleService {
             width,
             calendar,
             baseUrl,
+            period?.start ?? today,
           );
       }
     }
@@ -519,6 +564,7 @@ export class ScheduleService {
     width: number,
     calendar: WorkCalendar,
     baseUrl: URL,
+    start: string,
   ) {
     const { task } = row;
     const left =
@@ -533,10 +579,10 @@ export class ScheduleService {
       );
       return;
     }
-    if (!task.deadline) return;
+    if (!task.deadline || task.deadline < start) return;
     scheduled.push(assignment);
     const index = Math.floor(
-      countWorkdaysBetween(today, task.deadline, allDays) / width,
+      countWorkdaysBetween(start, task.deadline, allDays) / width,
     );
     const bucket = member.buckets[index];
     if (!bucket) return;

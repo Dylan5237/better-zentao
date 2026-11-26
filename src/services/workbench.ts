@@ -1,12 +1,17 @@
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { createZentaoReadClient } from "../api/client.ts";
+import { sampleMyActivity } from "../api/my.ts";
 import { getStoryDetail } from "../api/story.ts";
 import {
   operationPlanSchema,
   type OperationResult,
 } from "../contracts/operation.ts";
-import { getCurrentUser, getInstanceConfig } from "../api/org.ts";
+import {
+  getCurrentUser,
+  getInstanceConfig,
+  getInstanceWebRoute,
+} from "../api/org.ts";
 import { toolErrorMessages, toolErrorSchema } from "../contracts/error.ts";
 import type { ToolError } from "../contracts/error.ts";
 import type { ConfirmOperation, GetOperation } from "../contracts/operation.ts";
@@ -16,6 +21,7 @@ import {
   loadConfig,
 } from "../core/config.ts";
 import { normalizeZentaoBaseUrl } from "../core/base-url.ts";
+import { formatLocalDate } from "../core/calendar.ts";
 import type { ConfigEnv, TeamConfig } from "../core/config.ts";
 import { BztError } from "../core/errors.ts";
 import {
@@ -103,6 +109,7 @@ async function assemble(
     },
   });
   const tracking = new TrackingService(common);
+  const freshTracking = new TrackingService({ ...common, fresh: true });
   const risk = new RiskService(common);
   const schedule = new ScheduleService(common);
   const management = new ManagementService({ ...common, directory });
@@ -212,6 +219,14 @@ async function assemble(
 
   return {
     viewer,
+    portalReadSources: {
+      cache: store.cache,
+      currentMonth: () => formatLocalDate(clock(), config.timezone).slice(0, 7),
+      sampleActivity: () => sampleMyActivity(client),
+      instance: () => getInstanceWebRoute(client),
+      baseUrl,
+      freshTracking,
+    },
     get releaseCalendar() {
       return config.releaseCalendar.map(({ product, version, date }) => ({
         product,

@@ -2,6 +2,22 @@ import { expect, it } from "vitest";
 import { listExecutionTasks } from "../../src/api/task.ts";
 import { mockReadFixture } from "./read-fixture.ts";
 
+it("Q5 迭代拒绝访问后拼接了任务对象时，只报告权限失败", async () => {
+  const { client, fetch } = mockReadFixture("execution-tasks");
+  fetch.mockResolvedValueOnce(
+    Response.json({ token: "fixture-session" }, { status: 201 }),
+  );
+  fetch.mockResolvedValueOnce(
+    new Response(
+      JSON.stringify({ status: "fail", message: "您无权访问该迭代！" }) +
+        JSON.stringify({ tasks: [], total: 0 }),
+    ),
+  );
+  await expect(listExecutionTasks(client, 189)).rejects.toMatchObject({
+    code: "PERMISSION_DENIED",
+  });
+});
+
 it("Q5 执行任务保留扁平父子、父任务截止日和子任务工时", async () => {
   const { client } = mockReadFixture("execution-tasks", {
     path: "/api.php/v1/executions/189/tasks",

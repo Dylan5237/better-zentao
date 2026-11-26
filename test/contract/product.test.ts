@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { z } from "zod";
-import { getInstanceConfig } from "../../src/api/org.ts";
+import { getInstanceConfig, getInstanceWebRoute } from "../../src/api/org.ts";
 import { getProductModules, listProducts } from "../../src/api/product.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 import { mockReadFixture } from "./read-fixture.ts";
@@ -73,4 +73,23 @@ it("产品模块拒绝回读到其他产品", async () => {
     "code",
     "ZENTAO_SCHEMA_MISMATCH",
   );
+});
+it("门户路由只读取网页跳转所需字段", async () => {
+  const { client } = mockReadFixture("instance-config", {
+    path: "/index.php",
+    query: { mode: "getconfig" },
+    transform: () => ({
+      version: "22.6",
+      URAndSR: true,
+      requestType: "GET",
+      moduleVar: "m",
+      methodVar: "f",
+      password: "synthetic-must-not-project",
+    }),
+  });
+  await expect(getInstanceWebRoute(client)).resolves.toEqual({
+    requestType: "GET",
+    moduleVar: "m",
+    methodVar: "f",
+  });
 });

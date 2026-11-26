@@ -203,10 +203,9 @@ describe("WEB-03 / WEB-04 原型管理页面", () => {
     await vi.waitFor(() => expect(ctx.call).toHaveBeenCalled());
     expect(ctx.call).toHaveBeenCalledWith("get_member_schedule", {
       members: ["signed-in"],
-      weeks: 4,
       bucket: "week",
     });
-    expect(root.textContent).toContain("我的 4 周个人排期");
+    expect(root.textContent).toContain("我的月度排期");
     expect(root.textContent).not.toContain("临时任务推荐谁");
   });
 
@@ -319,14 +318,14 @@ describe("WEB-03 / WEB-04 原型管理页面", () => {
     );
     renderSchedule(root, ctx, { tab: "matrix" });
     await vi.waitFor(() =>
-      expect(root.textContent).toContain("4 周已排 16h / 总容量 58h"),
+      expect(root.textContent).toContain("区间已排 16h / 总容量 58h"),
     );
     expect(root.textContent).toContain("缺工时 4");
     expect(root.textContent).toContain("逾期任务");
     expect(root.textContent).toContain("未排期任务");
     expect(root.textContent).toContain("12-17 ~ 12-23");
     expect(
-      root.button("本月待研发与批量拆解").attributes.get("aria-pressed"),
+      root.button("月度待研发与批量拆解").attributes.get("aria-pressed"),
     ).toBe("false");
     root.get((node) => node.name === "estimateHours").value = "5.5";
     root.get((node) => node.name === "deadline").value = "2026-12-04";
@@ -339,7 +338,6 @@ describe("WEB-03 / WEB-04 原型管理页面", () => {
       expect(root.textContent).toContain("已知剩余容量 10 小时"),
     );
     expect(ctx.call).toHaveBeenLastCalledWith("get_member_schedule", {
-      weeks: 4,
       bucket: "week",
       newTask: { estimateHours: 5.5, deadline: "2026-12-04" },
     });

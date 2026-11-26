@@ -11,6 +11,7 @@ import { storyDtoFor } from "./story.ts";
 
 const productPlanBrand: unique symbol = Symbol("ProductPlan");
 const planDetailBrand: unique symbol = Symbol("PlanDetail");
+const planDate = z.union([zDate, z.literal("待定").transform(() => null)]);
 
 export interface ProductPlan {
   readonly [productPlanBrand]: true;
@@ -33,8 +34,8 @@ export const productPlanDto: z.ZodType<ProductPlan> = z.lazy(() =>
       parent: zParentPlanId,
       title: z.string(),
       status: z.string(),
-      begin: zDate,
-      end: zDate,
+      begin: planDate,
+      end: planDate,
       deleted: zBool,
       children: zCollection(productPlanDto).default([]),
     })

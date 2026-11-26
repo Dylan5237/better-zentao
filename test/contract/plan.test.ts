@@ -4,6 +4,27 @@ import { getPlanDetail, listProductPlans } from "../../src/api/plan.ts";
 import { assertNoSensitiveData } from "../helpers/assert-no-sensitive-data.ts";
 import { mockReadFixture, readFixture } from "./read-fixture.ts";
 
+it("Q11 两端均为待定的计划保留记录，但不推断日期", async () => {
+  const { client } = mockReadFixture("product-plans", {
+    transform: (body) => {
+      const page = z
+        .looseObject({ plans: z.array(z.looseObject({})) })
+        .parse(body);
+      return {
+        ...page,
+        plans: [
+          { ...page.plans[0], begin: "待定", end: "待定" },
+          ...page.plans.slice(1),
+        ],
+      };
+    },
+  });
+  expect((await listProductPlans(client, 42)).items[0]).toMatchObject({
+    begin: null,
+    end: null,
+  });
+});
+
 it("Q11 计划保留 L2 和 L3 层级、状态与日期，分页总数覆盖子计划", async () => {
   const { client } = mockReadFixture("product-plans", {
     path: "/api.php/v1/products/42/plans",

@@ -176,22 +176,32 @@
           aria-label="当前账号的角色视角"
         ></nav>
         <div class="bzt-topbar-actions">
+          <div id="report-period" class="report-period" hidden>
+            <label for="report-month">时间范围</label>
+            <input type="month" id="report-month" class="bzt-input" />
+            <button
+              type="button"
+              id="report-month-reset"
+              class="btn-secondary btn-sm"
+              hidden
+            >
+              本月
+            </button>
+          </div>
           <button
             type="button"
-            id="guide-button"
+            id="sync-data"
             class="btn-secondary btn-sm"
             hidden
           >
-            <span>评审说明</span>
+            同步本页
           </button>
-          <button
-            type="button"
-            id="shortcuts-button"
-            class="btn-secondary btn-sm"
+          <span
+            id="data-update"
+            class="data-update"
+            role="status"
             hidden
-          >
-            <span>一句话助手</span>
-          </button>
+          ></span>
           <button
             type="button"
             id="account-start"
@@ -238,7 +248,7 @@
             ></button>
           </div>
           <div class="sidebar-scroll">
-            <div class="nav-group-label" id="nav-heading">5 + 1 极简导航</div>
+            <div class="nav-group-label" id="nav-heading">工作导航</div>
             <nav id="role-nav" aria-labelledby="nav-heading"></nav>
             <div id="fb-perm-note" class="sidebar-perm-note" hidden>
               已按业务反馈者权限隐藏内部研发与管理菜单
