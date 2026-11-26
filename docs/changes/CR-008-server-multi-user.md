@@ -1,7 +1,7 @@
 # CR-008 集中部署与多用户隔离（Server 1.0）
 
 > 关联总控 Issue：#2
-> 状态：**DESIGN REVIEW REQUESTED**（Gate A 方案与验收设计，等待评审决策）
+> 状态：**APPROVED · IMPLEMENTATION AUTHORIZED**（Gate A 已于 2026-11-26 批准，ADR-21/22/23 已定，进入 Gate B–D 实施与验收）
 > 基准 Commit：`99aab9a19dc57727d17dd59eef9b5e1f920830aa`
 > 编制日期：2026-11-26
 
@@ -137,13 +137,15 @@ flowchart TD
   2. **单进程每账号共享 `LocalStore` 句柄 + WAL 模式（关闭 F-11）**：
      - `UserContextPool` 按 `(instanceHash, account)` 维护单一 `LocalStore` 实例与引用计数（跨同一用户的多个浏览器标签/会话共享），空闲归零后按宽限期延迟关闭。
      - 打开时启用 `PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;`，将 `busy_timeout` 收敛为 1000ms（避免单次同步等待阻塞事件循环 5 秒）。
-  3. **进程级缓存失效协调 + 原子过期清理（关闭 F-06、F-14）**：
+  3. **授权优先于缓存 + 进程级缓存失效协调 + 原子过期清理（关闭 F-06、F-14，满足 Gate A 边界 1）**：
+     - **授权优先于缓存**：Server 模式下每次读请求必须先通过会话有效性、不可变团队配置角色/工具/范围校验，才允许读取任何缓存或复用 `inFlight`。
+     - **新鲜度与 fail-closed 策略**：Server 模式将门户报表缓存 TTL 收紧为有界短周期（默认 60 秒，可配置，严禁 7 天盲命中）；直接对象详情（`get_story_progress`）在 Server 模式默认不走盲缓存命中（须实时向禅道验证本人可读性）；禁止跨不同 `configVersion` 或不同 `role` 共享 `inFlight`；当上游返回 `401 AUTH_FAILED`、`403 PERMISSION_DENIED` 或 `404 NOT_FOUND` 时**严格 fail-closed**——立即淘汰对应缓存键，禁止回退旧完整快照，且 `401` 同步撤销当前 Server 会话；若响应为 `partial` 且含权限/认证类缺口（`gaps`），同样禁止回退旧完整快照。
      - `PortalSnapshots` 的 `generation`、`inFlight` 与 `activity` 探测提升至按 `(instanceHash, account)` 共享的 `UserContext`，任一会话触发写入失效都会递增共享 `generation`，阻止并发旧读取回写脏快照。
      - `CacheRepository.get` 清理过期条目改为 `DELETE FROM cache_kv WHERE instance_hash = ? AND account = ? AND "key" = ? AND expires_at <= ?`。
-     - 上游返回 `401 AUTH_FAILED` 或 `403 PERMISSION_DENIED` 时严禁回退旧快照（已有基础逻辑，需补齐跨会话测试锁定）。
-  4. **操作执行器原子化与跨账号目标写协调（关闭 F-07、F-08、F-09）**：
+  4. **操作执行器原子化与跨账号目标写协调（关闭 F-07、F-08、F-09，满足 Gate A 边界 2）**：
      - `OperationExecutor.prepare()` 将 `operations` 与 `operation_steps` 插入包裹在单一 `BEGIN IMMEDIATE ... COMMIT` 事务中。
      - 新增进程级 `TargetWriteCoordinator`：对同一 `(instanceHash, targetType, targetId)`（多目标按字典序加锁防死锁）串行化「`checkTargets` 目标指纹刷新 → `write` → `readback`」，防止账号 A 与账号 B 同时通过预检后互相覆盖。
+     - **一致性边界说明**：`TargetWriteCoordinator` 仅为单进程协调器，**不是禅道全局锁**——它只约束经由同一 `bzt serve` 进程的写入，不能阻断原生禅道 Web UI 或并行本机 CLI/MCP 的外部并发修改；对外部并发仍依赖 `checkTargets` 乐观指纹校验、写后回读、`unknown` 留痕与不盲目重建语义，Server 1.0 不引入分布式锁。
      - 区分「发送前认证失败（`getSession()` 阶段）」与「派发后收到 401」：发送后 401 保留 `unknown` 检查点并失效 Token，不归类为 `failed`，禁止盲目重试；`confirmOperation` 仅在本次调用实际执行了步骤时触发 `recordConfirmed` 与 `notifyConfirmed`。
      - **预览与回执分离**：未执行预览绑定 `(sessionId, role, configVersion)`，登出或重启后不可直接确认；已派发操作（`confirmed`/`partial`/`unknown`/`failed`）的回执由原认证主体通过 `get_operation` 跨会话/重启可读（仍受角色/实例校验）。
   5. **分区 HTTP 并发池（关闭 F-11）**：
@@ -298,12 +300,12 @@ Codex 在独立 worktree 对基准 `99aab9a` 完成了全量只读审查，共�
 
 ---
 
-## 11. 待 ChatGPT 决策事项（Gate A 签核清单）
+## 11. Gate A 已批准决策记录（2026-11-26）
 
-| 编号 | 议题 | 推荐基线 | 备选方案与权衡 |
-| --- | --- | --- | --- |
-| **S-D01** | **上游凭据留存策略（对应 ADR-22）** | **推荐**：登录时换取禅道 Token 后立即丢弃明文密码（内存零密码留存），Token 过期/401 或服务重启后用户重登。 | 备选：内存短期保留加密密码以自动续期 Token（增加内存暴露面且需处理改密/封号同步）。 |
-| **S-D02** | **团队可见范围口径（对应 F-05）** | **推荐**：集中端以「个人禅道 ACL ∩ 门户角色工具白名单」为准，保留现有管理视图（如月度队列）在本人禅道可见范围内的全团队聚合，FB 维持严格本人提需隔离。 | 备选：在 `team.json` 额外定义每角色可见产品/团队硬白名单（增加运维负担，可能与禅道权限分叉）。 |
-| **S-D03** | **首发是否默认支持写入或只读先行** | **推荐**：支持通过 `server.json` 的 `readOnly` 开关控制；Gate B 完整交付受控写入与全部 `SRV-OP-*`/`SRV-CONC-*` 门禁，Gate D 可按需先只读验收再开写入。 | 备选：Server 1.0 首发仅做纯只读，写入延后至 Server 1.1（降低风险但无法替代完整工作台闭环）。 |
-| **S-D04** | **部署与 HTTPS 接入策略（对应 ADR-23）** | **推荐**：生产环境要求经受控内网反向代理终止 HTTPS 并固定 `externalOrigin`；提供 Docker Compose + Nginx/Caddy 示例；仅在显式 `allowInsecureHttp: true` 时允许内网纯 HTTP 试跑（伴安全警告）。 | 备选：内置 Node TLS 证书加载（增加证书轮换与运维复杂度）。 |
-| **S-D05** | **企微群推与既有本地数据迁移** | **推荐**：Server 1.0 默认关闭企微群推（待后续实现实例级去重存储）；采用独立 `dataDir` 冷启动，不导入个人本机 `state.db`。 | 备选：在 1.0 内新增实例级共享 `notifications.db` 开启群推（扩大 1.0 范围）。 |
+| 编号 | 议题 | 批准结论（ChatGPT Gate A 审查） |
+| --- | --- | --- |
+| **S-D01** | **上游凭据留存策略（ADR-22）** | **已批准**：Token-only，不持久化或长期持有密码，401/重启重登；不将 JS 内存不可证明的物理擦除作为承诺。 |
+| **S-D02** | **团队可见范围口径（F-05）** | **已批准**：本人禅道 ACL ∩ 既有门户角色、工具与业务对象范围；不另造一套对象 ACL，也不把角色工具白名单当作对象授权的替代。 |
+| **S-D03** | **受控写入与默认只读** | **已批准**：实现完整受控写入；集中部署示例及首次启用默认 `readOnly: true`，验证后由管理员显式开启。 |
+| **S-D04** | **部署与 HTTPS 接入策略（ADR-23）** | **已批准**：受控内网反代 HTTPS、固定外部 Origin、可信代理、Compose 示例。纯 HTTP 仅用于隔离调试/替身测试，不以真实账号密码在不可信明文链路试跑。 |
+| **S-D05** | **企微群推与数据迁移** | **已批准**：默认关闭企微群推；独立 `dataDir` 冷启动，不迁移个人本机库。 |
