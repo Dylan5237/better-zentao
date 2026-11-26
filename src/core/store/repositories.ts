@@ -606,6 +606,21 @@ export class CacheRepository {
     );
   }
 
+  /** 写入永不过期的持久化元数据（不依赖两次读钟差值）。 */
+  public setPermanent(key: string, value: string): void {
+    assertCacheKey(key);
+    execute(
+      this.database,
+      `INSERT INTO cache_kv (instance_hash, account, "key", value, expires_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (instance_hash, account, "key") DO UPDATE SET
+         value = excluded.value,
+         expires_at = excluded.expires_at`,
+      [this.instanceHash, this.account, key, value, Number.MAX_SAFE_INTEGER],
+      "写入缓存",
+    );
+  }
+
   /** 到期即失效：expires_at <= now 视为已过期并按相同条件原子清理。 */
   public get(key: string, now: number = this.clock()): string | undefined {
     assertCacheKey(key);

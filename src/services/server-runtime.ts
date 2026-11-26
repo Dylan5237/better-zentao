@@ -686,17 +686,12 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
         }
         const prepared = previewIdSchema.safeParse(value);
         if (prepared.success) {
-          const permanentTtlMs = Math.max(
-            1,
-            Number.MAX_SAFE_INTEGER - Math.max(0, clock()),
-          );
-          session.userContext.store.cache.set(
+          session.userContext.store.cache.setPermanent(
             opGrantPrefix + prepared.data.opId,
             JSON.stringify({
               instanceId: session.instanceId,
               role: page.id,
             }),
-            permanentTtlMs,
           );
           session.previews.set(prepared.data.opId, {
             role: page.id,
