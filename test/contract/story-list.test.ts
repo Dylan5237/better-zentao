@@ -56,6 +56,39 @@ it("Q3 未关闭口径过滤掉源响应里的关闭项", async () => {
   expect(page.items.some(({ status }) => status === "closed")).toBe(false);
 });
 
+it("Q3 研发需求有多个父需求时保留全部关系，列表仍可读取", async () => {
+  const { client } = mockReadFixture("product-stories", {
+    path: "/api.php/v1/products/42/stories",
+    query: { status: "all", limit: 100, page: 1 },
+    transform(body) {
+      const page = z
+        .looseObject({ stories: z.array(z.record(z.string(), z.json())) })
+        .parse(body);
+      return {
+        ...page,
+        stories: [
+          ...page.stories,
+          {
+            ...page.stories[0],
+            id: 9000,
+            type: "story",
+            parent: [901, "902", 903],
+          },
+        ],
+      };
+    },
+  });
+  const page = await listProductStories(client, 42);
+  expect(page.items).toContainEqual(expect.objectContaining({ id: 4843 }));
+  expect(page.items).toContainEqual(
+    expect.objectContaining({
+      id: 9000,
+      parent: null,
+      parentIds: [901, 902, 903],
+    }),
+  );
+});
+
 it.each(["", " ", "done"])(
   "Q3 研发需求拒绝无效查询状态 %j 且不会发请求",
   async (status) => {

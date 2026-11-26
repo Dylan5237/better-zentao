@@ -157,8 +157,10 @@ function cachedDate(value: number | null | undefined) {
 
 // SQLite 保存已投影的字段。回读仍经 DTO 校验并恢复日期与编号列表。
 function encodeStory(story: Story | StoryDetail) {
+  const { parentIds, ...fields } = story;
   return {
-    ...story,
+    ...fields,
+    parent: parentIds ?? story.parent,
     openedDate: cachedDate(story.openedDate),
     assignedDate: cachedDate(story.assignedDate),
     closedDate: cachedDate(story.closedDate),
@@ -550,9 +552,10 @@ class TrackingRead {
   ) {
     const products = await this.products(product);
     const { client, config } = this.options;
+    const collection = type === "story" ? "stories" : "requirements";
     const pages = await Promise.all(
       products.map(({ id }) =>
-        this.page(`${type}s:${id}`, () =>
+        this.page(`${collection}:${id}`, () =>
           type === "requirement"
             ? listProductRequirements(client, id)
             : this.cached(
