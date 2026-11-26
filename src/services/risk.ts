@@ -818,7 +818,7 @@ export class RiskService {
           .map(({ name }) => name),
       ]);
       const parents = new Set(
-        [...storyRows.values()].map(({ parent }) => parent),
+        [...storyRows.values()].flatMap(({ parentIds }) => parentIds ?? []),
       );
       const leafRelease = scopedRelease.filter(({ id }) => !parents.has(id));
       for (const version of versions) {

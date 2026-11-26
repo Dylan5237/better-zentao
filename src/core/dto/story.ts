@@ -39,6 +39,29 @@ const idList = z
     }
   });
 
+const storyParents = z
+  .union([zNullableId, z.literal(-1), z.literal("-1"), z.array(zId)])
+  .optional();
+
+function projectStoryParents<
+  T extends { parent?: z.output<typeof storyParents> },
+>(
+  story: T,
+): Omit<T, "parent"> & { parent?: number | null; parentIds?: number[] } {
+  const { parent, ...fields } = story;
+  if (parent === undefined) return fields;
+  const parentIds = Array.isArray(parent)
+    ? [...new Set(parent)]
+    : typeof parent === "number" && parent > 0
+      ? [parent]
+      : [];
+  return {
+    ...fields,
+    parent: parentIds.length === 1 ? parentIds[0] : null,
+    parentIds,
+  };
+}
+
 function storySummaryShape(timezone?: string) {
   const dateTime = dateTimeSchema(timezone).optional();
   return z.object({
@@ -48,18 +71,7 @@ function storySummaryShape(timezone?: string) {
     title: z.string(),
     status: z.string(),
     module: zNullableId.optional(),
-    parent: z
-      .union([
-        zNullableId,
-        z.literal(-1),
-        z.literal("-1"),
-        z.tuple([]),
-        z.tuple([zId]).transform(([parent]) => parent),
-      ])
-      .transform((parent) =>
-        typeof parent === "number" && parent > 0 ? parent : null,
-      )
-      .optional(),
+    parent: storyParents,
     isParent: zBool.optional(),
     moduleTitle: nullableText.optional(),
     plan: idList.optional(),
@@ -92,7 +104,7 @@ function storySummaryShape(timezone?: string) {
 
 export function storySummaryDtoFor(timezone: string) {
   return storySummaryShape(timezone).transform((story) =>
-    brandDto(story, storySummaryBrand),
+    brandDto(projectStoryParents(story), storySummaryBrand),
   );
 }
 
@@ -101,7 +113,9 @@ function storyShape(timezone?: string) {
 }
 
 export function storyDtoFor(timezone: string) {
-  return storyShape(timezone).transform((story) => brandDto(story, storyBrand));
+  return storyShape(timezone).transform((story) =>
+    brandDto(projectStoryParents(story), storyBrand),
+  );
 }
 
 const storyExecutionDto = z
@@ -196,7 +210,7 @@ export const storyDetailFields = Object.freeze(
 
 export function storyDetailDtoFor(timezone?: string) {
   return storyDetailV1Shape(timezone).transform((detail) =>
-    brandDto(detail, storyDetailBrand),
+    brandDto(projectStoryParents(detail), storyDetailBrand),
   );
 }
 
@@ -224,7 +238,7 @@ function storyDetailV2Shape<T extends "story" | "requirement">(
     })
     .transform(({ story: { reviewer, ...story }, ...detail }) => ({
       ...detail,
-      story: brandDto(story, storySubjectBrand),
+      story: brandDto(projectStoryParents(story), storySubjectBrand),
       reviewers: reviewer,
     }));
 }

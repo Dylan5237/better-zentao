@@ -185,7 +185,8 @@ function localFormatter(timeZone: string): Intl.DateTimeFormat {
   try {
     formatter = new Intl.DateTimeFormat("en-GB", {
       timeZone,
-      calendar: "iso8601",
+      // Gregorian year and era are both needed to reject dates before 0001.
+      calendar: "gregory",
       numberingSystem: "latn",
       era: "short",
       year: "numeric",
