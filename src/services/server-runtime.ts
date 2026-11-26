@@ -119,7 +119,7 @@ const storedOpGrantSchema = z.strictObject({
   role: z.string(),
 });
 const opGrantPrefix = "portal-op-grant-v1:";
-const opGrantTtlMs = 365 * 24 * 60 * 60_000;
+const opGrantTtlMs = 100 * 365 * 24 * 60 * 60_000;
 const previewIdSchema = z.object({
   opId: z.string().min(1),
   preview: z.object({}),
@@ -579,11 +579,10 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
                 ? storedOpGrantSchema.safeParse(JSON.parse(rawGrant))
                 : undefined;
               const grantMatches =
-                parsedGrant === undefined
-                  ? true
-                  : parsedGrant.success &&
-                    parsedGrant.data.instanceId === session.instanceId &&
-                    parsedGrant.data.role === page.id;
+                parsedGrant !== undefined &&
+                parsedGrant.success &&
+                parsedGrant.data.instanceId === session.instanceId &&
+                parsedGrant.data.role === page.id;
               ownedDispatched =
                 record.actor === session.account &&
                 meta.success &&
@@ -680,22 +679,18 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
         }
         const prepared = previewIdSchema.safeParse(value);
         if (prepared.success) {
+          session.userContext.store.cache.set(
+            opGrantPrefix + prepared.data.opId,
+            JSON.stringify({
+              instanceId: session.instanceId,
+              role: page.id,
+            }),
+            opGrantTtlMs,
+          );
           session.previews.set(prepared.data.opId, {
             role: page.id,
             configVersion: team.version,
           });
-          try {
-            session.userContext.store.cache.set(
-              opGrantPrefix + prepared.data.opId,
-              JSON.stringify({
-                instanceId: session.instanceId,
-                role: page.id,
-              }),
-              opGrantTtlMs,
-            );
-          } catch {
-            // 回执归属元数据落盘失败不影响预览返回。
-          }
         }
         const projected =
           request.readMode === "cached" && !reportExists(value)

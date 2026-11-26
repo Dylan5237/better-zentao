@@ -407,7 +407,16 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
   const normalized = normalizeZentaoBaseUrl(options.baseUrl);
   if (!normalized) throw new BztError("INVALID_INPUT", "禅道基础地址不合法。");
   const baseUrl = normalized.href;
-  const { env, clock, logSink } = options;
+  const {
+    env,
+    clock,
+    logSink,
+    account,
+    readPool,
+    instanceHash,
+    onAuthFailed,
+    isRevoked,
+  } = options;
   const timeoutMs = resolveZentaoTimeout(env);
   const fetcher = options.fetch ?? fetch;
   const sleep =
@@ -569,19 +578,19 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     let replayed = false;
     let retries = 0;
     for (;;) {
-      if (options.isRevoked?.()) throw authFailed();
+      if (isRevoked?.()) throw authFailed();
       const session = await auth.getSession();
       capture?.observeSession(session.token);
       const runRead = () => {
-        if (options.isRevoked?.()) throw authFailed();
+        if (isRevoked?.()) throw authFailed();
         return send(prepared, session.token);
       };
       const result =
-        options.readPool && options.instanceHash
-          ? await options.readPool.withReadSlot(
+        readPool && instanceHash
+          ? await readPool.withReadSlot(
               {
-                instanceHash: options.instanceHash,
-                account: options.account,
+                instanceHash,
+                account,
               },
               runRead,
             )
@@ -598,7 +607,7 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       }
       if (result.kind === "http-error" && result.status === 401) {
         auth.invalidate(session);
-        if (tokenOnly) options.onAuthFailed?.();
+        if (tokenOnly) onAuthFailed?.();
         if (tokenOnly || replayed) throw authFailed();
         replayed = true;
         continue;
@@ -623,7 +632,7 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       body: encodeBody(request.body),
     };
     return withInstanceWriteLock(baseUrl, async () => {
-      if (options.isRevoked?.()) throw preSendAuthFailure(authFailed());
+      if (isRevoked?.()) throw preSendAuthFailure(authFailed());
       let session;
       try {
         session = await auth.getSession();
@@ -633,7 +642,7 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
           throw preSendAuthFailure(error);
         throw error;
       }
-      if (options.isRevoked?.()) {
+      if (isRevoked?.()) {
         auth.invalidate(session);
         throw preSendAuthFailure(authFailed());
       }
@@ -666,7 +675,7 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
         // docs/06 §2.2 无法证明 401 的写请求未进入业务处理。
         if (result.status === 401) {
           auth.invalidate(session);
-          if (tokenOnly) options.onAuthFailed?.();
+          if (tokenOnly) onAuthFailed?.();
           throw postSendAuthFailure();
         }
         throw requestError(result);

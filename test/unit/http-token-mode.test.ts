@@ -354,5 +354,26 @@ describe("SRV-CONC-02 分区读取并发池", () => {
       code: "AUTH_FAILED",
     });
     expect(fetchB).not.toHaveBeenCalled();
+
+    // 独立验证 revoke() 自身已清除客户端持有的 Token（即使未提供 isRevoked 回调）
+    const fetchC = vi.fn<typeof fetch>(async () =>
+      Response.json({ id: 303 }, { status: 201 }),
+    );
+    const httpC = createZentaoHttp({
+      baseUrl,
+      account: "acct_c",
+      token,
+      clock,
+      fetch: fetchC,
+    });
+    httpC.revoke();
+    await expect(httpC.read(story, storyDto)).rejects.toMatchObject({
+      code: "AUTH_FAILED",
+    });
+    await expect(httpC.write(writeStory, storyDto)).rejects.toMatchObject({
+      code: "AUTH_FAILED",
+      details: { phase: "pre_send" },
+    });
+    expect(fetchC).not.toHaveBeenCalled();
   });
 });
