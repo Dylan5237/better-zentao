@@ -36,12 +36,14 @@ it("导出的结果区分待讨论和用户在本次会议记录的意见", () =
   expect(minutes).toContain("D-16");
 });
 
-it("产品化外壳统一品牌并保留命令检索、折叠及深浅主题（Issue #6 / M2-01）", async () => {
+it("产品化外壳统一品牌、采用右上角账号菜单并保留命令检索与主题切换（Issue #6 / M2-01）", async () => {
   const html = await readFile("web/index.html", "utf8");
   for (const value of [
     "better-zentao",
     "sidebar-scroll",
-    "sidebar-role-card",
+    "account-menu-wrap",
+    "account-popover",
+    "toolbar-data-group",
     "theme-button",
     "command-button",
   ])
@@ -49,6 +51,8 @@ it("产品化外壳统一品牌并保留命令检索、折叠及深浅主题（I
   expect(html).not.toContain("脉序 × better-zentao");
   expect(html).not.toContain("bzt-version-pill");
   expect(html).not.toContain("本机门户");
+  expect(html).not.toContain("sidebar-role-card");
+  expect(html).not.toContain('id="account-dialog"');
 });
 
 it("载入伏羲 mwskyptfsv2y4a 第 11 版的两段原始样式", async () => {

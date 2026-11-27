@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { z } from "zod";
 import { BztError } from "../../core/errors.ts";
 import type { CapabilityRuntime } from "../capability-runtime.ts";
 import { portalRolePage, type PortalRole } from "../portal-policy.ts";
@@ -18,6 +19,7 @@ import {
   createIntentRouter,
   extractStoryRef,
   myWorkWords,
+  progressWords,
   riskWords,
 } from "./intent-router.ts";
 import type { ModelGateway } from "./model-gateway.ts";
@@ -47,6 +49,7 @@ export interface CopilotTurnOptions {
 const intakeTriggerPattern =
   /(?:提(?:一个|一条|个|条)?需求|新建需求|创建需求|拟定(?:一条)?需求|帮我提需|发起需求)/u;
 const filterTriggerPattern = /(?:筛|过滤|只看)/u;
+const multiIntentJoinPattern = /(?:同时|顺便|顺带|并且|另外|再帮我)/u;
 const promptMonthPattern = /\b(\d{4}-(?:0[1-9]|1[0-2]))\b/u;
 
 function nextId(prefix: string): string {
@@ -131,27 +134,123 @@ function fallbackCreateStoryCandidates(
     candidates.push({
       field: "title",
       value: cleanTitle,
-      rationale: "从自然语言诉求提炼需求标题",
+      rationale: "规则降级：从用户输入原文提取需求标题（请人工核对）",
     });
   }
   if (trimmed.length >= 6 && !String(form.fields["spec.scope"] ?? "").trim()) {
     candidates.push({
       field: "spec.scope",
       value: trimmed,
-      rationale: "根据自然语言描述补全本次实现范围（N03）",
-    });
-  }
-  if (
-    /验收|测试|标准/u.test(trimmed) ||
-    !String(form.fields.verify ?? "").trim()
-  ) {
-    candidates.push({
-      field: "verify",
-      value: `1. ${cleanTitle || "核心功能"}按实现范围可正常使用；2. 权限与边界条件符合团队规范。`,
-      rationale: "生成可核对的验收标准草稿（请人工复核补充）",
+      rationale: "规则降级：保留用户输入原文作为实现范围草稿（请人工核对）",
     });
   }
   return candidates;
+}
+
+const allowedL3Intents = new Set([
+  "my_work",
+  "story_progress",
+  "workflow_risks",
+  "draft_story",
+]);
+
+const l3IntentOutputSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("label"),
+    intent: z.enum([
+      "my_work",
+      "story_progress",
+      "workflow_risks",
+      "draft_story",
+    ]),
+    confidence: z.enum(["high", "medium"]).default("medium"),
+    storyId: z.number().int().positive().optional(),
+    month: z
+      .string()
+      .regex(/^\d{4}-(?:0[1-9]|1[0-2])$/u)
+      .optional(),
+    riskFocus: z.enum(["overdue", "blocked", "all"]).optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("ambiguous"),
+    question: z.string().trim().min(1).max(200).optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("unsupported"),
+    reason: z.string().trim().min(1).max(200).optional(),
+  }),
+]);
+
+type ParsedL3Intent =
+  | {
+      readonly kind: "label";
+      readonly intent:
+        "my_work" | "story_progress" | "workflow_risks" | "draft_story";
+      readonly confidence: "high" | "medium";
+      readonly storyId?: number | undefined;
+      readonly month?: string | undefined;
+      readonly riskFocus?: "overdue" | "blocked" | "all" | undefined;
+    }
+  | { readonly kind: "ambiguous"; readonly question?: string | undefined }
+  | { readonly kind: "unsupported"; readonly reason?: string | undefined };
+
+function buildIntentClassifierSystemPrompt(
+  role: PortalRole,
+  month: string,
+  selectedStoryId?: number,
+): string {
+  return [
+    "你是 better-zentao 研发协作工作台的意图分类器。",
+    `当前职责: ${role}，工作月份: ${month}${selectedStoryId ? `，当前选中需求: #${selectedStoryId}` : ""}。`,
+    "仅允许分类为以下受支持意图之一：my_work（我的工作/待办）、story_progress（查询某条需求进展）、workflow_risks（扫描月度或逾期/阻塞风险）、draft_story（新建/起草一条需求）。",
+    "严禁输出 confirm_operation、delete 等写入确认或删除操作；若用户意图模糊、同时包含多个独立目标，请返回 kind=ambiguous 并给出中文澄清问题；若不在上述范围内，请返回 kind=unsupported。",
+    '仅输出严格 JSON：{"kind":"label","intent":"my_work|story_progress|workflow_risks|draft_story","confidence":"high|medium","storyId":101,"month":"2026-11","riskFocus":"overdue|blocked|all"} 或 {"kind":"ambiguous","question":"..."} 或 {"kind":"unsupported","reason":"..."}。',
+  ].join("\n");
+}
+
+function parseL3IntentOutput(rawText: string): ParsedL3Intent {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/iu.exec(rawText);
+  const candidate = (fenced?.[1] ?? rawText).trim();
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    return {
+      kind: "ambiguous",
+      question:
+        "未能准确识别您的意图，请明确说明要查看个人工作、查询指定需求进展、扫描风险还是提出新需求。",
+    };
+  }
+  let rawJson: unknown;
+  try {
+    rawJson = JSON.parse(candidate.slice(start, end + 1));
+  } catch {
+    return {
+      kind: "ambiguous",
+      question:
+        "未能准确识别您的意图，请明确说明要查看个人工作、查询指定需求进展、扫描风险还是提出新需求。",
+    };
+  }
+  const rawLabel = z
+    .object({
+      kind: z.literal("label"),
+      intent: z.string(),
+    })
+    .safeParse(rawJson);
+  if (rawLabel.success && !allowedL3Intents.has(rawLabel.data.intent)) {
+    return {
+      kind: "unsupported",
+      reason: "模型建议的操作不在当前允许的业务意图范围内，已拦截。",
+    };
+  }
+  const parsed = l3IntentOutputSchema.safeParse(rawJson);
+  if (!parsed.success) {
+    return {
+      kind: "ambiguous",
+      question:
+        "未能准确识别您的意图，请明确说明要查看个人工作、查询指定需求进展、扫描风险还是提出新需求。",
+    };
+  }
+  return parsed.data;
 }
 
 export async function runCopilotTurn(
@@ -235,12 +334,12 @@ export async function runCopilotTurn(
     if (isRevoked()) throw new BztError("AUTH_FAILED", "本次会话已结束。");
 
     const parsed = parseModelPatchOutput(completion.text);
-    const candidates =
-      parsed.patches.length > 0
-        ? parsed.patches
-        : form.tool === "create_story"
-          ? fallbackCreateStoryCandidates(prompt, form)
-          : [];
+    const modelParseFailed = !parsed.ok;
+    const candidates = parsed.ok
+      ? parsed.patches
+      : form.tool === "create_story"
+        ? fallbackCreateStoryCandidates(prompt, form)
+        : [];
 
     const proposal = validateFormPatchProposal({
       proposalId: nextId("prop"),
@@ -263,18 +362,32 @@ export async function runCopilotTurn(
       candidates,
       missingFields: parsed.missingFields,
     });
+    const finalProposal = modelParseFailed
+      ? {
+          ...proposal,
+          warnings: [
+            ...proposal.warnings,
+            proposal.patches.length > 0
+              ? "模型输出未按结构化字段格式返回，已降级按规则提取原文草稿，请人工核对并补充必填项。"
+              : "模型输出未按结构化字段格式返回，本次未能生成有效字段补丁，请直接手工编辑表单。",
+          ],
+        }
+      : proposal;
 
-    const autoCount = proposal.patches.filter(
+    const autoCount = finalProposal.patches.filter(
       (p) => p.mode === "fill_empty",
     ).length;
-    const conflictCount = proposal.patches.filter(
+    const conflictCount = finalProposal.patches.filter(
       (p) => p.mode === "propose_replace",
     ).length;
-    const summary =
-      parsed.summary ??
-      (proposal.patches.length === 0
-        ? "未发现需要调整的表单字段，可继续手工编辑或点击「预览并创建」。"
-        : `已生成 ${proposal.patches.length} 项字段建议（自动填充空字段 ${autoCount} 项，待您采纳的覆盖建议 ${conflictCount} 项）。`);
+    const summary = modelParseFailed
+      ? finalProposal.patches.length > 0
+        ? `模型输出无法解析为结构化补丁，已降级按规则提取 ${finalProposal.patches.length} 项基础草稿（请人工核对补充后点击「预览并创建」）。`
+        : "模型输出无法解析为结构化补丁，未能生成字段变更，请直接手工编辑表单。"
+      : (parsed.summary ??
+        (finalProposal.patches.length === 0
+          ? "未发现需要调整的表单字段，可继续手工编辑或点击「预览并创建」。"
+          : `已生成 ${finalProposal.patches.length} 项字段建议（自动填充空字段 ${autoCount} 项，待您采纳的覆盖建议 ${conflictCount} 项）。`));
 
     return copilotTurnResponseSchema.parse({
       ok: true,
@@ -284,12 +397,13 @@ export async function runCopilotTurn(
       routeSource: "in_context",
       // CR-009 P1-6 / AGENTS.md 红线 8：模型派生文本与字段建议一律标为不可信数据。
       untrusted: true,
-      proposal,
+      proposal: finalProposal,
     });
   }
 
-  // 2. 自然语言发起提需：由系统打开同一正式「提出需求」表单并注入受控草稿，绝不维护第二套表单。
-  if (intakeTriggerPattern.test(prompt)) {
+  async function openCreateStoryForm(
+    routeSource: "in_context" | "l1" | "l3",
+  ): Promise<CopilotTurnResponse> {
     const page = portalRolePage(role);
     if (readOnly)
       throw new BztError(
@@ -316,10 +430,10 @@ export async function runCopilotTurn(
     if (isRevoked()) throw new BztError("AUTH_FAILED", "本次会话已结束。");
 
     const parsed = parseModelPatchOutput(completion.text);
-    const candidates =
-      parsed.patches.length > 0
-        ? parsed.patches
-        : fallbackCreateStoryCandidates(prompt, emptyForm);
+    const modelParseFailed = !parsed.ok;
+    const candidates = parsed.ok
+      ? parsed.patches
+      : fallbackCreateStoryCandidates(prompt, emptyForm);
     const proposal = validateFormPatchProposal({
       proposalId: nextId("prop"),
       role,
@@ -339,27 +453,54 @@ export async function runCopilotTurn(
       candidates,
       missingFields: parsed.missingFields,
     });
+    const finalProposal = modelParseFailed
+      ? {
+          ...proposal,
+          warnings: [
+            ...proposal.warnings,
+            proposal.patches.length > 0
+              ? "模型输出未按结构化字段格式返回，已降级按规则提取原文草稿，请人工核对并补充必填项。"
+              : "模型输出未按结构化字段格式返回，未能提取字段草稿，请在正式表单中手工填写。",
+          ],
+        }
+      : proposal;
 
     return copilotTurnResponseSchema.parse({
       ok: true,
       turnId,
       kind: "open_form_patch",
-      summary:
-        parsed.summary ??
-        "已为您打开正式「提出需求」表单并填充初步草稿，请核对补充后点击「预览并创建」。",
-      routeSource: "in_context",
+      summary: modelParseFailed
+        ? finalProposal.patches.length > 0
+          ? `模型输出无法解析为结构化草稿，已打开正式「提出需求」表单并按规则提取 ${finalProposal.patches.length} 项基础草稿，请人工核对补充后点击「预览并创建」。`
+          : "模型输出无法解析为结构化草稿，已为您打开空白正式「提出需求」表单（未自动填充字段），请手工填写后点击「预览并创建」。"
+        : (parsed.summary ??
+          (finalProposal.patches.length > 0
+            ? `已为您打开正式「提出需求」表单并填充 ${finalProposal.patches.length} 项初步草稿，请核对补充后点击「预览并创建」。`
+            : "已为您打开正式「提出需求」表单，请手工填写后点击「预览并创建」。")),
+      routeSource,
       untrusted: true,
       openForm: { section: "intake", tool: "create_story" },
-      proposal,
+      proposal: finalProposal,
     });
   }
 
-  // 3. 在需求台账上的原位筛选建议：仅当用户所有筛选条件都能完整映射为可执行台账条件时返回，
-  //    若包含风险/逾期/阻塞/巡检等台账不支持的筛选词，绝不丢弃主要条件，直接转交风险扫描或查询。
+  // 2. 自然语言发起提需（仅单意图时短路，多意图交由意图分类器澄清）：打开同一正式「提出需求」表单。
+  const hasSecondaryQueryIntent =
+    myWorkWords.test(prompt) ||
+    riskWords.test(prompt) ||
+    progressWords.test(prompt) ||
+    extractStoryRef(prompt) !== undefined ||
+    multiIntentJoinPattern.test(prompt);
+  if (intakeTriggerPattern.test(prompt) && !hasSecondaryQueryIntent) {
+    return await openCreateStoryForm("in_context");
+  }
+
+  // 3. 在需求台账上的原位筛选建议（仅单意图且全部条件可映射时返回，多意图或含风险词交由意图分类器处理）。
   if (
     context.view === "stories" &&
     filterTriggerPattern.test(prompt) &&
-    !riskWords.test(prompt)
+    !hasSecondaryQueryIntent &&
+    !intakeTriggerPattern.test(prompt)
   ) {
     const filters: Record<string, string> = {};
     if (/未就绪/u.test(prompt)) filters.progress = "未就绪";
@@ -378,8 +519,52 @@ export async function runCopilotTurn(
     }
   }
 
-  // 4. 其余分析/查询类意图：通过 IntentRouter + CapabilityRuntime(channel="ai") 执行真实业务查询。
-  const router = createIntentRouter();
+  // 4. 其余分析/查询/拟稿意图：L1 确定性规则短路（零冗余模型调用）→ L3 个人 ModelGateway 结构化意图分类兜底。
+  let usedL3 = false;
+  let l3Params: {
+    storyId?: number | undefined;
+    month?: string | undefined;
+    riskFocus?: "overdue" | "blocked" | "all" | undefined;
+  } = {};
+  const router = createIntentRouter({
+    classify: async (text) => {
+      usedL3 = true;
+      const completion = await gateway.complete(principal, {
+        messages: [
+          {
+            role: "system",
+            content: buildIntentClassifierSystemPrompt(
+              role,
+              effectiveMonth,
+              context.selectedStoryId,
+            ),
+          },
+          {
+            role: "user",
+            content: JSON.stringify({
+              text,
+              view: context.view,
+              ...(context.selectedStoryId === undefined
+                ? {}
+                : { selectedStoryId: context.selectedStoryId }),
+              month: effectiveMonth,
+            }),
+          },
+        ],
+        abortSignal,
+      });
+      if (isRevoked()) throw new BztError("AUTH_FAILED", "本次会话已结束。");
+      const verdict = parseL3IntentOutput(completion.text);
+      if (verdict.kind === "label") {
+        l3Params = {
+          storyId: verdict.storyId,
+          month: verdict.month,
+          riskFocus: verdict.riskFocus,
+        };
+      }
+      return verdict;
+    },
+  });
   const explicitRef = extractStoryRef(prompt);
   const explicitStoryId =
     explicitRef !== undefined
@@ -407,8 +592,8 @@ export async function runCopilotTurn(
       turnId,
       kind: "clarification",
       summary: routed.question,
-      routeSource: "l1",
-      untrusted: false,
+      routeSource: usedL3 ? "l3" : "l1",
+      untrusted: usedL3,
     });
   }
   if (routed.kind === "rejection") {
@@ -417,8 +602,8 @@ export async function runCopilotTurn(
       turnId,
       kind: "rejection",
       summary: routed.reason,
-      routeSource: "l1",
-      untrusted: false,
+      routeSource: usedL3 ? "l3" : "l1",
+      untrusted: usedL3,
     });
   }
   if (routed.kind !== "routed") {
@@ -428,9 +613,13 @@ export async function runCopilotTurn(
       kind: "clarification",
       summary:
         "请一次描述一个具体目标，或在「AI 协作」工作台分步处理复杂任务。",
-      routeSource: "l1",
-      untrusted: false,
+      routeSource: usedL3 ? "l3" : "l1",
+      untrusted: usedL3,
     });
+  }
+
+  if (routed.intent === "draft_story") {
+    return await openCreateStoryForm(routed.source);
   }
 
   let toolName: string;
@@ -439,7 +628,9 @@ export async function runCopilotTurn(
   let extraNotice = "";
   switch (routed.intent) {
     case "story_progress": {
-      if (explicitStoryId === undefined) {
+      const targetStoryId =
+        explicitRef ?? l3Params.storyId ?? context.selectedStoryId;
+      if (targetStoryId === undefined) {
         return copilotTurnResponseSchema.parse({
           ok: true,
           turnId,
@@ -447,23 +638,25 @@ export async function runCopilotTurn(
           summary:
             "请告诉我需要查看的需求编号（例如 #101），或在列表中先选中一条需求。",
           routeSource: routed.source,
-          untrusted: routed.untrusted,
+          untrusted: routed.source === "l3" || routed.untrusted,
         });
       }
       toolName = "get_story_progress";
-      toolInput = { storyId: explicitStoryId, view: "full", format: "data" };
+      toolInput = { storyId: targetStoryId, view: "full", format: "data" };
       break;
     }
     case "workflow_risks": {
       toolName = "scan_workflow_risks";
       const targetMonth =
-        promptMonthPattern.exec(prompt)?.[1] ?? effectiveMonth;
+        promptMonthPattern.exec(prompt)?.[1] ??
+        l3Params.month ??
+        effectiveMonth;
       invokeMonth = targetMonth;
       const focusedRules: string[] = [];
-      if (/逾期|超期/u.test(prompt)) {
+      if (/逾期|超期/u.test(prompt) || l3Params.riskFocus === "overdue") {
         focusedRules.push("R01");
       }
-      if (/阻塞|滞留/u.test(prompt)) {
+      if (/阻塞|滞留/u.test(prompt) || l3Params.riskFocus === "blocked") {
         focusedRules.push("R02", "R03", "R04", "R07", "R11");
       }
       toolInput = {
@@ -483,8 +676,14 @@ export async function runCopilotTurn(
       toolInput = {};
       break;
     default:
-      toolName = "query_stories";
-      toolInput = {};
+      return copilotTurnResponseSchema.parse({
+        ok: true,
+        turnId,
+        kind: "rejection",
+        summary: "该请求不在当前支持的业务意图范围内。",
+        routeSource: routed.source,
+        untrusted: routed.source === "l3" || routed.untrusted,
+      });
   }
 
   const toolResult = await runtime.invoke(

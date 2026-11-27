@@ -1041,7 +1041,9 @@ export function mountInContextCopilot({
   });
 
   settingsBtn.addEventListener("click", () => {
-    byId("account-dialog")?.close?.();
+    const popover = byId("account-popover");
+    if (popover) popover.hidden = true;
+    byId("account-start")?.setAttribute?.("aria-expanded", "false");
     void openSettings();
   });
   byId("ai-settings-close")?.addEventListener("click", () =>

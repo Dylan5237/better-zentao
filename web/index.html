@@ -212,40 +212,34 @@
           >
             AI 助手
           </button>
-          <div id="report-period" class="report-period" hidden>
-            <label for="report-month">时间范围</label>
-            <input type="month" id="report-month" class="bzt-input" />
+          <div class="toolbar-data-group" id="toolbar-data-group">
+            <div id="report-period" class="report-period" hidden>
+              <label for="report-month">工作月份</label>
+              <input type="month" id="report-month" class="bzt-input" />
+              <button
+                type="button"
+                id="report-month-reset"
+                class="btn-secondary btn-sm"
+                hidden
+              >
+                本月
+              </button>
+            </div>
             <button
               type="button"
-              id="report-month-reset"
+              id="sync-data"
               class="btn-secondary btn-sm"
               hidden
             >
-              本月
+              同步本页
             </button>
+            <span
+              id="data-update"
+              class="data-update"
+              role="status"
+              hidden
+            ></span>
           </div>
-          <button
-            type="button"
-            id="sync-data"
-            class="btn-secondary btn-sm"
-            hidden
-          >
-            同步本页
-          </button>
-          <span
-            id="data-update"
-            class="data-update"
-            role="status"
-            hidden
-          ></span>
-          <button
-            type="button"
-            id="account-start"
-            class="btn-secondary btn-sm"
-            hidden
-          >
-            我的账号
-          </button>
           <button
             type="button"
             id="theme-button"
@@ -260,6 +254,79 @@
             aria-label="重置界面偏好"
             title="恢复当前职责默认界面"
           ></button>
+          <div class="account-menu-wrap" id="account-menu-wrap">
+            <button
+              type="button"
+              id="account-start"
+              class="account-trigger"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="account-popover"
+              hidden
+            >
+              <span
+                class="account-avatar"
+                id="account-avatar"
+                aria-hidden="true"
+              ></span>
+              <span class="account-trigger-name" id="account-trigger-name"
+                >我的账号</span
+              >
+            </button>
+            <div
+              id="account-popover"
+              class="account-popover"
+              role="menu"
+              aria-label="账号与系统菜单"
+              hidden
+            >
+              <div class="account-popover-head">
+                <strong id="session-account"></strong>
+                <span
+                  id="account-role-meta"
+                  class="account-popover-meta"
+                ></span>
+                <p id="role-focus" class="account-popover-focus"></p>
+                <span id="as-of" class="mono account-popover-asof"></span>
+              </div>
+              <div class="account-popover-items">
+                <button
+                  id="ai-settings-button"
+                  class="account-popover-item"
+                  type="button"
+                  role="menuitem"
+                  hidden
+                >
+                  个人 AI 设置
+                </button>
+                <button
+                  id="role-settings-button"
+                  class="account-popover-item"
+                  type="button"
+                  role="menuitem"
+                >
+                  我的职责
+                </button>
+                <button
+                  id="about-button"
+                  class="account-popover-item"
+                  type="button"
+                  role="menuitem"
+                >
+                  关于与系统信息
+                </button>
+                <div class="account-popover-divider" role="separator"></div>
+                <button
+                  id="logout-button"
+                  class="account-popover-item is-danger"
+                  type="button"
+                  role="menuitem"
+                >
+                  退出登录
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </header>
       <div class="bzt-body">
@@ -289,20 +356,6 @@
             <div id="fb-perm-note" class="sidebar-perm-note" hidden>
               已按业务反馈者权限隐藏内部研发与管理菜单
             </div>
-            <section class="sidebar-role-card">
-              <div class="sidebar-role-card-head">
-                <span id="role-group" class="role-chip"></span
-                ><span id="as-of" class="mono sidebar-asof"></span>
-              </div>
-              <button
-                type="button"
-                id="account-menu"
-                class="sidebar-role-title"
-                aria-label="账号与职责"
-                title="账号与职责"
-              ></button>
-              <p id="role-focus" class="sidebar-role-focus"></p>
-            </section>
           </div>
           <div class="sidebar-footer">
             <span class="sidebar-footer-note">权限按角色与禅道账号收口</span
@@ -343,36 +396,20 @@
         </aside>
       </div>
       <dialog
-        id="account-dialog"
+        id="about-dialog"
         class="portal-dialog write-modal"
-        aria-label="账号与职责"
+        aria-label="关于与系统信息"
       >
         <div class="modal-head modal-header">
-          <strong>账号与职责</strong
+          <strong>关于 better-zentao</strong
           ><button
             class="icon-btn-subtle"
-            id="account-close"
+            id="about-close"
             type="button"
             aria-label="关闭"
           ></button>
         </div>
-        <div class="modal-body">
-          <p id="session-account"></p>
-          <button
-            id="ai-settings-button"
-            class="btn-secondary"
-            type="button"
-            hidden
-          >
-            个人 AI 设置
-          </button>
-          <button id="role-settings-button" class="btn-secondary" type="button">
-            我的职责
-          </button>
-          <button id="logout-button" class="btn-secondary" type="button">
-            退出
-          </button>
-        </div>
+        <div id="about-body" class="modal-body"></div>
       </dialog>
       <dialog
         id="ai-settings-dialog"

@@ -3,7 +3,7 @@
 > 关联总控 Issue：[#7](https://github.com/Dylan5237/better-zentao/issues/7)
 > 关联前端子任务：[#6](https://github.com/Dylan5237/better-zentao/issues/6)
 > 关联前序交付：[#2](https://github.com/Dylan5237/better-zentao/issues/2)（Server 1.0 已验收关闭）
-> 状态：**ARCHITECTURE BASELINE REVIEW REQUESTED**（M1 架构基线、垂直切片契约验证与 M2 双视图/个人 AI 设置设计完成，提请架构方向评审）
+> 状态：**PRODUCT RC / USER ACCEPTANCE READY**（M1 架构基线、M2 前端产品化、M3 原位协作与 L1/L3 个人模型网关闭环完成，真实公司网关私网实测待所有者授权）
 > 基准 Commit：`b716ea579b2f20b181bac0e90912988ec86842fe`（`main`）
 > 编制日期：2026-11-27
 
@@ -194,7 +194,7 @@ M1 不做空壳全量搬运，而是围绕**最具代表性的读 + 受控写垂
 2. **收口顶部职责切换（本轮已落地）**：单职责仅显示清晰当前职责标识（无多余选择器）；多职责提供简洁紧凑切换器，去除“X 角色”计数装饰。
 3. **去除“一档/二档/三档”Demo 标签（本轮已落地）**：将原三档 Demo 按钮收口为自然的个人视图偏好标签（`表格台账` / `混合视图` / `卡片概览`），保留原高密度表格台账与卡片概览的全部业务能力、筛选与操作入口 100% 可达。
 4. **跨实例与 `readOnly` 上下文隔离加固（本轮已落地，关闭 F-P1-03）**：补全 `meridian-shell.js`、`workbench-page.js`、`daily-pages.js`、`management-pages.js`、`write-views.js` 存储键的 `instanceId` 维度，并在 `app.js` `createPortalSession.sync()` 将 `readOnly` 变更纳入作用域失效判定。生产 UI **不暴露未实现的假 AI 按钮**。
-5. **M2-收口项（架构基线通过后完成）**：将账号弹窗改造为右上角常规头像/账号下拉菜单（含「关于 / 系统信息」面板与后续「AI 设置」入口），进一步增强工作月份/同步状态视觉层次并开展浏览器合成数据视觉验收。
+5. **M2-收口项（已落地生产前端 `web/`）**：已将侧栏 Demo 账号卡与全屏账号弹窗改造为右上角常规头像/账号下拉菜单（含「关于与系统信息」弹窗、本地模式「我的职责」与启用 AI 时的「个人 AI 设置」入口），去除顶部职责切换的分组标签装饰，并整合工作月份与真实同步反馈状态条；已完成本地合成数据浏览器交互验证，真实企业模型网关私网实测仍待项目所有者授权。
 
 ### 6.2 双视图 + 个人 AI 设置高保真交互原型（`docs/design/bzt-2.0-dual-view-prototype.html`）
 

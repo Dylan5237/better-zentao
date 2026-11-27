@@ -128,6 +128,7 @@ describe("ADR-28 validateFormPatchProposal 纯契约校验", () => {
     expect(ok.summary).toBe("已补全");
     expect(ok.patches).toHaveLength(1);
     expect(parseModelPatchOutput("普通自由文本不含 JSON")).toEqual({
+      ok: false,
       patches: [],
       missingFields: [],
     });
@@ -1032,5 +1033,300 @@ describe("集中端 /api/ai/* 个人网关隔离与原位协作端到端闭环",
 
     // P2：1-2 字节短凭据的 Base64URL 形式同样被 containsCredentialLeak 拦截。
     expect(containsCredentialLeak("leak YWI end", "ab")).toBe(true);
+  });
+
+  it("M3 收口：真实 /api/ai/copilot 接入 L3 模型分类兜底、L1 零冗余调用、选中对象不误劫持及降级如实提示", async () => {
+    const modelCalls: string[] = [];
+    const server = await startAiServer({
+      aiTransport: {
+        send: async (req) => {
+          const userMsg = JSON.stringify(req.body ?? "");
+          modelCalls.push(userMsg);
+          if (userMsg.includes('"ping"')) return { kind: "ok", text: "pong" };
+          if (userMsg.includes("最近有哪些活儿压在我手上")) {
+            return {
+              kind: "ok",
+              text: JSON.stringify({
+                kind: "label",
+                intent: "my_work",
+                confidence: "medium",
+              }),
+            };
+          }
+          if (userMsg.includes("帮我订机票") || userMsg.includes("航班")) {
+            return {
+              kind: "ok",
+              text: JSON.stringify({
+                kind: "unsupported",
+                reason: "差旅订票不在研发协作工作台支持范围内。",
+              }),
+            };
+          }
+          if (
+            userMsg.includes("顺便") ||
+            (userMsg.includes("新建需求") && userMsg.includes("#101")) ||
+            (userMsg.includes("只看研发需求") && userMsg.includes("#101"))
+          ) {
+            return {
+              kind: "ok",
+              text: JSON.stringify({
+                kind: "ambiguous",
+                question: "您同时提到了多个独立目标，请问先处理哪一项？",
+              }),
+            };
+          }
+          if (userMsg.includes("无需修改表单")) {
+            return {
+              kind: "ok",
+              text: JSON.stringify({ patches: [] }),
+            };
+          }
+          if (userMsg.includes("越权删除")) {
+            return {
+              kind: "ok",
+              text: JSON.stringify({
+                kind: "label",
+                intent: "confirm_operation",
+                confidence: "high",
+              }),
+            };
+          }
+          if (userMsg.includes("新开一个诉求单")) {
+            return {
+              kind: "ok",
+              text: JSON.stringify({
+                kind: "label",
+                intent: "draft_story",
+                confidence: "medium",
+              }),
+            };
+          }
+          if (userMsg.includes("乱码输出")) {
+            return {
+              kind: "ok",
+              text: "这是一段非 JSON 自由文本，不包含任何结构化字段。",
+            };
+          }
+          return {
+            kind: "ok",
+            text: JSON.stringify({
+              summary: "已按诉求整理需求草稿",
+              patches: [
+                {
+                  field: "title",
+                  value: "新增导出报表功能",
+                  rationale: "提炼需求标题",
+                },
+              ],
+              missingFields: ["product", "module"],
+            }),
+          };
+        },
+      },
+    });
+
+    const alice = browser(server);
+    await login(alice, "instanceA", "alice");
+    expect(
+      (
+        await alice.send("/api/ai/config", {
+          baseUrl: gatewayOrigin + "/v1",
+          protocol: "openai-compatible",
+          modelId: "corp-gpt",
+          token: tokenAlice,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await alice.send("/api/ai/config/test", {})).status).toBe(200);
+    modelCalls.length = 0;
+
+    // 1. 明确规则命中（L1 短路）：零模型调用。
+    const l1Hit = await alice.send("/api/ai/copilot", {
+      role: "RM",
+      prompt: "我今天的工作待办",
+      context: { view: "workbench" },
+    });
+    expect(l1Hit.status).toBe(200);
+    expect(l1Hit.body).toMatchObject({
+      ok: true,
+      kind: "tool_result",
+      tool: "get_my_work",
+      routeSource: "l1",
+    });
+    expect(modelCalls).toHaveLength(0);
+
+    // 2. 关键词未命中的同义表达 + 页面已选中需求 #101：不被 selectedStoryId 劫持，走 L3 模型分类到 my_work。
+    const l3Synonym = await alice.send("/api/ai/copilot", {
+      role: "RM",
+      prompt: "最近有哪些活儿压在我手上",
+      context: { view: "stories", selectedStoryId: 101 },
+    });
+    expect(l3Synonym.status).toBe(200);
+    expect(l3Synonym.body).toMatchObject({
+      ok: true,
+      kind: "tool_result",
+      tool: "get_my_work",
+      routeSource: "l3",
+      untrusted: true,
+    });
+    expect(modelCalls).toHaveLength(1);
+
+    // 3. 选中对象下的不支持请求：不被劫持进 story_progress，L3 返回 rejection。
+    const unsupported = await alice.send("/api/ai/copilot", {
+      role: "RM",
+      prompt: "帮我订机票",
+      context: { view: "stories", selectedStoryId: 101 },
+    });
+    expect(unsupported.status).toBe(200);
+    expect(unsupported.body).toMatchObject({
+      ok: true,
+      kind: "rejection",
+      routeSource: "l3",
+      summary: expect.stringContaining("不在研发协作工作台支持范围内"),
+    });
+
+    // 4. 多意图请求（含提需+待办、筛选+待办、待办+风险）：均不被提前截断，交 L3 澄清。
+    const multiIntent = await alice.send("/api/ai/copilot", {
+      role: "RM",
+      prompt: "看我的待办顺便扫一下风险",
+      context: { view: "stories", selectedStoryId: 101 },
+    });
+    expect(multiIntent.status).toBe(200);
+    expect(multiIntent.body).toMatchObject({
+      ok: true,
+      kind: "clarification",
+      routeSource: "l3",
+    });
+
+    const multiIntake = await alice.send("/api/ai/copilot", {
+      role: "RD",
+      prompt: "新建需求：增加导出，顺便查一下我的待办",
+      context: { view: "workbench" },
+    });
+    expect(multiIntake.status).toBe(200);
+    expect(multiIntake.body).toMatchObject({
+      ok: true,
+      kind: "clarification",
+      routeSource: "l3",
+    });
+
+    const multiFilter = await alice.send("/api/ai/copilot", {
+      role: "RM",
+      prompt: "只看研发需求，顺便查一下我的待办",
+      context: { view: "stories" },
+    });
+    expect(multiFilter.status).toBe(200);
+    expect(multiFilter.body).toMatchObject({
+      ok: true,
+      kind: "clarification",
+      routeSource: "l3",
+    });
+
+    // 4b. 选中需求 #101 后，含「当前」或裸数字的无关状态查询（如「帮我查当前航班 123 什么状态」）：
+    //     不被 L1 劫持进 story_progress，经 L3 拒识；含 #101 进展的多意图也不被提需/筛选截断。
+    const unrelatedStatus = await alice.send("/api/ai/copilot", {
+      role: "RM",
+      prompt: "帮我查当前航班 123 现在什么状态",
+      context: { view: "stories", selectedStoryId: 101 },
+    });
+    expect(unrelatedStatus.status).toBe(200);
+    expect(unrelatedStatus.body).toMatchObject({
+      ok: true,
+      kind: "rejection",
+      routeSource: "l3",
+    });
+
+    const multiIntakeProgress = await alice.send("/api/ai/copilot", {
+      role: "RD",
+      prompt: "新建需求：增加导出，查看 #101 的进展",
+      context: { view: "workbench" },
+    });
+    expect(multiIntakeProgress.status).toBe(200);
+    expect(multiIntakeProgress.body).toMatchObject({
+      ok: true,
+      kind: "clarification",
+      routeSource: "l3",
+    });
+
+    const validEmptyPatch = await alice.send("/api/ai/copilot", {
+      role: "RD",
+      prompt: "无需修改表单，确认是否完整",
+      context: {
+        view: "intake",
+        form: {
+          formId: "create_story:100",
+          tool: "create_story",
+          revision: 1,
+          fields: {},
+          userEditedFields: [],
+        },
+      },
+    });
+    expect(validEmptyPatch.status).toBe(200);
+    expect(validEmptyPatch.body).toMatchObject({
+      ok: true,
+      kind: "form_patch",
+      summary: expect.stringContaining("未发现需要调整的表单字段"),
+      proposal: { patches: [] },
+    });
+
+    // 5. 模型输出越权动作（confirm_operation）：严禁执行，返回 rejection。
+    const privEsc = await alice.send("/api/ai/copilot", {
+      role: "RM",
+      prompt: "帮我越权删除",
+      context: { view: "stories" },
+    });
+    expect(privEsc.status).toBe(200);
+    expect(privEsc.body).toMatchObject({
+      ok: true,
+      kind: "rejection",
+      routeSource: "l3",
+      summary: expect.stringContaining("不在当前允许的业务意图范围内"),
+    });
+
+    // 6. L3 分类为 draft_story：打开正式 create_story 表单草稿，不落入 query_stories。
+    const l3Draft = await alice.send("/api/ai/copilot", {
+      role: "RD",
+      prompt: "新开一个诉求单：需要支持导出报表",
+      context: { view: "workbench" },
+    });
+    expect(l3Draft.status).toBe(200);
+    expect(l3Draft.body).toMatchObject({
+      ok: true,
+      kind: "open_form_patch",
+      routeSource: "l3",
+      openForm: { section: "intake", tool: "create_story" },
+    });
+
+    // 7. 表单拟稿模型输出不可解析时：如实提示规则降级，且不编造泛化验收标准。
+    const degraded = await alice.send("/api/ai/copilot", {
+      role: "RD",
+      prompt: "帮我补全乱码输出场景的需求草稿",
+      context: {
+        view: "intake",
+        form: {
+          formId: "create_story:99",
+          tool: "create_story",
+          revision: 1,
+          fields: {},
+          userEditedFields: [],
+        },
+      },
+    });
+    expect(degraded.status).toBe(200);
+    expect(degraded.body).toMatchObject({
+      ok: true,
+      kind: "form_patch",
+      summary: expect.stringContaining("无法解析"),
+      proposal: {
+        warnings: expect.arrayContaining([
+          expect.stringContaining("降级按规则提取"),
+        ]),
+      },
+    });
+    const degradedPatches = (
+      degraded.body as { proposal: { patches: { field: string }[] } }
+    ).proposal.patches;
+    expect(degradedPatches.some((p) => p.field === "verify")).toBe(false);
   });
 });

@@ -509,6 +509,7 @@ const modelPatchEnvelopeSchema = z.object({
 
 /** 从模型返回文本中安全解析受控 JSON 补丁（容忍 ```json 代码块，拒绝非对象或非法格式）。 */
 export function parseModelPatchOutput(text: string): {
+  readonly ok: boolean;
   readonly summary?: string;
   readonly patches: readonly RawFieldPatchCandidate[];
   readonly missingFields: readonly string[];
@@ -518,13 +519,14 @@ export function parseModelPatchOutput(text: string): {
   const startIdx = candidate.indexOf("{");
   const endIdx = candidate.lastIndexOf("}");
   if (startIdx === -1 || endIdx <= startIdx) {
-    return { patches: [], missingFields: [] };
+    return { ok: false, patches: [], missingFields: [] };
   }
   try {
     const raw: unknown = JSON.parse(candidate.slice(startIdx, endIdx + 1));
     const parsed = modelPatchEnvelopeSchema.safeParse(raw);
-    if (!parsed.success) return { patches: [], missingFields: [] };
+    if (!parsed.success) return { ok: false, patches: [], missingFields: [] };
     return {
+      ok: true,
       ...(parsed.data.summary === undefined
         ? {}
         : { summary: parsed.data.summary }),
@@ -532,6 +534,6 @@ export function parseModelPatchOutput(text: string): {
       missingFields: parsed.data.missingFields ?? [],
     };
   } catch {
-    return { patches: [], missingFields: [] };
+    return { ok: false, patches: [], missingFields: [] };
   }
 }
