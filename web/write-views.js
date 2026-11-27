@@ -1462,7 +1462,9 @@ export function renderWrite(
   const current = () =>
     !options.signal?.aborted && view.isConnected && container.contains(view);
   const loading = { signal: options.signal, current };
-  const storeKey = `bzt.portal.operation.${JSON.stringify([account, role, tool])}`;
+  const storeKey = options.instanceId
+    ? `bzt.portal.operation.${JSON.stringify([options.instanceId, account, role, tool])}`
+    : `bzt.portal.operation.${JSON.stringify([account, role, tool])}`;
   const fieldLabels = new Map(
     (tool === "create_story" && role === "FB" && options.intakePage
       ? businessFeedback

@@ -569,4 +569,34 @@ describe("本机门户首次登录与职责设置", () => {
       }),
     ]);
   });
+
+  it("M2-02 仅 readOnly 策略变更时使旧作用域失效并重刷工作台", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        json({
+          instanceId: "instanceA",
+          account: "alice",
+          csrfToken: "csrf-a",
+          readOnly: false,
+          roles: [fb],
+        }),
+      )
+      .mockResolvedValueOnce(
+        json({
+          instanceId: "instanceA",
+          account: "alice",
+          csrfToken: "csrf-a",
+          readOnly: true,
+          roles: [fb],
+        }),
+      );
+    const portal = createPortalSession(request);
+    await portal.restore();
+    const before = portal.scope();
+    expect(before.current()).toBe(true);
+    await expect(portal.sync()).resolves.toBe("workspace");
+    expect(before.current()).toBe(false);
+    expect(portal.identity?.readOnly).toBe(true);
+  });
 });

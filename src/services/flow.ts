@@ -1,12 +1,8 @@
 import { z } from "zod";
-import { listProductBugs } from "../api/bug.ts";
 import { getCapability } from "../api/capabilities.ts";
 import type { ZentaoReadClient } from "../api/client.ts";
-import { listExecutionsIncludingClosed } from "../api/execution.ts";
-import { getCurrentUser } from "../api/org.ts";
-import { listProductPlans } from "../api/plan.ts";
-import { getStoryDetail } from "../api/story.ts";
-import { getTaskDetail, listExecutionTasks } from "../api/task.ts";
+import { createZentaoBusinessProvider } from "./providers/zentao-business-provider.ts";
+import type { BusinessProvider } from "./ports/business-provider.ts";
 import {
   operationPlanSchema,
   type OperationResult,
@@ -33,9 +29,11 @@ import type { Clock } from "../core/clock.ts";
 import type { TeamConfig } from "../core/config.ts";
 import { walkProductPlans } from "../core/dto/plan.ts";
 import type { StoryDetail } from "../core/dto/story.ts";
+import type { ProductPlan } from "../core/dto/plan.ts";
 import type { Task } from "../core/dto/task.ts";
+import type { Bug } from "../core/dto/bug.ts";
 import { BztError } from "../core/errors.ts";
-import { instanceHashOf, type LocalStore } from "../core/store/index.ts";
+import { instanceHashOf } from "../core/store/index.ts";
 import { htmlFragments } from "../domain/html-fragments.ts";
 import { resolveStoryRoles } from "../domain/roles.ts";
 import { detectStage } from "../domain/stage.ts";
@@ -63,12 +61,134 @@ type Cleanup = Extract<
   { mode: "cleanup" }
 >["cleanup"];
 
+/** FlowService 实际使用的存储子集（prepare/recordConfirmed 路径）。 */
+export interface FlowStore {
+  readonly location: {
+    readonly instanceHash: string;
+    readonly account: string;
+  };
+  readonly operations: {
+    get(opId: string): {
+      actor: string;
+      kind: string;
+      planJson: string;
+      executedAt: number | null;
+    };
+  };
+  readonly operationSteps: {
+    list(opId: string): Array<{
+      seq: number;
+      action: string;
+      zentaoId: number | null;
+      state: string;
+    }>;
+  };
+  readonly storyRoles: {
+    get(storyId: number): {
+      storyId: number;
+      maintainer: string | null;
+      receiver: string | null;
+      updatedAt: number;
+    };
+    upsert(role: {
+      storyId: number;
+      maintainer: string | null;
+      receiver: string | null;
+      updatedAt: number;
+    }): void;
+  };
+  readonly reschedules?: {
+    listByStory(storyId: number): ReadonlyArray<{
+      at: number;
+      by: string;
+      toMonth: string;
+      fromMonth: string | null;
+      reason: string;
+    }>;
+    append(input: {
+      storyId: number;
+      fromMonth: string | null;
+      toMonth: string;
+      reason: string;
+      by: string;
+      at: number;
+    }): void;
+  };
+  readonly stageRequirements?: {
+    get(storyId: number, stage: string): { decidedAt: number } | undefined;
+    listByStory(storyId: number): ReadonlyArray<{
+      stage: string;
+      required: boolean;
+    }>;
+    upsert(input: {
+      storyId: number;
+      stage: string;
+      required: boolean;
+      waiverReason: string | null;
+      decidedBy: string;
+      decidedAt: number;
+    }): void;
+  };
+  readonly waivers?: {
+    get(key: {
+      ruleId: string;
+      objectType: string;
+      objectId: string;
+    }): { at: number } | undefined;
+    upsert(input: {
+      ruleId: string;
+      objectType: string;
+      objectId: string;
+      reason: string;
+      approvedBy: string;
+      at: number;
+    }): void;
+  };
+  readonly sourceLinks?: {
+    listTo?(
+      toType: string,
+      toId: string,
+    ): ReadonlyArray<{
+      fromType: string;
+      fromId: string;
+      relation: string;
+    }>;
+    listFrom?(
+      fromType: string,
+      fromId: string,
+    ): ReadonlyArray<{
+      toType: string;
+      toId: string;
+      relation: string;
+    }>;
+    find(key: {
+      fromType: string;
+      fromId: string;
+      toType: string;
+      toId: string;
+      relation: string;
+    }): { origin: string } | undefined;
+    upsert(input: {
+      fromType: string;
+      fromId: string;
+      toType: string;
+      toId: string;
+      relation: string;
+      origin: string;
+      verifiedAt: number | null;
+    }): void;
+  };
+}
+
 interface FlowOptions {
-  readonly client: ZentaoReadClient;
+  /** CR-009 §4.1：优先注入业务底座；仅传 client 时自动包一层禅道适配器。 */
+  readonly provider?: BusinessProvider;
+  readonly client?: ZentaoReadClient;
   readonly directory: Pick<DirectoryService, "resolveContext">;
   readonly executor: Pick<OperationExecutor, "prepare">;
   readonly storyRoles?: { readonly get: (id: number) => StoryRoles["stored"] };
-  readonly store?: LocalStore;
+  /** CR-009 §4.2：流程服务存储；SQLite LocalStore 或端口内存实现。 */
+  readonly store?: FlowStore;
   readonly clock?: Clock;
   readonly baseUrl?: string;
   readonly instanceVersion?: string;
@@ -253,7 +373,17 @@ function developmentAccounts(config: FlowOptions["config"]): Set<string> {
 }
 
 export class FlowService {
-  constructor(private readonly options: FlowOptions) {}
+  private readonly provider: BusinessProvider;
+
+  constructor(private readonly options: FlowOptions) {
+    if (options.provider) this.provider = options.provider;
+    else if (options.client)
+      this.provider = createZentaoBusinessProvider({
+        client: options.client,
+        baseUrl: "",
+      });
+    else throw new BztError("CONFIG_MISSING", "请为流程服务配置业务底座。");
+  }
 
   async assignStory(raw: unknown): Promise<PreparedOperation> {
     const parsed = assignStoryInputSchema.safeParse(raw);
@@ -262,15 +392,13 @@ export class FlowService {
         "INVALID_INPUT",
         "请提供有效的需求编号和指派对象，并检查指派参数。",
       );
-    const { client, executor, config } = this.options;
+    const { executor, config } = this.options;
     const { storyIds, to, comment, notify } = parsed.data;
     const person = await this.readPerson(to);
     if (!person) throw new BztError("NOT_FOUND", "未找到指派对象。");
 
     const ids = [...new Set(storyIds)];
-    const stories = await Promise.all(
-      ids.map((id) => this.readStory(client, id)),
-    );
+    const stories = await Promise.all(ids.map((id) => this.readStory(id)));
     const accounts = developmentAccounts(config);
     if (person.roles.includes("dev")) accounts.add(person.account);
     const steps: OperationStep[] = [];
@@ -362,8 +490,8 @@ export class FlowService {
       raw,
       "请检查移交模式、需求编号和接收人。",
     );
-    const { client, config, executor, instanceVersion } = this.options;
-    const story = await this.readStory(client, input.storyId);
+    const { config, executor, instanceVersion } = this.options;
+    const story = await this.readStory(input.storyId);
     const fromDesign = input.mode === "from_design";
     if (
       fromDesign
@@ -596,22 +724,18 @@ export class FlowService {
       raw,
       "请提供需求编号、目标月份和挪月原因。",
     );
-    const { client, executor } = this.options;
+    const { executor } = this.options;
     const normalized = this.month(toMonth);
     const stories = await Promise.all(
-      [...new Set(storyIds)].map((id) => this.readStory(client, id)),
+      [...new Set(storyIds)].map((id) => this.readStory(id)),
     );
     const plansByProduct = new Map(
       await Promise.all(
         [...new Set(stories.map(({ product }) => product))].map(
-          async (
-            id,
-          ): Promise<
-            [number, Awaited<ReturnType<typeof listProductPlans>>["items"]]
-          > => [
+          async (id): Promise<[number, readonly ProductPlan[]]> => [
             id,
             await this.completeList(`plans:${id}`, () =>
-              listProductPlans(client, id),
+              this.provider.listProductPlans(id),
             ),
           ],
         ),
@@ -690,10 +814,10 @@ export class FlowService {
       raw,
       "请检查关闭模式、需求编号和清理范围。",
     );
-    const { client, executor } = this.options;
+    const { executor } = this.options;
     if (input.mode === "cleanup") return this.cleanup(input.cleanup);
     const stories = await Promise.all(
-      [...new Set(input.storyIds)].map((id) => this.readStory(client, id)),
+      [...new Set(input.storyIds)].map((id) => this.readStory(id)),
     );
     const steps: OperationStep[] = [];
     const warnings: Warnings = [];
@@ -729,7 +853,7 @@ export class FlowService {
         raw,
         "请提供有效的需求编号和待修改的元数据。",
       );
-    const { client, config, executor } = this.options;
+    const { config, executor } = this.options;
     const rule = waiver?.rule.toUpperCase();
     const releaseGate = rule === "R13" || rule === "RELEASE_GATE";
     if (
@@ -746,7 +870,7 @@ export class FlowService {
         `正文变更能力尚未验证，请在禅道编辑需求 ${this.link("story-edit", storyId)}。`,
         { manual: { kind: "story_spec", id: storyId } },
       );
-    const story = await this.readStory(client, storyId);
+    const story = await this.readStory(storyId);
     const warnings: Warnings = [];
     const steps: OperationStep[] = [];
     if (version)
@@ -787,6 +911,7 @@ export class FlowService {
   }
 
   recordConfirmed(opId: string, result: OperationResult): void {
+    /* CR-009 §4.2: recordConfirmed 只在具备完整补充存储时生效。 */
     if (result.opId !== opId)
       throw new BztError("INVALID_INPUT", "操作回执编号不一致。");
     const { store, baseUrl } = this.options;
@@ -822,7 +947,12 @@ export class FlowService {
       const step = steps[row.seq - 1];
       const storyId = row.zentaoId;
       if (!step || step.action !== row.action || storyId === null) continue;
-      if (record.kind === "reschedule_story" && step.action === "story.edit") {
+      const reschedules = store.reschedules;
+      if (
+        reschedules &&
+        record.kind === "reschedule_story" &&
+        step.action === "story.edit"
+      ) {
         const comment = steps[row.seq];
         if (comment?.action !== "story.comment" || comment.id !== storyId)
           continue;
@@ -832,7 +962,7 @@ export class FlowService {
           rescheduleNote,
         );
         if (!change) continue;
-        const prior = store.reschedules
+        const prior = reschedules
           .listByStory(storyId)
           .some(
             (entry) =>
@@ -843,14 +973,19 @@ export class FlowService {
               entry.reason === change.reason,
           );
         if (!prior)
-          store.reschedules.append({
+          reschedules.append({
             storyId,
             ...change,
             by: record.actor,
             at,
           });
       }
-      if (record.kind === "set_story_meta" && step.action === "story.comment") {
+      const stageRequirements = store.stageRequirements;
+      if (
+        stageRequirements &&
+        record.kind === "set_story_meta" &&
+        step.action === "story.comment"
+      ) {
         const comment = step.fields.comment?.value;
         const meta = readNote("meta", comment, metadata);
         for (const [stage, requirement] of Object.entries(
@@ -858,11 +993,11 @@ export class FlowService {
         )) {
           if (
             !requirement ||
-            (store.stageRequirements.get(storyId, stage)?.decidedAt ??
-              -Infinity) >= at
+            (stageRequirements.get(storyId, stage)?.decidedAt ?? -Infinity) >=
+              at
           )
             continue;
-          store.stageRequirements.upsert({
+          stageRequirements.upsert({
             storyId,
             stage,
             required: requirement.required,
@@ -873,14 +1008,15 @@ export class FlowService {
         }
         if (meta?.roles) this.saveRoles(store, storyId, meta.roles, at);
         const waiver = readNote("waiver", comment, waiverSchema);
-        if (waiver) {
+        const waivers = store.waivers;
+        if (waiver && waivers) {
           const key = {
             ruleId: waiver.rule,
             objectType: "story",
             objectId: String(storyId),
           };
-          if ((store.waivers.get(key)?.at ?? -Infinity) < at)
-            store.waivers.upsert({
+          if ((waivers.get(key)?.at ?? -Infinity) < at)
+            waivers.upsert({
               ...key,
               reason: waiver.reason,
               approvedBy: record.actor,
@@ -907,11 +1043,11 @@ export class FlowService {
           toType: "story",
           toId: String(target),
         };
-        const derives = { ...key, relation: "derives" } satisfies Parameters<
-          typeof store.sourceLinks.find
-        >[0];
-        if (!store.sourceLinks.find(derives))
-          store.sourceLinks.upsert({
+        const sourceLinks = store.sourceLinks;
+        if (!sourceLinks) continue;
+        const derives = { ...key, relation: "derives" };
+        if (!sourceLinks.find(derives))
+          sourceLinks.upsert({
             ...derives,
             origin: "local",
             verifiedAt: null,
@@ -921,11 +1057,9 @@ export class FlowService {
             ({ seq, zentaoId }) => seq === index + 1 && zentaoId === storyId,
           )
         ) {
-          const links = { ...key, relation: "links" } satisfies Parameters<
-            typeof store.sourceLinks.find
-          >[0];
-          if (store.sourceLinks.find(links)?.origin !== "native")
-            store.sourceLinks.upsert({
+          const links = { ...key, relation: "links" };
+          if (sourceLinks.find(links)?.origin !== "native")
+            sourceLinks.upsert({
               ...links,
               origin: "native",
               verifiedAt: at,
@@ -949,7 +1083,7 @@ export class FlowService {
   }
 
   private saveRoles(
-    store: LocalStore,
+    store: FlowStore,
     storyId: number,
     roles: z.output<typeof metaRolesSchema>,
     at: number,
@@ -977,7 +1111,7 @@ export class FlowService {
   }: Cleanup): Promise<PreparedOperation> {
     if (classes.includes("B") && !reason)
       throw new BztError("MISSING_REQUIRED", "关闭 B 类任务必须填写清理原因。");
-    const { client, config, executor, store } = this.options;
+    const { config, executor, store } = this.options;
     const team =
       scope.team &&
       Object.entries(config.teams).filter(
@@ -1006,7 +1140,7 @@ export class FlowService {
     } else {
       executionIds = (
         await this.completeList("executions", () =>
-          listExecutionsIncludingClosed(client),
+          this.provider.listExecutions(),
         )
       ).map(({ id }) => id);
     }
@@ -1036,18 +1170,21 @@ export class FlowService {
     const groups = Map.groupBy(tasks, ({ story }) => story);
     const warnings: Warnings = [];
     const steps: OperationStep[] = [];
-    const bugsByProduct = new Map<number, ReturnType<typeof listProductBugs>>();
+    const bugsByProduct = new Map<
+      number,
+      Promise<{ readonly items: readonly Bug[]; truncated: boolean }>
+    >();
     for (const [id, scopedTasks] of groups) {
-      const story = id === null ? undefined : await this.readStory(client, id);
+      const story = id === null ? undefined : await this.readStory(id);
       const tasksComplete =
         story?.status === "active" &&
         story.category === "feature" &&
         scopedTasks.some(({ status }) => status === "done");
-      let bugs;
+      let bugs: Bug[] | undefined;
       if (story && tasksComplete) {
         let pending = bugsByProduct.get(story.product);
         if (!pending) {
-          pending = listProductBugs(client, story.product);
+          pending = this.provider.listProductBugs(story.product);
           bugsByProduct.set(story.product, pending);
         }
         bugs = await this.completeList(`bugs:${story.product}`, () => pending);
@@ -1061,7 +1198,7 @@ export class FlowService {
         evidence: { prefixes: config.naming?.taskPrefix },
       }));
       const requirements = story
-        ? store?.stageRequirements.listByStory(story.id)
+        ? store?.stageRequirements?.listByStory(story.id)
         : undefined;
       const required = requirements
         ? Object.fromEntries(
@@ -1123,12 +1260,11 @@ export class FlowService {
     executionIds: number[],
     taskIds: number[] = [],
   ): Promise<FlowTask[]> {
-    const { client } = this.options;
     const pages = await Promise.all(
       [...new Set(executionIds)].map(async (id) => {
         const source = `execution:${id}:tasks`;
         const items = await this.completeList(source, () =>
-          listExecutionTasks(client, id),
+          this.provider.listExecutionTasks(id),
         );
         if (items.some(({ execution }) => execution !== id))
           throw this.readGap(source, "返回的任务与执行归属不一致");
@@ -1140,7 +1276,7 @@ export class FlowService {
     );
     const read = async (id: number) => {
       try {
-        const task = await getTaskDetail(client, id);
+        const task = await this.provider.getTaskDetail(id);
         if (task.id !== id)
           throw new BztError(
             "ZENTAO_SCHEMA_MISMATCH",
@@ -1194,7 +1330,7 @@ export class FlowService {
 
   private async completeList<T>(
     source: string,
-    read: () => Promise<{ items: T[]; truncated: boolean }>,
+    read: () => Promise<{ readonly items: readonly T[]; truncated: boolean }>,
   ): Promise<T[]> {
     let result;
     try {
@@ -1204,7 +1340,7 @@ export class FlowService {
       throw this.readGap(source, error.code);
     }
     if (result.truncated) throw this.readGap(source, "分页结果已截断");
-    return result.items;
+    return [...result.items];
   }
 
   private readGap(source: string, reason: string) {
@@ -1216,8 +1352,8 @@ export class FlowService {
   }
 
   private async currentUser() {
-    const { client, store } = this.options;
-    const user = await getCurrentUser(client);
+    const { store } = this.options;
+    const user = await this.provider.getCurrentUser();
     if (store && store.location.account !== user.account)
       throw new BztError(
         "PERMISSION_DENIED",
@@ -1293,12 +1429,9 @@ export class FlowService {
     };
   }
 
-  private async readStory(
-    client: ZentaoReadClient,
-    id: number,
-  ): Promise<StoryDetail> {
+  private async readStory(id: number): Promise<StoryDetail> {
     try {
-      const story = await getStoryDetail(client, id);
+      const story = await this.provider.getStoryDetail(id);
       if (story.type !== "story" || story.id !== id)
         throw new BztError(
           "ZENTAO_SCHEMA_MISMATCH",

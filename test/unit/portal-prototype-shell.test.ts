@@ -36,17 +36,19 @@ it("导出的结果区分待讨论和用户在本次会议记录的意见", () =
   expect(minutes).toContain("D-16");
 });
 
-it("固定伏羲 v11 应用入口、命令检索、折叠及深浅主题", async () => {
+it("产品化外壳统一品牌并保留命令检索、折叠及深浅主题（Issue #6 / M2-01）", async () => {
   const html = await readFile("web/index.html", "utf8");
   for (const value of [
-    "脉序 × better-zentao",
-    "bzt-version-pill mono",
+    "better-zentao",
     "sidebar-scroll",
     "sidebar-role-card",
     "theme-button",
     "command-button",
   ])
     expect(html).toContain(value);
+  expect(html).not.toContain("脉序 × better-zentao");
+  expect(html).not.toContain("bzt-version-pill");
+  expect(html).not.toContain("本机门户");
 });
 
 it("载入伏羲 mwskyptfsv2y4a 第 11 版的两段原始样式", async () => {

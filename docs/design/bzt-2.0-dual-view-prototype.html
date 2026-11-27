@@ -1,0 +1,1632 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>better-zentao 2.0 · 双视图与个人 AI 设置高保真交互原型（合成数据）</title>
+    <style>
+      :root {
+        --bg: #f5f7fb;
+        --surface: #ffffff;
+        --surface-2: #f0f3f9;
+        --surface-3: #e7ecf5;
+        --border: #dce2ee;
+        --border-strong: #c5cfdf;
+        --text: #142033;
+        --text-2: #4b5b76;
+        --text-3: #6c7c96;
+        --accent: #2563eb;
+        --accent-soft: #eff6ff;
+        --accent-border: #bfdbfe;
+        --success: #0f766e;
+        --success-soft: #f0fdfa;
+        --warn: #b45309;
+        --warn-soft: #fffbeb;
+        --danger: #b91c1c;
+        --danger-soft: #fef2f2;
+        --ai: #4f46e5;
+        --ai-soft: #eef2ff;
+        --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+        --radius: 10px;
+        --font-sans: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+        --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      [data-theme="dark"] {
+        --bg: #0f141f;
+        --surface: #161d2c;
+        --surface-2: #1d2638;
+        --surface-3: #263147;
+        --border: #2a364d;
+        --border-strong: #3b4b69;
+        --text: #edf2fb;
+        --text-2: #a8b7d0;
+        --text-3: #7d8eab;
+        --accent: #60a5fa;
+        --accent-soft: rgba(59, 130, 246, 0.16);
+        --accent-border: rgba(96, 165, 250, 0.35);
+        --success: #2dd4bf;
+        --success-soft: rgba(20, 184, 166, 0.15);
+        --warn: #fbbf24;
+        --warn-soft: rgba(245, 158, 11, 0.15);
+        --danger: #f87171;
+        --danger-soft: rgba(239, 68, 68, 0.16);
+        --ai: #818cf8;
+        --ai-soft: rgba(99, 102, 241, 0.18);
+        --shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 13.5px/1.5 var(--font-sans);
+        -webkit-font-smoothing: antialiased;
+      }
+      button, input, select, textarea { font: inherit; color: inherit; }
+      .mono { font-family: var(--font-mono); font-size: 12px; }
+      .hidden { display: none !important; }
+
+      /* Design preview notice strip */
+      .proto-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 6px 16px;
+        background: var(--surface-2);
+        border-bottom: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--text-2);
+        flex-wrap: wrap;
+      }
+      .proto-banner-controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .proto-chip {
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border-strong);
+        background: var(--surface);
+        font-size: 11.5px;
+        cursor: pointer;
+      }
+      .proto-chip.is-on {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-weight: 600;
+      }
+
+      /* Topbar */
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 30;
+        height: 54px;
+        padding: 0 16px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .topbar-left, .topbar-center, .topbar-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        font-size: 15px;
+        letter-spacing: -0.01em;
+      }
+      .brand-mark {
+        width: 26px;
+        height: 26px;
+        border-radius: 7px;
+        background: var(--accent-soft);
+        border: 1px solid var(--accent-border);
+        display: grid;
+        place-items: center;
+        color: var(--accent);
+        font-weight: 800;
+        font-size: 13px;
+      }
+      .view-switch {
+        display: inline-flex;
+        padding: 3px;
+        border-radius: 9px;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        gap: 2px;
+      }
+      .view-tab {
+        border: 0;
+        background: transparent;
+        padding: 5px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 500;
+        color: var(--text-2);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .view-tab.is-active {
+        background: var(--surface);
+        color: var(--text);
+        font-weight: 600;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+      }
+      .view-tab.is-active[data-view="ai"] {
+        color: var(--ai);
+      }
+      .role-select {
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        border-radius: 7px;
+        padding: 5px 8px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      .period-box {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 8px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--surface-2);
+      }
+      .period-box input {
+        border: 0;
+        background: transparent;
+        font-weight: 600;
+        font-size: 12.5px;
+      }
+      .btn {
+        border: 1px solid var(--border-strong);
+        background: var(--surface);
+        color: var(--text);
+        border-radius: 7px;
+        padding: 5px 10px;
+        cursor: pointer;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+      }
+      .btn:hover { background: var(--surface-2); }
+      .btn-primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      .btn-primary:hover { filter: brightness(0.95); background: var(--accent); }
+      .btn-ai {
+        border-color: var(--ai);
+        background: var(--ai-soft);
+        color: var(--ai);
+      }
+      .btn-danger {
+        border-color: var(--danger);
+        color: var(--danger);
+        background: var(--danger-soft);
+      }
+      .btn-sm { padding: 3px 8px; font-size: 12px; }
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        display: inline-block;
+      }
+      .dot.ok { background: var(--success); }
+      .dot.warn { background: var(--warn); }
+      .dot.err { background: var(--danger); }
+
+      /* Account dropdown */
+      .account-wrap { position: relative; }
+      .avatar-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        border-radius: 999px;
+        padding: 3px 10px 3px 4px;
+        cursor: pointer;
+      }
+      .avatar {
+        width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        background: var(--accent);
+        color: #fff;
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .dropdown {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 6px);
+        width: 270px;
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        padding: 8px;
+        z-index: 50;
+      }
+      .dropdown-head {
+        padding: 8px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 6px;
+      }
+      .dropdown-item {
+        width: 100%;
+        text-align: left;
+        border: 0;
+        background: transparent;
+        padding: 8px;
+        border-radius: 7px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .dropdown-item:hover { background: var(--surface-2); }
+
+      /* App Shell */
+      .shell {
+        display: grid;
+        grid-template-columns: 204px 1fr auto;
+        min-height: calc(100vh - 88px);
+      }
+      .sidebar {
+        background: var(--surface);
+        border-right: 1px solid var(--border);
+        padding: 12px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .nav-section {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--text-3);
+        padding: 8px 10px 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .nav-btn {
+        border: 0;
+        background: transparent;
+        text-align: left;
+        padding: 8px 10px;
+        border-radius: 7px;
+        cursor: pointer;
+        color: var(--text-2);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .nav-btn.is-active {
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 1px 7px;
+        border-radius: 999px;
+        font-size: 11.5px;
+        font-weight: 600;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        color: var(--text-2);
+      }
+      .badge.tone-accent { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent); }
+      .badge.tone-success { background: var(--success-soft); border-color: transparent; color: var(--success); }
+      .badge.tone-warn { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+      .badge.tone-danger { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+      .badge.tone-ai { background: var(--ai-soft); border-color: transparent; color: var(--ai); }
+
+      /* Main workspace */
+      .main { padding: 16px 20px; min-width: 0; }
+      .context-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        margin-bottom: 14px;
+        flex-wrap: wrap;
+      }
+      .context-pills { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .kpi-row {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+      .kpi {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 12px 14px;
+      }
+      .kpi-label { font-size: 12px; color: var(--text-2); }
+      .kpi-num { font-size: 22px; font-weight: 700; margin: 2px 0; font-variant-numeric: tabular-nums; }
+      .kpi-sub { font-size: 11.5px; color: var(--text-3); }
+
+      /* Panel & High-Density Table */
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      .panel-head {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .filter-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        background: var(--surface-2);
+        border-bottom: 1px solid var(--border);
+        flex-wrap: wrap;
+      }
+      .input {
+        border: 1px solid var(--border-strong);
+        background: var(--surface);
+        border-radius: 7px;
+        padding: 5px 9px;
+        min-width: 140px;
+      }
+      .table-wrap { overflow-x: auto; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td {
+        padding: 9px 10px;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        vertical-align: middle;
+      }
+      th {
+        background: var(--surface-2);
+        color: var(--text-2);
+        font-weight: 600;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      tr.is-selected td { background: var(--accent-soft); }
+      tr:hover td { background: var(--surface-2); }
+      .link-btn {
+        border: 0;
+        background: transparent;
+        color: var(--accent);
+        cursor: pointer;
+        padding: 0;
+        text-align: left;
+        font-weight: 600;
+      }
+      .card-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+        gap: 10px;
+        padding: 14px;
+      }
+      .story-card {
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        padding: 12px;
+        background: var(--surface);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .story-card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+
+      /* Right Global AI Assistant Drawer */
+      .ai-drawer {
+        width: 340px;
+        background: var(--surface);
+        border-left: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+      }
+      .ai-drawer-head {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .ai-drawer-body {
+        padding: 12px 14px;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow-y: auto;
+      }
+
+      /* AI Collaboration Workbench View */
+      .ai-workspace {
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        gap: 14px;
+        min-height: calc(100vh - 150px);
+      }
+      .session-list {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .session-item {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        background: var(--surface-2);
+        cursor: pointer;
+        text-align: left;
+      }
+      .session-item.is-active {
+        border-color: var(--ai);
+        background: var(--ai-soft);
+      }
+      .ai-stage {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        display: flex;
+        flex-direction: column;
+      }
+      .ai-stream {
+        padding: 16px;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .trace-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        font-size: 12px;
+      }
+      .gen-card {
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        padding: 14px;
+        background: var(--surface);
+      }
+      .gen-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      .stepper {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 6px;
+        margin: 10px 0;
+      }
+      .step-box {
+        padding: 7px 8px;
+        border-radius: 7px;
+        border: 1px solid var(--border);
+        background: var(--surface-2);
+        font-size: 12px;
+      }
+      .step-box.done { border-color: var(--success); background: var(--success-soft); }
+      .step-box.active { border-color: var(--accent); background: var(--accent-soft); }
+      .step-box.risk { border-color: var(--warn); background: var(--warn-soft); }
+      .preview-guard {
+        padding: 9px 11px;
+        border-radius: 8px;
+        background: var(--warn-soft);
+        border: 1px solid var(--warn);
+        color: var(--warn);
+        font-size: 12.5px;
+        margin-bottom: 10px;
+      }
+      .composer {
+        border-top: 1px solid var(--border);
+        padding: 12px 16px;
+        background: var(--surface-2);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .composer-row { display: flex; gap: 8px; }
+      .composer-row input { flex: 1; }
+
+      /* Modal (Personal AI Settings & Story Detail) */
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.45);
+        display: grid;
+        place-items: center;
+        padding: 16px;
+        z-index: 80;
+      }
+      .modal {
+        width: min(640px, 100%);
+        max-height: 90vh;
+        overflow-y: auto;
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        box-shadow: var(--shadow);
+      }
+      .modal-head {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .modal-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+      .field { display: flex; flex-direction: column; gap: 4px; }
+      .field label { font-weight: 600; font-size: 12.5px; }
+      .hint { font-size: 12px; color: var(--text-3); }
+      .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+      @media (max-width: 1040px) {
+        .shell { grid-template-columns: 1fr; }
+        .sidebar { display: none; }
+        .ai-drawer { width: 100%; border-left: 0; border-top: 1px solid var(--border); }
+        .kpi-row { grid-template-columns: repeat(2, 1fr); }
+        .ai-workspace { grid-template-columns: 1fr; }
+        .stepper { grid-template-columns: repeat(2, 1fr); }
+        .form-grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="proto-banner">
+      <div>
+        <strong>better-zentao 2.0 高保真交互原型</strong> · 100% 合成演示数据（CR-009 / Issue #7 / Issue #6）· 模拟个人大模型网关配置、双视图上下文共享与人工接管
+      </div>
+      <div class="proto-banner-controls">
+        <span>演示状态：</span>
+        <button type="button" class="proto-chip" id="sim-unconfigured">AI 未配置</button>
+        <button type="button" class="proto-chip is-on" id="sim-verified">AI 已验证</button>
+        <button type="button" class="proto-chip" id="sim-readonly">只读模式: 开</button>
+        <button type="button" class="proto-chip" id="sim-theme">切换深浅主题</button>
+      </div>
+    </div>
+
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand">
+          <span class="brand-mark">bz</span>
+          <span>better-zentao</span>
+        </div>
+        <div class="view-switch" role="tablist" aria-label="主工作区视图">
+          <button type="button" class="view-tab is-active" data-view="human" role="tab" aria-selected="true">
+            人工业务工作台
+          </button>
+          <button type="button" class="view-tab" data-view="ai" role="tab" aria-selected="false">
+            AI 协作工作台 <span class="dot ok" id="ai-tab-dot"></span>
+          </button>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <select id="role-select" class="role-select" aria-label="当前职责">
+          <option value="RM">研发主管 (RM)</option>
+          <option value="DM">设计主管 (DM)</option>
+          <option value="PM">产品管理 (PM)</option>
+          <option value="RD">研发人员 (RD)</option>
+        </select>
+
+        <div class="period-box">
+          <span class="hint">月份</span>
+          <input type="month" id="work-month" value="2026-11" aria-label="工作月份" />
+        </div>
+
+        <button type="button" class="btn btn-sm" id="sync-btn" title="同步当前业务视图数据">
+          <span class="dot ok" id="sync-dot"></span>
+          <span id="sync-text">已同步 11:42</span>
+        </button>
+
+        <button type="button" class="btn btn-ai btn-sm" id="toggle-ai-drawer">
+          AI 助手
+        </button>
+
+        <div class="account-wrap">
+          <button type="button" class="avatar-btn" id="account-btn" aria-expanded="false">
+            <span class="avatar">陈</span>
+            <span>陈默</span>
+          </button>
+          <div class="dropdown hidden" id="account-menu">
+            <div class="dropdown-head">
+              <div><strong>陈默</strong> <span class="mono">chenmo</span></div>
+              <div class="hint" id="account-meta">合成演示实例 · 集中服务（只读）</div>
+            </div>
+            <button type="button" class="dropdown-item" id="open-ai-settings">
+              <span>AI 设置（个人大模型网关）</span>
+              <span class="badge tone-success" id="menu-ai-badge">已验证</span>
+            </button>
+            <button type="button" class="dropdown-item" id="open-system-info">
+              <span>关于与系统信息</span>
+              <span class="mono">2.0-baseline</span>
+            </button>
+            <button type="button" class="dropdown-item" id="menu-theme">
+              <span>深浅外观切换</span>
+              <span class="hint">T</span>
+            </button>
+            <button type="button" class="dropdown-item" disabled title="集中部署模式下由管理员维护职责">
+              <span>团队职责（管理员维护）</span>
+              <span class="badge">受控</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="nav-section">人工业务导航</div>
+        <button type="button" class="nav-btn is-active" data-nav="workbench"><span>工作台</span><span class="badge tone-accent">5</span></button>
+        <button type="button" class="nav-btn" data-nav="intake"><span>提需求</span></button>
+        <button type="button" class="nav-btn" data-nav="stories"><span>需求流转</span><span class="badge">2</span></button>
+        <button type="button" class="nav-btn" data-nav="schedule"><span>拆解与排期</span></button>
+        <button type="button" class="nav-btn" data-nav="risks"><span>发布与风险</span><span class="badge tone-danger">3</span></button>
+        <div class="nav-section" style="margin-top: 12px;">共享上下文</div>
+        <div style="padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); font-size: 12px;">
+          <div>选中对象：<strong class="mono" id="ctx-selected">#4102</strong></div>
+          <div>草稿状态：<span id="ctx-draft">无待转交草稿</span></div>
+          <div class="hint" style="margin-top: 4px;">切换人工/AI 视图时按当前授权自动同步上下文。</div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <!-- Shared Context Banner -->
+        <div class="context-bar">
+          <div class="context-pills">
+            <span class="badge tone-accent" id="ctx-role-pill">当前职责：研发主管 (RM)</span>
+            <span class="badge" id="ctx-month-pill">工作月份：2026-11</span>
+            <span class="badge" id="ctx-mode-pill">部署策略：集中只读（写入预览受控）</span>
+            <span class="badge tone-success" id="ctx-completeness">完整性：complete · 叶子任务口径</span>
+          </div>
+          <div class="hint" id="ctx-sync-hint">业务数据独立于 AI 配置，无模型时可完整使用。</div>
+        </div>
+
+        <!-- VIEW 1: HUMAN BUSINESS WORKBENCH -->
+        <section id="view-human">
+          <div class="kpi-row">
+            <div class="kpi">
+              <div class="kpi-label">待接收与跟进需求</div>
+              <div class="kpi-num">5</div>
+              <div class="kpi-sub">本月活跃研发队列（已去重）</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">叶子任务逾期 / 临期</div>
+              <div class="kpi-num" style="color: var(--danger);">2 / 3</div>
+              <div class="kpi-sub">仅计叶子任务，不含父任务双算</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">流程风险命中（未豁免）</div>
+              <div class="kpi-num" style="color: var(--warn);">3</div>
+              <div class="kpi-sub">R02 测试未接续 · R04 未就绪指派</div>
+            </div>
+            <div class="kpi">
+              <div class="kpi-label">待确认操作预览</div>
+              <div class="kpi-num" id="kpi-preview-count">0</div>
+              <div class="kpi-sub">所有写入均走 prepare → 人工确认</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <div>
+                <strong>需求与推进台账</strong>
+                <span class="hint" style="margin-left: 8px;">完整确定性字段 · 支持自由筛选、详情核对与人工接管</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <div class="view-switch" aria-label="列表展示偏好">
+                  <button type="button" class="view-tab is-active" data-density="table">表格台账</button>
+                  <button type="button" class="view-tab" data-density="cards">卡片概览</button>
+                </div>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-human-intake">+ 提出需求</button>
+              </div>
+            </div>
+
+            <div class="filter-bar">
+              <input class="input" type="search" id="filter-search" placeholder="筛选关键词 / #ID / 负责人…" />
+              <select class="input" id="filter-stage" style="min-width: 120px;">
+                <option value="">全部进展</option>
+                <option value="待移交">待移交</option>
+                <option value="开发中">开发中</option>
+                <option value="待测试">待测试</option>
+                <option value="未就绪">未就绪</option>
+              </select>
+              <select class="input" id="filter-risk" style="min-width: 120px;">
+                <option value="">全部风险</option>
+                <option value="has">仅看有风险</option>
+              </select>
+              <button type="button" class="btn btn-sm" id="filter-reset">清空筛选</button>
+              <span class="hint" id="filter-count" style="margin-left: auto;">显示 5 / 5 条</span>
+            </div>
+
+            <div class="table-wrap" id="ledger-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>P</th>
+                    <th>需求标题（不可信外部文本）</th>
+                    <th>模块</th>
+                    <th>类型</th>
+                    <th>业务进展</th>
+                    <th>状态维护人</th>
+                    <th>当前指派</th>
+                    <th>叶子任务</th>
+                    <th>风险</th>
+                    <th>确定性操作</th>
+                  </tr>
+                </thead>
+                <tbody id="story-tbody"></tbody>
+              </table>
+            </div>
+
+            <div class="card-grid hidden" id="ledger-card-wrap"></div>
+          </div>
+        </section>
+
+        <!-- VIEW 2: AI COLLABORATION WORKBENCH -->
+        <section id="view-ai" class="hidden">
+          <div class="ai-workspace">
+            <div class="session-list">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                <strong>工作会话</strong>
+                <button type="button" class="btn btn-sm" id="new-ai-session">+ 新建</button>
+              </div>
+              <button type="button" class="session-item is-active" data-scenario="progress">
+                <div><strong>核对 #4102 进展与卡点</strong></div>
+                <div class="hint">RM · 2026-11 · L1 规则命中</div>
+              </button>
+              <button type="button" class="session-item" data-scenario="risks">
+                <div><strong>扫描本月流程风险</strong></div>
+                <div class="hint">RM · 2026-11 · R02/R04</div>
+              </button>
+              <button type="button" class="session-item" data-scenario="draft">
+                <div><strong>拟定新需求并生成可编辑草稿</strong></div>
+                <div class="hint">L3 意图分解 · 可交回人工表单</div>
+              </button>
+              <button type="button" class="session-item" data-scenario="preview">
+                <div><strong>生成 #4102 指派操作预览</strong></div>
+                <div class="hint">W2 受控写入 · AI 不可自确认</div>
+              </button>
+              <div class="hint" style="margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border);">
+                会话按 (实例, 账号) 严格隔离，个人 Token 永不写入会话记录。
+              </div>
+            </div>
+
+            <div class="ai-stage">
+              <div class="panel-head">
+                <div>
+                  <strong>AI 协作工作台</strong>
+                  <span class="badge tone-ai" id="ai-stage-badge" style="margin-left: 6px;">个人网关已验证 · enterprise-gpt-4o</span>
+                </div>
+                <div style="display: flex; gap: 6px;">
+                  <button type="button" class="btn btn-sm" id="handoff-to-human">转入人工工作台继续处理 →</button>
+                  <button type="button" class="btn btn-sm" id="stage-ai-settings">AI 设置</button>
+                </div>
+              </div>
+
+              <div class="ai-stream" id="ai-stream"></div>
+
+              <div class="composer">
+                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                  <button type="button" class="btn btn-sm" data-quick="mywork">查我本月待办与逾期</button>
+                  <button type="button" class="btn btn-sm" data-quick="progress">查需求 #4102 进展</button>
+                  <button type="button" class="btn btn-sm" data-quick="risks">分析本月流程风险</button>
+                  <button type="button" class="btn btn-sm" data-quick="draft">帮我拟一条报表导出需求</button>
+                  <button type="button" class="btn btn-sm" data-quick="preview">把 #4102 指派给张工（生成预览）</button>
+                </div>
+                <div class="composer-row">
+                  <input class="input" id="ai-input" placeholder="用自然语言描述目标，例如：查看 #4102 当前阻塞点并帮我起草指派预览…" />
+                  <button type="button" class="btn btn-primary" id="ai-send">发送</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <!-- Collapsible Global AI Assistant Drawer -->
+      <aside class="ai-drawer" id="ai-drawer">
+        <div class="ai-drawer-head">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <strong>全局 AI 助手</strong>
+            <span class="badge tone-ai" id="drawer-status-pill">已就绪</span>
+          </div>
+          <button type="button" class="btn btn-sm" id="close-ai-drawer">收起</button>
+        </div>
+        <div class="ai-drawer-body" id="ai-drawer-body"></div>
+      </aside>
+    </div>
+
+    <!-- Personal AI Gateway Settings Modal -->
+    <div class="modal-backdrop hidden" id="ai-settings-modal">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="个人 AI 设置">
+        <div class="modal-head">
+          <div>
+            <strong>个人 AI 设置（企业大模型网关）</strong>
+            <div class="hint">仅当前已认证主体（陈默 / chenmo）独占使用，与禅道业务权限完全分离</div>
+          </div>
+          <button type="button" class="btn btn-sm" id="close-ai-settings">关闭</button>
+        </div>
+        <div class="modal-body">
+          <div id="settings-status-banner" class="trace-bar"></div>
+
+          <div class="field">
+            <label for="gw-url">企业大模型网关地址（Base URL）</label>
+            <input class="input mono" id="gw-url" value="https://llm-gateway.corp.example/v1" />
+            <span class="hint">管理员允许范围：<span class="mono">https://llm-gateway.corp.example/*</span>（禁止重定向与非授权外网地址）</span>
+          </div>
+
+          <div class="form-grid">
+            <div class="field">
+              <label for="gw-protocol">网关协议兼容模式</label>
+              <select class="input" id="gw-protocol">
+                <option value="openai-compatible">OpenAI 兼容协议</option>
+                <option value="anthropic-compatible">Anthropic 兼容协议</option>
+                <option value="enterprise-custom">企业内部定制协议</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="gw-model">模型标识（Model ID）</label>
+              <input class="input mono" id="gw-model" value="enterprise-gpt-4o" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="gw-token">个人模型 Token（服务端 AES-256-GCM 加密持久化，不回显完整明文）</label>
+            <input class="input mono" id="gw-token" type="password" placeholder="输入新的个人 Token（留空表示保留当前已保存 Token）" autocomplete="off" />
+            <span class="hint" id="gw-token-hint">当前已保存脱敏状态：<strong class="mono">••••9f2a</strong>（仅服务端 Model Gateway 调用时解密，绝不写入浏览器存储）</span>
+          </div>
+
+          <div class="trace-bar" style="justify-content: space-between;">
+            <span class="hint">原型测试模拟情景：</span>
+            <select id="gw-sim-result" class="input" style="min-width: 210px;">
+              <option value="ok">正常企业网关（连接测试通过）</option>
+              <option value="ssrf">非白名单外部地址（SSRF 拦截）</option>
+              <option value="invalid_token">个人 Token 已失效（401）</option>
+              <option value="quota">个人额度耗尽（429）</option>
+            </select>
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding-top: 6px; border-top: 1px solid var(--border);">
+            <button type="button" class="btn btn-danger" id="btn-delete-token">删除配置与 Token</button>
+            <div style="display: flex; gap: 8px;">
+              <button type="button" class="btn" id="btn-test-conn">测试连接（最小非业务探活）</button>
+              <button type="button" class="btn btn-primary" id="btn-save-ai">保存配置</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Story Detail Drawer Modal -->
+    <div class="modal-backdrop hidden" id="story-modal">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="需求详情">
+        <div class="modal-head">
+          <strong id="story-modal-title">需求详情</strong>
+          <button type="button" class="btn btn-sm" id="close-story-modal">关闭</button>
+        </div>
+        <div class="modal-body" id="story-modal-body"></div>
+      </div>
+    </div>
+
+    <script>
+      const stories = [
+        {
+          id: 4102, pri: 1, title: "权限矩阵支持按项目组批量导出审计报表", module: "权限管理",
+          category: "研发需求", progress: "待测试", progressLevel: "recorded",
+          maintainer: "林夕 (DM)", owner: "张工 (RD)", leafDone: 2, leafTotal: 4,
+          risks: ["R02"], scope: "支持按项目组导出 CSV/XLSX 权限矩阵，含角色变更时间与操作人。",
+          stages: [
+            { name: "研发", state: "done", who: "张工" },
+            { name: "接口", state: "done", who: "张工" },
+            { name: "测试", state: "risk", who: "未指派（R02）" },
+            { name: "验收", state: "todo", who: "林夕" },
+            { name: "交付", state: "todo", who: "待排期" },
+          ],
+        },
+        {
+          id: 4108, pri: 2, title: "月度研发队列增加结转原因与历史顺延追踪", module: "交付管理",
+          category: "研发需求", progress: "开发中", progressLevel: "recorded",
+          maintainer: "林夕 (DM)", owner: "李明 (RD)", leafDone: 1, leafTotal: 5,
+          risks: [], scope: "在月度研发队列展示近 3 次挪月记录与原因摘要。",
+          stages: [
+            { name: "研发", state: "active", who: "李明" },
+            { name: "接口", state: "todo", who: "李明" },
+            { name: "测试", state: "todo", who: "周测" },
+            { name: "验收", state: "todo", who: "林夕" },
+            { name: "交付", state: "todo", who: "待排期" },
+          ],
+        },
+        {
+          id: 4115, pri: 2, title: "审批流转通知模板支持按业务线定制字段", module: "协同通知",
+          category: "设计态", progress: "待移交", progressLevel: "recorded",
+          maintainer: "苏宁 (DS)", owner: "苏宁 (DS)", leafDone: 2, leafTotal: 3,
+          risks: ["R07"], scope: "完成方案评审，待补充本次实现范围后移交研发主管。",
+          stages: [
+            { name: "设计", state: "done", who: "苏宁" },
+            { name: "评审", state: "done", who: "林夕" },
+            { name: "传递", state: "risk", who: "待移交（R07）" },
+            { name: "研发", state: "todo", who: "待衍生" },
+            { name: "验收", state: "todo", who: "苏宁" },
+          ],
+        },
+        {
+          id: 4121, pri: 1, title: "集中端多实例切换自动隔离未提交表单草稿", module: "平台底座",
+          category: "研发需求", progress: "未就绪", progressLevel: "inferred",
+          maintainer: "林夕 (DM)", owner: "陈默 (RM)", leafDone: 0, leafTotal: 0,
+          risks: ["R04", "R05"], scope: "（正文缺少本次实现范围，已命中 R05）",
+          stages: [
+            { name: "研发", state: "risk", who: "草稿已指派（R04）" },
+            { name: "接口", state: "todo", who: "—" },
+            { name: "测试", state: "todo", who: "—" },
+            { name: "验收", state: "todo", who: "—" },
+            { name: "交付", state: "todo", who: "—" },
+          ],
+        },
+        {
+          id: 4129, pri: 3, title: "个人排期矩阵支持按周查看剩余可用容量", module: "排期视图",
+          category: "研发需求", progress: "开发中", progressLevel: "recorded",
+          maintainer: "苏宁 (DS)", owner: "王华 (RD)", leafDone: 2, leafTotal: 3,
+          risks: [], scope: "按每日 6h 可用工时口径汇总成员周负荷。",
+          stages: [
+            { name: "研发", state: "done", who: "王华" },
+            { name: "接口", state: "active", who: "王华" },
+            { name: "测试", state: "todo", who: "周测" },
+            { name: "验收", state: "todo", who: "苏宁" },
+            { name: "交付", state: "todo", who: "待排期" },
+          ],
+        },
+      ];
+
+      const state = {
+        view: "human",
+        density: "table",
+        role: "RM",
+        month: "2026-11",
+        readOnly: true,
+        selectedStoryId: 4102,
+        aiDrawerOpen: true,
+        aiScenario: "progress",
+        draft: null,
+        pendingPreviewCount: 0,
+        aiConfig: {
+          configured: true,
+          verified: true,
+          baseUrl: "https://llm-gateway.corp.example/v1",
+          protocol: "openai-compatible",
+          modelId: "enterprise-gpt-4o",
+          tokenHint: "••••9f2a",
+          lastError: "",
+        },
+      };
+
+      const $ = (id) => document.getElementById(id);
+
+      function selectedStory() {
+        return stories.find((s) => s.id === state.selectedStoryId) || stories[0];
+      }
+
+      function renderTopContext() {
+        const roleText = $("role-select").selectedOptions[0].textContent;
+        $("ctx-role-pill").textContent = "当前职责：" + roleText;
+        $("ctx-month-pill").textContent = "工作月份：" + state.month;
+        $("ctx-mode-pill").textContent = state.readOnly
+          ? "部署策略：集中只读（写入需管理员开启）"
+          : "部署策略：集中受控写入（W2 强制人工确认）";
+        $("account-meta").textContent = state.readOnly
+          ? "合成演示实例 · 集中服务（只读）"
+          : "合成演示实例 · 集中服务（受控可写）";
+        $("sim-readonly").textContent = "只读模式: " + (state.readOnly ? "开" : "关");
+        $("sim-readonly").classList.toggle("is-on", state.readOnly);
+        $("sim-unconfigured").classList.toggle("is-on", !state.aiConfig.configured);
+        $("sim-verified").classList.toggle("is-on", state.aiConfig.configured && state.aiConfig.verified);
+        $("ctx-selected").textContent = "#" + state.selectedStoryId;
+        $("ctx-draft").textContent = state.draft ? `草稿：${state.draft.title.slice(0, 12)}…` : "无待转交草稿";
+        $("kpi-preview-count").textContent = String(state.pendingPreviewCount);
+
+        const ready = state.aiConfig.configured && state.aiConfig.verified;
+        $("ai-tab-dot").className = "dot " + (ready ? "ok" : "warn");
+        $("menu-ai-badge").textContent = ready ? "已验证" : state.aiConfig.configured ? "待验证" : "未配置";
+        $("menu-ai-badge").className = "badge " + (ready ? "tone-success" : "tone-warn");
+        $("drawer-status-pill").textContent = ready ? "已就绪" : "需配置";
+        $("drawer-status-pill").className = "badge " + (ready ? "tone-ai" : "tone-warn");
+        $("ai-stage-badge").textContent = ready
+          ? `个人网关已验证 · ${state.aiConfig.modelId}`
+          : "个人大模型网关未配置或未验证";
+        $("ai-stage-badge").className = "badge " + (ready ? "tone-ai" : "tone-warn");
+      }
+
+      function filteredStories() {
+        const q = $("filter-search").value.trim().toLowerCase();
+        const st = $("filter-stage").value;
+        const rk = $("filter-risk").value;
+        return stories.filter((s) => {
+          if (st && s.progress !== st) return false;
+          if (rk === "has" && !s.risks.length) return false;
+          if (q && !`#${s.id} ${s.title} ${s.module} ${s.owner} ${s.maintainer}`.toLowerCase().includes(q)) return false;
+          return true;
+        });
+      }
+
+      function renderLedger() {
+        const rows = filteredStories();
+        $("filter-count").textContent = `显示 ${rows.length} / ${stories.length} 条`;
+        const tbody = $("story-tbody");
+        tbody.innerHTML = "";
+        const cardWrap = $("ledger-card-wrap");
+        cardWrap.innerHTML = "";
+
+        for (const s of rows) {
+          const sel = s.id === state.selectedStoryId;
+          const tr = document.createElement("tr");
+          if (sel) tr.className = "is-selected";
+          const riskHtml = s.risks.length
+            ? s.risks.map((r) => `<span class="badge tone-danger">${r}</span>`).join(" ")
+            : `<span class="hint">无</span>`;
+          tr.innerHTML = `
+            <td class="mono">#${s.id}</td>
+            <td class="mono">P${s.pri}</td>
+            <td><button type="button" class="link-btn" data-open="${s.id}">${s.title}</button></td>
+            <td>${s.module}</td>
+            <td><span class="badge">${s.category}</span></td>
+            <td><span class="badge ${s.progress === "未就绪" ? "tone-warn" : "tone-accent"}">${s.progress}${s.progressLevel === "inferred" ? "·推测" : ""}</span></td>
+            <td>${s.maintainer}</td>
+            <td>${s.owner}</td>
+            <td class="mono">${s.leafDone}/${s.leafTotal}</td>
+            <td>${riskHtml}</td>
+            <td style="white-space:nowrap;">
+              <button type="button" class="btn btn-sm" data-open="${s.id}">详情</button>
+              <button type="button" class="btn btn-sm" data-ai-analyze="${s.id}">交给 AI</button>
+            </td>
+          `;
+          tr.addEventListener("click", (e) => {
+            if (e.target.closest("button")) return;
+            state.selectedStoryId = s.id;
+            renderAll();
+          });
+          tbody.appendChild(tr);
+
+          const card = document.createElement("div");
+          card.className = "story-card" + (sel ? " is-selected" : "");
+          card.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span class="mono">#${s.id} · P${s.pri} · ${s.module}</span>
+              <span class="badge tone-accent">${s.progress}</span>
+            </div>
+            <div><button type="button" class="link-btn" data-open="${s.id}">${s.title}</button></div>
+            <div class="hint">维护人：${s.maintainer} · 当前指派：${s.owner} · 叶子任务 ${s.leafDone}/${s.leafTotal}</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:auto;">
+              <div>${riskHtml}</div>
+              <div style="display:flex;gap:6px;">
+                <button type="button" class="btn btn-sm" data-open="${s.id}">详情</button>
+                <button type="button" class="btn btn-sm" data-ai-analyze="${s.id}">AI 分析</button>
+              </div>
+            </div>
+          `;
+          cardWrap.appendChild(card);
+        }
+
+        $("ledger-table-wrap").classList.toggle("hidden", state.density !== "table");
+        $("ledger-card-wrap").classList.toggle("hidden", state.density !== "cards");
+
+        for (const btn of document.querySelectorAll("[data-open]")) {
+          btn.onclick = () => openStoryModal(Number(btn.dataset.open));
+        }
+        for (const btn of document.querySelectorAll("[data-ai-analyze]")) {
+          btn.onclick = () => {
+            state.selectedStoryId = Number(btn.dataset.aiAnalyze);
+            state.aiScenario = "progress";
+            switchView("ai");
+          };
+        }
+      }
+
+      function renderAiDrawer() {
+        const drawer = $("ai-drawer");
+        drawer.classList.toggle("hidden", !state.aiDrawerOpen || state.view === "ai");
+        const body = $("ai-drawer-body");
+        const s = selectedStory();
+        if (!state.aiConfig.configured || !state.aiConfig.verified) {
+          body.innerHTML = `
+            <div class="gen-card">
+              <div class="gen-card-head">
+                <strong>尚未启用个人 AI 助手</strong>
+                <span class="badge tone-warn">需配置</span>
+              </div>
+              <p class="hint" style="margin:0 0 10px;">
+                每位员工需使用公司发放的个人大模型网关 Token 完成配置与连接验证，方可启用内置 AI 助手。未配置时人工业务工作台完全可用，且绝不回退到公共或他人凭据。
+              </p>
+              <button type="button" class="btn btn-primary btn-sm" id="drawer-go-settings">前往个人 AI 设置</button>
+            </div>
+          `;
+          $("drawer-go-settings").onclick = openAiSettings;
+          return;
+        }
+        body.innerHTML = `
+          <div class="trace-bar">
+            <span>共享上下文：</span>
+            <span class="badge tone-accent">#${s.id}</span>
+            <span class="badge">${state.role} · ${state.month}</span>
+          </div>
+          <div class="gen-card">
+            <div class="gen-card-head">
+              <strong>当前选中需求速览</strong>
+              <span class="badge">${s.progress}</span>
+            </div>
+            <div style="font-weight:600;margin-bottom:6px;">${s.title}</div>
+            <div class="hint">当前卡点：${s.risks.length ? s.risks.join(" / ") + " 已命中，建议核对下游阶段负责人。" : "按期推进中，无未豁免风险。"}</div>
+            <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+              <button type="button" class="btn btn-ai btn-sm" id="drawer-open-progress">在 AI 工作台深入分析</button>
+              <button type="button" class="btn btn-sm" id="drawer-open-preview">生成指派预览</button>
+            </div>
+          </div>
+          <div class="hint">所有 AI 调用经服务端 Model Gateway 使用本人 Token（<span id="drawer-token-hint"></span>），经 CapabilityRuntime 遵守当前职责权限，AI 不可自行确认写入。</div>
+        `;
+        $("drawer-token-hint").textContent = state.aiConfig.tokenHint || "••••";
+        $("drawer-open-progress").onclick = () => { state.aiScenario = "progress"; switchView("ai"); };
+        $("drawer-open-preview").onclick = () => { state.aiScenario = "preview"; switchView("ai"); };
+      }
+
+      function renderAiStage() {
+        const stream = $("ai-stream");
+        if (!state.aiConfig.configured || !state.aiConfig.verified) {
+          stream.innerHTML = `
+            <div class="gen-card" style="max-width:560px;margin:24px auto;">
+              <div class="gen-card-head">
+                <strong>请先完成个人企业大模型网关配置</strong>
+                <span class="badge tone-warn">${state.aiConfig.configured ? "连接未验证" : "未配置"}</span>
+              </div>
+              <p class="hint">
+                AI 协作工作台仅使用您本人的企业大模型网关 Token。配置后将通过最小非业务探活校验连通性；在配置完成前，您随时可以切回「人工业务工作台」处理全部确定性业务。
+              </p>
+              <div style="display:flex;gap:8px;margin-top:12px;">
+                <button type="button" class="btn btn-primary" id="stage-cfg-btn">配置个人 AI 网关</button>
+                <button type="button" class="btn" id="stage-back-human">返回人工业务工作台</button>
+              </div>
+            </div>
+          `;
+          $("stage-cfg-btn").onclick = openAiSettings;
+          $("stage-back-human").onclick = () => switchView("human");
+          return;
+        }
+
+        const s = selectedStory();
+        if (state.aiScenario === "progress") {
+          stream.innerHTML = `
+            <div class="trace-bar">
+              <span class="badge tone-ai">L1 确定性规则命中（0.98）</span>
+              <span>→</span>
+              <span class="badge">CapabilityRuntime (channel="ai")</span>
+              <span>→</span>
+              <span class="mono">get_story_progress({ storyId: ${s.id} })</span>
+              <span class="badge tone-success" style="margin-left:auto;">completeness: complete</span>
+            </div>
+            <div class="gen-card">
+              <div class="gen-card-head">
+                <div><strong>需求进展卡片 · #${s.id}</strong> <span class="badge">外部文本 · untrusted</span></div>
+                <button type="button" class="btn btn-sm" id="card-to-human">在人工工作台打开详情</button>
+              </div>
+              <div style="font-weight:600;margin-bottom:6px;">${s.title}</div>
+              <div class="hint">当前进展：<strong>${s.progress}</strong> · 维护人：${s.maintainer} · 当前处理人：${s.owner} · 叶子任务：${s.leafDone}/${s.leafTotal}</div>
+              <div class="stepper">
+                ${s.stages.map((st) => `<div class="step-box ${st.state}"><strong>${st.name}</strong><div class="hint">${st.who}</div></div>`).join("")}
+              </div>
+              <div style="display:flex;gap:8px;margin-top:8px;">
+                <button type="button" class="btn btn-ai btn-sm" id="card-make-preview">生成指派测试/研发的操作预览</button>
+                <button type="button" class="btn btn-sm" id="card-scan-risks">查看关联风险</button>
+              </div>
+            </div>
+          `;
+          $("card-to-human").onclick = () => { switchView("human"); openStoryModal(s.id); };
+          $("card-make-preview").onclick = () => { state.aiScenario = "preview"; renderAiStage(); };
+          $("card-scan-risks").onclick = () => { state.aiScenario = "risks"; renderAiStage(); };
+        } else if (state.aiScenario === "risks") {
+          stream.innerHTML = `
+            <div class="trace-bar">
+              <span class="badge tone-ai">L1 确定性规则命中</span>
+              <span>→</span>
+              <span class="mono">scan_workflow_risks({ scope: { month: "${state.month}" } })</span>
+              <span class="badge tone-success" style="margin-left:auto;">3 条未豁免命中</span>
+            </div>
+            <div class="gen-card">
+              <div class="gen-card-head"><strong>本月流程风险清单（结构化可信组件）</strong><span class="badge tone-danger">高危 2 · 中危 1</span></div>
+              <table>
+                <thead><tr><th>规则</th><th>对象</th><th>命中依据</th><th>下一步动作</th></tr></thead>
+                <tbody>
+                  <tr><td><span class="badge tone-danger">R02</span></td><td class="mono">#4102</td><td>研发任务已完成，【测试】任务未建或未指派超 1 个工作日</td><td><button type="button" class="btn btn-sm" data-goto-story="4102">接管处理</button></td></tr>
+                  <tr><td><span class="badge tone-danger">R04</span></td><td class="mono">#4121</td><td>需求仍为草稿且缺范围，已提前指派给研发角色</td><td><button type="button" class="btn btn-sm" data-goto-story="4121">接管处理</button></td></tr>
+                  <tr><td><span class="badge tone-warn">R07</span></td><td class="mono">#4115</td><td>设计评审已完成，待移交研发主管</td><td><button type="button" class="btn btn-sm" data-goto-story="4115">接管处理</button></td></tr>
+                </tbody>
+              </table>
+            </div>
+          `;
+          for (const b of stream.querySelectorAll("[data-goto-story]")) {
+            b.onclick = () => { state.selectedStoryId = Number(b.dataset.gotoStory); switchView("human"); openStoryModal(state.selectedStoryId); };
+          }
+        } else if (state.aiScenario === "draft") {
+          const d = state.draft || {
+            title: "权限审计报表支持按项目组批量导出",
+            product: "基础协作平台 (#10)",
+            module: "权限管理",
+            category: "feature",
+            scope: "支持按项目组筛选并导出 CSV/XLSX，包含成员角色、授权时间与审批人。",
+          };
+          stream.innerHTML = `
+            <div class="trace-bar">
+              <span class="badge tone-ai">L3 模型结构化抽取（本人 Token）</span>
+              <span>→</span>
+              <span class="badge">AgentWorkPlan（非可信操作计划）</span>
+              <span class="hint" style="margin-left:auto;">可编辑字段后交由业务服务校验</span>
+            </div>
+            <div class="gen-card">
+              <div class="gen-card-head">
+                <strong>可编辑需求草稿卡片</strong>
+                <span class="badge">草稿 · 尚未调用写入</span>
+              </div>
+              <div class="field" style="margin-bottom:8px;">
+                <label>需求标题 <span class="badge">origin: user</span></label>
+                <input class="input" id="draft-title" value="${d.title}" />
+              </div>
+              <div class="form-grid" style="margin-bottom:8px;">
+                <div class="field"><label>产品与模块 <span class="badge">origin: derived</span></label><input class="input" id="draft-module" value="${d.product} / ${d.module}" /></div>
+                <div class="field"><label>优先级与类型 <span class="badge">origin: default</span></label><input class="input" value="P2 · 研发需求 (feature)" /></div>
+              </div>
+              <div class="field" style="margin-bottom:10px;">
+                <label>本次实现范围（规范必填 · 不编造事实性字段）</label>
+                <textarea class="input" id="draft-scope" rows="3">${d.scope}</textarea>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="btn btn-primary btn-sm" id="draft-to-preview">由可信服务生成写入预览</button>
+                <button type="button" class="btn btn-sm" id="draft-to-human">转入人工工作台继续编辑</button>
+              </div>
+            </div>
+          `;
+          $("draft-to-preview").onclick = () => {
+            state.draft = { ...d, title: $("draft-title").value, scope: $("draft-scope").value };
+            state.pendingPreviewCount = 1;
+            state.aiScenario = "preview";
+            renderAll();
+          };
+          $("draft-to-human").onclick = () => {
+            state.draft = { ...d, title: $("draft-title").value, scope: $("draft-scope").value };
+            switchView("human");
+          };
+        } else {
+          state.pendingPreviewCount = 1;
+          renderTopContext();
+          stream.innerHTML = `
+            <div class="trace-bar">
+              <span class="badge tone-ai">Agent 仅调用 prepare</span>
+              <span>→</span>
+              <span class="mono">CapabilityRuntime.invoke(channel="ai", "assign_story")</span>
+              <span class="badge tone-warn" style="margin-left:auto;">服务端判定级别：W2</span>
+            </div>
+            <div class="gen-card">
+              <div class="gen-card-head">
+                <strong>可信业务操作预览 · <span class="mono">op_01JXYZ9A2B</span></strong>
+                <span class="badge tone-warn">W2 · 须人工确认</span>
+              </div>
+              <div class="preview-guard">
+                安全红线：AI 渠道（<code>channel="ai"</code>）禁止调用 <code>confirm_operation</code>，即便携带 <code>previewAck=true</code> 也会被服务端拦截。请核对以下字段后由人工显式确认。
+              </div>
+              <table style="margin-bottom:10px;">
+                <thead><tr><th>步骤</th><th>动作</th><th>目标</th><th>字段与来源</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td class="mono">1</td>
+                    <td class="mono">story.assign</td>
+                    <td class="mono">story #${s.id}</td>
+                    <td>assignedTo=zhanggong <span class="badge">user</span> · notify=true <span class="badge">default</span></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div id="preview-action-result" class="hint" style="margin-bottom:8px;">受影响成员：张工 (zhanggong) · 计划 10 分钟内有效 · 乐观指纹校验已锁定</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button type="button" class="btn btn-primary btn-sm" id="human-confirm-btn">我已核对预览，人工确认执行</button>
+                <button type="button" class="btn btn-sm" id="ai-try-confirm-btn">演练：AI 越权自确认拦截</button>
+                <button type="button" class="btn btn-sm" id="preview-back-human">转入人工视图复核</button>
+              </div>
+            </div>
+          `;
+          $("human-confirm-btn").onclick = () => {
+            $("preview-action-result").innerHTML = state.readOnly
+              ? `<span class="badge tone-warn">403 PERMISSION_DENIED</span> 当前集中服务处于只读模式（readOnly: true），未向禅道派发写入。可在顶部切换“只读模式: 关”体验确认回执。`
+              : `<span class="badge tone-success">status: confirmed</span> 经人工渠道校验会话/职责/配置版本与目标指纹后完成写入并回读确认（演示合成回执）。`;
+          };
+          $("ai-try-confirm-btn").onclick = () => {
+            $("preview-action-result").innerHTML =
+              `<span class="badge tone-danger">已拦截 · PERMISSION_DENIED</span> CapabilityRuntime 拒绝了 channel="ai" 的 confirm_operation 调用（即使携带 previewAck=true），上游写入数 = 0。`;
+          };
+          $("preview-back-human").onclick = () => switchView("human");
+        }
+      }
+
+      function openStoryModal(id) {
+        const s = stories.find((x) => x.id === id) || selectedStory();
+        state.selectedStoryId = s.id;
+        $("story-modal-title").textContent = `#${s.id} · ${s.title}`;
+        $("story-modal-body").innerHTML = `
+          <div class="trace-bar">
+            <span class="badge tone-accent">${s.progress}</span>
+            <span class="badge">${s.module}</span>
+            <span class="badge">维护人：${s.maintainer}</span>
+            <span class="badge">指派给：${s.owner}</span>
+            <span class="badge">外部正文 · untrusted</span>
+          </div>
+          <div class="field">
+            <label>本次实现范围（仅作不可信数据展示）</label>
+            <div style="padding:10px;border-radius:8px;background:var(--surface-2);border:1px solid var(--border);">${s.scope}</div>
+          </div>
+          <div class="stepper">
+            ${s.stages.map((st) => `<div class="step-box ${st.state}"><strong>${st.name}</strong><div class="hint">${st.who}</div></div>`).join("")}
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;">
+            <button type="button" class="btn btn-ai" id="modal-to-ai">交给 AI 协作工作台分析</button>
+          </div>
+        `;
+        $("modal-to-ai").onclick = () => {
+          $("story-modal").classList.add("hidden");
+          state.aiScenario = "progress";
+          switchView("ai");
+        };
+        $("story-modal").classList.remove("hidden");
+        renderTopContext();
+      }
+
+      function renderSettingsBanner(msg, tone) {
+        const b = $("settings-status-banner");
+        const ready = state.aiConfig.configured && state.aiConfig.verified;
+        const text = msg || (ready
+          ? `状态：已验证可用 · 脱敏 Token ${state.aiConfig.tokenHint} · 模型 ${state.aiConfig.modelId}`
+          : state.aiConfig.configured
+            ? "状态：已保存配置，请点击「测试连接」验证后启用内置 AI 助手。"
+            : "状态：未配置个人模型网关（人工业务工作台不受影响，正常可用）。");
+        const cls = tone || (ready ? "tone-success" : "tone-warn");
+        b.replaceChildren();
+        const statusBadge = document.createElement("span");
+        statusBadge.className = "badge " + cls;
+        statusBadge.textContent = ready ? "已启用" : "未就绪";
+        const statusText = document.createElement("span");
+        statusText.textContent = text;
+        b.append(statusBadge, " ", statusText);
+
+        const hintEl = $("gw-token-hint");
+        hintEl.replaceChildren();
+        if (state.aiConfig.configured) {
+          hintEl.append("当前已保存脱敏状态：");
+          const strong = document.createElement("strong");
+          strong.className = "mono";
+          strong.textContent = state.aiConfig.tokenHint || "••••";
+          hintEl.append(strong, "（绝不回显完整明文或写入浏览器存储）");
+        } else {
+          hintEl.textContent = "当前未保存个人 Token。";
+        }
+      }
+
+      function openAiSettings() {
+        $("account-menu").classList.add("hidden");
+        $("gw-url").value = state.aiConfig.baseUrl || "https://llm-gateway.corp.example/v1";
+        $("gw-protocol").value = state.aiConfig.protocol || "openai-compatible";
+        $("gw-model").value = state.aiConfig.modelId || "enterprise-gpt-4o";
+        $("gw-token").value = "";
+        renderSettingsBanner();
+        $("ai-settings-modal").classList.remove("hidden");
+      }
+
+      function switchView(next) {
+        state.view = next;
+        $("view-human").classList.toggle("hidden", next !== "human");
+        $("view-ai").classList.toggle("hidden", next !== "ai");
+        for (const tab of document.querySelectorAll(".topbar .view-tab")) {
+          const active = tab.dataset.view === next;
+          tab.classList.toggle("is-active", active);
+          tab.setAttribute("aria-selected", String(active));
+        }
+        renderAll();
+      }
+
+      function renderAll() {
+        renderTopContext();
+        renderLedger();
+        renderAiDrawer();
+        if (state.view === "ai") renderAiStage();
+      }
+
+      // Wire controls
+      for (const tab of document.querySelectorAll(".topbar .view-tab")) {
+        tab.onclick = () => switchView(tab.dataset.view);
+      }
+      for (const dtab of document.querySelectorAll("[data-density]")) {
+        dtab.onclick = () => {
+          state.density = dtab.dataset.density;
+          for (const x of document.querySelectorAll("[data-density]"))
+            x.classList.toggle("is-active", x === dtab);
+          renderLedger();
+        };
+      }
+      $("role-select").onchange = (e) => { state.role = e.target.value; renderAll(); };
+      $("work-month").onchange = (e) => { state.month = e.target.value || "2026-11"; renderAll(); };
+      $("filter-search").oninput = renderLedger;
+      $("filter-stage").onchange = renderLedger;
+      $("filter-risk").onchange = renderLedger;
+      $("filter-reset").onclick = () => {
+        $("filter-search").value = "";
+        $("filter-stage").value = "";
+        $("filter-risk").value = "";
+        renderLedger();
+      };
+      $("sync-btn").onclick = () => {
+        $("sync-text").textContent = "同步中…";
+        setTimeout(() => { $("sync-text").textContent = "已同步 刚刚"; }, 350);
+      };
+      $("toggle-ai-drawer").onclick = () => {
+        if (state.view === "ai") return switchView("human");
+        state.aiDrawerOpen = !state.aiDrawerOpen;
+        renderAiDrawer();
+      };
+      $("close-ai-drawer").onclick = () => { state.aiDrawerOpen = false; renderAiDrawer(); };
+      $("account-btn").onclick = (e) => {
+        e.stopPropagation();
+        $("account-menu").classList.toggle("hidden");
+      };
+      document.addEventListener("click", (e) => {
+        if (!e.target.closest(".account-wrap")) $("account-menu").classList.add("hidden");
+      });
+      $("open-ai-settings").onclick = openAiSettings;
+      $("stage-ai-settings").onclick = openAiSettings;
+      $("close-ai-settings").onclick = () => $("ai-settings-modal").classList.add("hidden");
+      $("close-story-modal").onclick = () => $("story-modal").classList.add("hidden");
+      $("handoff-to-human").onclick = () => switchView("human");
+      $("btn-human-intake").onclick = () => { state.aiScenario = "draft"; switchView("ai"); };
+
+      for (const sbtn of document.querySelectorAll(".session-item")) {
+        sbtn.onclick = () => {
+          for (const x of document.querySelectorAll(".session-item")) x.classList.remove("is-active");
+          sbtn.classList.add("is-active");
+          state.aiScenario = sbtn.dataset.scenario;
+          renderAiStage();
+        };
+      }
+      for (const qbtn of document.querySelectorAll("[data-quick]")) {
+        qbtn.onclick = () => {
+          state.aiScenario = qbtn.dataset.quick === "mywork" ? "progress" : qbtn.dataset.quick;
+          renderAiStage();
+        };
+      }
+      $("ai-send").onclick = () => {
+        const text = $("ai-input").value.trim();
+        if (!text) return;
+        if (text.includes("风险")) state.aiScenario = "risks";
+        else if (text.includes("拟") || text.includes("提需")) state.aiScenario = "draft";
+        else if (text.includes("指派") || text.includes("预览")) state.aiScenario = "preview";
+        else state.aiScenario = "progress";
+        $("ai-input").value = "";
+        renderAiStage();
+      };
+
+      // Settings actions
+      $("btn-save-ai").onclick = () => {
+        const url = $("gw-url").value.trim();
+        const modelId = $("gw-model").value.trim();
+        const rawTok = $("gw-token").value.trim();
+        if (!url.startsWith("https://llm-gateway.corp.example/")) {
+          renderSettingsBanner("拒绝保存：网关地址不在管理员允许白名单内（SSRF 防护）。", "tone-danger");
+          return;
+        }
+        state.aiConfig.baseUrl = url;
+        state.aiConfig.protocol = $("gw-protocol").value;
+        state.aiConfig.modelId = modelId || "enterprise-gpt-4o";
+        state.aiConfig.configured = true;
+        if (rawTok) {
+          state.aiConfig.tokenHint = rawTok.length < 8 ? "••••" : "••••" + rawTok.slice(-4);
+          state.aiConfig.verified = false;
+          $("gw-token").value = "";
+        }
+        renderSettingsBanner("配置已加密保存（明文输入框已清空），请点击「测试连接」完成验证。", "tone-accent");
+        renderAll();
+      };
+
+      $("btn-test-conn").onclick = () => {
+        const sim = $("gw-sim-result").value;
+        if (sim === "ssrf") {
+          state.aiConfig.verified = false;
+          renderSettingsBanner("连接测试被拦截：目标地址不在管理员允许列表或发生非法重定向（零 Token 外发）。", "tone-danger");
+        } else if (sim === "invalid_token") {
+          state.aiConfig.verified = false;
+          renderSettingsBanner("连接测试失败（AUTH_FAILED）：个人 Token 无效或已被撤销，未回退他人凭据。", "tone-danger");
+        } else if (sim === "quota") {
+          state.aiConfig.verified = false;
+          renderSettingsBanner("连接测试失败（QUOTA_EXHAUSTED）：个人额度已耗尽，请联系平台补充个人配额。", "tone-warn");
+        } else {
+          state.aiConfig.configured = true;
+          state.aiConfig.verified = true;
+          renderSettingsBanner("最小非业务探活通过：个人大模型网关与模型可用，已启用内置 AI 助手。", "tone-success");
+        }
+        renderAll();
+      };
+
+      $("btn-delete-token").onclick = () => {
+        state.aiConfig.configured = false;
+        state.aiConfig.verified = false;
+        state.aiConfig.tokenHint = "";
+        $("gw-token").value = "";
+        renderSettingsBanner("已彻底删除个人模型配置与密文 Token。人工工作台不受影响。", "tone-warn");
+        renderAll();
+      };
+
+      // Top demo simulation switches
+      $("sim-unconfigured").onclick = () => {
+        state.aiConfig.configured = false;
+        state.aiConfig.verified = false;
+        renderAll();
+      };
+      $("sim-verified").onclick = () => {
+        state.aiConfig.configured = true;
+        state.aiConfig.verified = true;
+        state.aiConfig.tokenHint = state.aiConfig.tokenHint || "••••9f2a";
+        renderAll();
+      };
+      $("sim-readonly").onclick = () => { state.readOnly = !state.readOnly; renderAll(); };
+      const toggleTheme = () => {
+        const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+        document.documentElement.dataset.theme = next;
+      };
+      $("sim-theme").onclick = toggleTheme;
+      $("menu-theme").onclick = toggleTheme;
+      $("open-system-info").onclick = () => {
+        $("account-menu").classList.add("hidden");
+        alert("better-zentao 2.0 Architecture Baseline\n运行模式：集中服务（合成原型）\n业务底座：BusinessProvider Port（ZenTao 22.6 / 可替换）\nAI 凭据：按员工个人 Token 隔离，服务端 AES-256-GCM 加密");
+      };
+
+      renderAll();
+    </script>
+  </body>
+</html>

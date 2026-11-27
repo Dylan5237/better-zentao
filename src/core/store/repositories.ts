@@ -213,6 +213,23 @@ export class OperationsRepository {
       throw new BztError("NOT_FOUND", "未找到操作回执。", { opId });
   }
 
+  /** CR-009 §4.2（G-03）：执行器近期回执查询收敛到存储边界。 */
+  public listRecent(
+    actor: string,
+    instanceHash: string,
+    limit: number,
+  ): string[] {
+    return queryAll(
+      this.database,
+      `SELECT op_id FROM operations WHERE actor = ? AND
+        CASE WHEN json_valid(plan_json) THEN json_extract(plan_json, '$.instanceHash') END = ?
+        ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+      [actor, instanceHash, limit],
+      z.object({ op_id: z.string() }),
+      "读取近期操作回执",
+    ).map(({ op_id }) => op_id);
+  }
+
   public delete(opId: string): boolean {
     return (
       execute(

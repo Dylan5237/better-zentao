@@ -2,6 +2,9 @@
 node_modules/
 dist/
 coverage/
+.pnpm-cache/
+.pnpm-state/
+.pnpm-store/
 
 # Secrets & local overrides (NEVER commit)
 .env

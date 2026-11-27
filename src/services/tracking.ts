@@ -1,17 +1,8 @@
 import { z } from "zod";
-import { listProductBugs } from "../api/bug.ts";
 import type { ZentaoReadClient } from "../api/client.ts";
-import { listExecutionsIncludingClosed } from "../api/execution.ts";
 import { listMyContributions, listMyWork } from "../api/my.ts";
-import { getCurrentUser, listUsers } from "../api/org.ts";
-import { listProductPlans } from "../api/plan.ts";
-import { listProducts } from "../api/product.ts";
-import {
-  getRequirementDetail,
-  listProductRequirements,
-} from "../api/requirement.ts";
-import { getStoryDetail, listProductStories } from "../api/story.ts";
-import { getTaskDetail, listExecutionTasks } from "../api/task.ts";
+import { createZentaoBusinessProvider } from "./providers/zentao-business-provider.ts";
+import type { BusinessProvider } from "./ports/business-provider.ts";
 import {
   getMyWorkInputSchema,
   myWorkGroupSchema,
@@ -44,6 +35,7 @@ import {
 import type { Clock } from "../core/clock.ts";
 import type { TeamConfig } from "../core/config.ts";
 import type { Execution } from "../core/dto/execution.ts";
+import type { RequirementDetail } from "../core/dto/story.ts";
 import type { User } from "../core/dto/org.ts";
 import { walkProductPlans, type ProductPlan } from "../core/dto/plan.ts";
 import {
@@ -77,26 +69,108 @@ import {
   foldStageRequirements,
 } from "./structured-notes.ts";
 
+/** CR-009 §4.2：跟踪服务所需的最小读模型；LocalStore 与内存端口实现都满足。 */
+export interface TrackingStore {
+  readonly storyRoles: {
+    get(storyId: number): {
+      storyId: number;
+      maintainer: string | null;
+      receiver: string | null;
+      updatedAt: number;
+    };
+    upsert(role: {
+      storyId: number;
+      maintainer: string | null;
+      receiver: string | null;
+      updatedAt: number;
+    }): void;
+  };
+  readonly sourceLinks: {
+    listTo(
+      toType: string,
+      toId: string,
+    ): ReadonlyArray<{
+      fromType: string;
+      fromId: string;
+      relation: string;
+    }>;
+    listFrom(
+      fromType: string,
+      fromId: string,
+    ): ReadonlyArray<{
+      toType: string;
+      toId: string;
+      relation: string;
+    }>;
+  };
+  readonly intake: {
+    list(): ReadonlyArray<{
+      intakeId: string;
+      feedbackByText: string | null;
+      feedbackByAccount: string | null;
+      channel: string | null;
+      createdBy: string;
+      createdAt: number;
+      backfilled: boolean;
+      actualStartedAt: number | null;
+    }>;
+    get(intakeId: string): {
+      intakeId: string;
+      feedbackByText: string | null;
+      feedbackByAccount: string | null;
+      channel: string | null;
+      createdBy: string;
+      createdAt: number;
+      backfilled: boolean;
+      actualStartedAt: number | null;
+    };
+  };
+  readonly seenCursor: {
+    get(scope: string): { lastSeenAt: number } | undefined;
+    set(scope: string, lastSeenAt: number): void;
+  };
+  readonly cache?: {
+    get(key: string): string | undefined;
+    set(key: string, value: string, ttlMs: number): void;
+    setPermanent(key: string, value: string): void;
+    delete(key: string): boolean;
+  };
+  readonly stageRequirements?: {
+    listByStory(storyId: number): ReadonlyArray<{
+      stage: string;
+      required: boolean;
+      waiverReason: string | null;
+      decidedAt: number;
+    }>;
+  };
+  readonly waivers?: {
+    listByObject(
+      objectType: string,
+      objectId: string,
+    ): ReadonlyArray<{
+      ruleId: string;
+      reason: string;
+      approvedBy: string;
+      at: number;
+    }>;
+  };
+}
+
 interface TrackingOptions {
   readonly fresh?: boolean;
-  readonly client: ZentaoReadClient;
+  /** CR-009 §4.1：优先注入业务底座；仅传 client 时自动包一层禅道适配器。 */
+  readonly provider?: BusinessProvider;
+  readonly client?: ZentaoReadClient;
   readonly config: TeamConfig;
   readonly clock: Clock;
   readonly baseUrl: string;
-  readonly store: Pick<
-    LocalStore,
-    "seenCursor" | "sourceLinks" | "intake" | "storyRoles"
-  > &
-    Partial<Pick<LocalStore, "cache" | "stageRequirements" | "waivers">>;
+  readonly store: TrackingStore;
 }
 
 type WorkTask = Pick<Task, Extract<keyof Task, string>> & {
   readonly team?: TaskDetail["team"];
 };
-type StoryRow =
-  | Story
-  | StoryDetail
-  | Awaited<ReturnType<typeof getRequirementDetail>>["story"];
+type StoryRow = Story | StoryDetail | RequirementDetail["story"];
 type StageTask = Parameters<typeof summarizeStages>[0][number] & WorkTask;
 type Inferences = GetStoryProgressOutput["inferences"];
 type Gaps = GetStoryProgressOutput["gaps"];
@@ -322,7 +396,7 @@ class TrackingRead {
   readonly storyTitles = new Map<number, string>();
   private readonly executionTasks = new Map<
     number,
-    Promise<{ items: Task[]; truncated: boolean } | undefined>
+    Promise<{ readonly items: readonly Task[]; truncated: boolean } | undefined>
   >();
   private readonly storyDetails = new Map<
     number,
@@ -339,12 +413,21 @@ class TrackingRead {
   >();
   private readonly names = new Map<number, string>();
   private users?: Promise<void>;
-  private executionList?: Promise<Execution[]>;
+  private executionList?: Promise<readonly Execution[]>;
+
+  readonly provider: BusinessProvider;
 
   constructor(
     readonly options: TrackingOptions,
     horizon?: number,
   ) {
+    if (options.provider) this.provider = options.provider;
+    else if (options.client)
+      this.provider = createZentaoBusinessProvider({
+        client: options.client,
+        baseUrl: "",
+      });
+    else throw new BztError("CONFIG_MISSING", "请为跟踪服务配置业务底座。");
     const { clock, config } = options;
     this.now = clock();
     this.today = formatLocalDate(this.now, config.timezone);
@@ -407,7 +490,7 @@ class TrackingRead {
 
   async page<T>(
     source: string,
-    load: () => Promise<{ items: T[]; truncated: boolean }>,
+    load: () => Promise<{ readonly items: readonly T[]; truncated: boolean }>,
   ) {
     const page = await this.read(source, load);
     if (page?.truncated) this.gap(source, "分页未读完整。");
@@ -461,16 +544,16 @@ class TrackingRead {
   }
 
   me() {
-    return this.read("me", () => getCurrentUser(this.options.client));
+    return this.read("me", () => this.provider.getCurrentUser());
   }
 
   directory() {
-    this.users ??= this.page("users", () =>
-      listUsers(this.options.client),
-    ).then((page) => {
-      for (const user of page?.items ?? [])
-        if (!user.deleted) this.people.set(user.account, user);
-    });
+    this.users ??= this.page("users", () => this.provider.listUsers()).then(
+      (page) => {
+        for (const user of page?.items ?? [])
+          if (!user.deleted) this.people.set(user.account, user);
+      },
+    );
     return this.users;
   }
 
@@ -515,7 +598,7 @@ class TrackingRead {
 
   async products(id?: number) {
     const page = await this.page("products", () =>
-      listProducts(this.options.client),
+      this.provider.listProducts(),
     );
     const products = page?.items.filter((product) => !product.deleted) ?? [];
     for (const { id, name } of products) this.names.set(id, name);
@@ -530,7 +613,7 @@ class TrackingRead {
 
   private async loadPlans(product: number) {
     const rows = await this.page(`plans:${product}`, () =>
-      listProductPlans(this.options.client, product),
+      this.provider.listProductPlans(product),
     );
     return [...walkProductPlans(rows?.items ?? [])].filter(
       ({ deleted }) => !deleted,
@@ -545,7 +628,7 @@ class TrackingRead {
 
   private loadBugs(product: number) {
     return this.page(`bugs:${product}`, () =>
-      listProductBugs(this.options.client, product),
+      this.provider.listProductBugs(product),
     );
   }
 
@@ -555,13 +638,13 @@ class TrackingRead {
     fresh = false,
   ) {
     const products = await this.products(product);
-    const { client, config } = this.options;
+    const { config } = this.options;
     const collection = type === "story" ? "stories" : "requirements";
     const pages = await Promise.all(
       products.map(({ id }) =>
         this.page(`${collection}:${id}`, () =>
           type === "requirement"
-            ? listProductRequirements(client, id)
+            ? this.provider.listProductRequirements(id)
             : this.cached(
                 `stories:${id}`,
                 z.object({
@@ -574,7 +657,7 @@ class TrackingRead {
                     ),
                   truncated: z.boolean(),
                 }),
-                () => listProductStories(client, id),
+                () => this.provider.listProductStories(id),
                 ({ items, truncated }) => ({
                   items: items.map(encodeStory),
                   truncated,
@@ -610,14 +693,14 @@ class TrackingRead {
   }
 
   async requiredDetail(id: number) {
-    const { client, config } = this.options;
+    const { config } = this.options;
     const story = await this.cached(
       `story:${id}`,
       storyDetailDtoFor(config.timezone).refine(
         (row) => row.id === id && !row.deleted,
       ),
       async () => {
-        const row = await getStoryDetail(client, id);
+        const row = await this.provider.getStoryDetail(id);
         if (row.id !== id)
           throw new BztError(
             "ZENTAO_SCHEMA_MISMATCH",
@@ -666,7 +749,7 @@ class TrackingRead {
 
   allExecutions() {
     this.executionList ??= this.page("executions", () =>
-      listExecutionsIncludingClosed(this.options.client),
+      this.provider.listExecutions(),
     ).then((rows) => {
       const executions = rows?.items ?? [];
       for (const execution of executions) {
@@ -695,7 +778,7 @@ class TrackingRead {
         const pending =
           this.executionTasks.get(id) ??
           this.page(`tasks:${id}`, async () => {
-            const result = await listExecutionTasks(this.options.client, id);
+            const result = await this.provider.listExecutionTasks(id);
             for (const task of result.items) {
               if (task.execution !== id)
                 this.gap(`tasks:${id}`, "执行列表中有任务的归属不一致。");
@@ -713,7 +796,7 @@ class TrackingRead {
     const pending =
       this.taskDetails.get(id) ??
       this.read(`task:${id}`, async () => {
-        const detail = await getTaskDetail(this.options.client, id);
+        const detail = await this.provider.getTaskDetail(id);
         const original = this.tasks.get(id);
         if (
           detail.id !== id ||
@@ -1817,7 +1900,7 @@ export class TrackingService {
     } = parseInput(getMyWorkInputSchema, raw);
     const state = new TrackingRead(this.options, horizonDays);
     const range = month ? monthDateRange(month) : undefined;
-    const { client, store } = this.options;
+    const { store, client: myClient } = this.options;
     const selected = new Set(groups);
     const data: GetMyWorkOutput["data"] = {
       new: [],
@@ -1886,14 +1969,14 @@ export class TrackingService {
       needsTasks ? state.allTasks(range) : [],
       // 游标不能越过来源列表的观察时间。
       state.stories(undefined, "story", selected.has("new") && markSeen),
-      selected.has("action")
+      selected.has("action") && myClient
         ? state.page("myWork:reviewBy", () =>
-            listMyWork(client, { mode: "story", browseType: "reviewBy" }),
+            listMyWork(myClient, { mode: "story", browseType: "reviewBy" }),
           )
         : undefined,
-      selected.has("raised")
+      selected.has("raised") && myClient
         ? state.page("my_contribute", () =>
-            listMyContributions(client, {
+            listMyContributions(myClient, {
               mode: "story",
               browseType: "openedBy",
             }),
@@ -2185,7 +2268,7 @@ export class TrackingService {
     portalMonth?: string,
   ): Promise<QueryStoriesOutput> {
     const input = parseInput(queryStoriesInputSchema, raw);
-    const { client, store } = this.options;
+    const { store } = this.options;
     const state = new TrackingRead(this.options);
     const {
       product,
@@ -2286,7 +2369,7 @@ export class TrackingService {
           const detail =
             (unlinked !== undefined && !knownLinked) || role || who || keyword
               ? await state.read(`requirement:${row.id}`, () =>
-                  getRequirementDetail(client, row.id),
+                  state.provider.getRequirementDetail(row.id),
                 )
               : undefined;
           if (
@@ -2441,7 +2524,7 @@ export class TrackingService {
     { raisedByMe = false } = {},
   ): Promise<GetStoryProgressOutput> {
     const input = parseInput(getStoryProgressInputSchema, raw);
-    const { client, store } = this.options;
+    const { store } = this.options;
     const {
       storyId,
       intakeId,
@@ -2474,7 +2557,7 @@ export class TrackingService {
     if (requirementId) {
       const [detail, links] = await Promise.all([
         state.read(`requirement:${requirementId}`, async () => {
-          const row = await getRequirementDetail(client, requirementId);
+          const row = await state.provider.getRequirementDetail(requirementId);
           if (row.story.id !== requirementId || row.story.deleted)
             throw new BztError(
               "ZENTAO_SCHEMA_MISMATCH",

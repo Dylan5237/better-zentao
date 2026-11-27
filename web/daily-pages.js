@@ -1069,7 +1069,9 @@ export async function renderStories(container, ctx, initial = {}) {
     ["all-stories", "全部需求台账"],
     ["flow", "9 步标准流转图", "GitBranch"],
   ];
-  const stateKey = `bzt.portal.stories/${ctx.account ?? ""}/${ctx.role.id}`;
+  const stateKey = ctx.instanceId
+    ? `bzt.portal.stories/${encodeURIComponent(ctx.instanceId)}/${encodeURIComponent(ctx.account ?? "")}/${ctx.role.id}`
+    : `bzt.portal.stories/${ctx.account ?? ""}/${ctx.role.id}`;
   let saved = {};
   try {
     saved = JSON.parse(sessionStorage.getItem(stateKey) || "{}") || {};

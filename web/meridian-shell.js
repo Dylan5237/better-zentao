@@ -10,9 +10,9 @@ const groups = [
   ["mgmt", "管理", "管理侧", ["PM", "PJ"]],
 ];
 const modes = [
-  ["zentao", "一·原生"],
-  ["hybrid", "二·融合"],
-  ["meridian", "三·封装"],
+  ["zentao", "表格台账"],
+  ["hybrid", "混合视图"],
+  ["meridian", "卡片概览"],
 ];
 const navIcons = {
   workbench: "LayoutDashboard",
@@ -68,10 +68,17 @@ export function createMeridianShell({
     nav = byId("role-nav");
   const sideModes = byId("side-modes");
   const modeKey = () =>
-    "bzt.portal.mode/" +
-    encodeURIComponent(session.identity?.account ?? "") +
-    "/" +
-    session.role?.id;
+    session.identity?.instanceId
+      ? "bzt.portal.mode/" +
+        encodeURIComponent(session.identity.instanceId) +
+        "/" +
+        encodeURIComponent(session.identity.account ?? "") +
+        "/" +
+        session.role?.id
+      : "bzt.portal.mode/" +
+        encodeURIComponent(session.identity?.account ?? "") +
+        "/" +
+        session.role?.id;
   let activePopup,
     collapsed = false;
   function mode() {
@@ -135,6 +142,15 @@ export function createMeridianShell({
     closeRoleMenu?.();
     closeRoleMenu = undefined;
     tabs.replaceChildren();
+    if ((identity.roles?.length ?? 0) === 1 && role) {
+      tabs.classList.remove("is-compact");
+      const badge = el("span", "role-pill is-active", role.label);
+      badge.dataset.role = role.id;
+      badge.title =
+        role.label + " · " + (identity.displayName || identity.account);
+      tabs.append(badge);
+      return;
+    }
     const compact = (identity.roles?.length ?? 0) > 3;
     tabs.classList.toggle("is-compact", compact);
     if (!compact) {
@@ -181,8 +197,7 @@ export function createMeridianShell({
         el("span", "role-chip grp-" + currentGroup[0], currentGroup[1]),
       );
     trigger.append(
-      el("span", null, role?.label || "选择角色"),
-      el("span", "mono sidebar-asof", `${identity.roles.length} 角色`),
+      el("span", null, role?.label || "选择职责"),
       icon("ChevronDown", 14),
     );
     const menu = el("div", "role-dropdown-menu");
@@ -280,8 +295,13 @@ export function createMeridianShell({
   function date(asOf) {
     if (/^\d{4}-\d\d-\d\d/.test(asOf ?? "")) {
       byId("as-of").textContent = "基准 " + asOf.slice(5, 10);
-      document.querySelector(".bzt-topbar .bzt-brand-sub").textContent =
-        "禅道 22.6 协作工作台 · " + asOf.slice(0, 7) + " 业务数据（本机门户）";
+      const modeLabel = session.identity?.instanceId
+        ? session.identity.readOnly
+          ? "集中工作台（只读）"
+          : "集中工作台"
+        : "本机工作台";
+      const sub = document.querySelector(".bzt-topbar .bzt-brand-sub");
+      if (sub) sub.textContent = modeLabel;
     }
   }
   function setTheme(theme) {

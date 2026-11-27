@@ -22,129 +22,28 @@ import {
   type WorkbenchRuntime,
 } from "./workbench.ts";
 
-const personal = [
-  "get_my_work",
-  "get_story_progress",
-  "query_stories",
-] as const;
-const design = [
-  ...personal,
-  "get_monthly_dev_queue",
-  "get_plan_progress",
-  "scan_workflow_risks",
-  "create_story",
-  "handoff_story",
-  "decompose_stories",
-] as const;
-const management = [
-  ...personal,
-  "get_member_schedule",
-  "get_monthly_dev_queue",
-  "get_plan_progress",
-  "scan_workflow_risks",
-] as const;
-const rolePages = {
-  FB: { label: "业务反馈者", actions: [...personal, "create_story"] },
-  PM: { label: "产品管理", actions: [...management, "set_story_meta"] },
-  PJ: {
-    label: "项目管理",
-    actions: [...management, "get_team_work"],
-  },
-  DM: {
-    label: "设计主管",
-    actions: [
-      ...design,
-      "assign_story",
-      "import_stories",
-      "get_member_schedule",
-    ],
-  },
-  DS: { label: "设计人员", actions: design },
-  RM: {
-    label: "研发主管",
-    actions: [
-      ...personal,
-      "get_monthly_dev_queue",
-      "get_team_work",
-      "get_member_schedule",
-      "get_plan_progress",
-      "scan_workflow_risks",
-      "decompose_stories",
-      "assign_story",
-      "reschedule_story",
-      "close_stories",
-    ],
-  },
-  RD: {
-    label: "研发人员",
-    actions: [
-      ...personal,
-      "get_team_work",
-      "create_story",
-      "get_monthly_dev_queue",
-      "get_member_schedule",
-      "get_plan_progress",
-      "scan_workflow_risks",
-    ],
-  },
-  QA: {
-    label: "测试人员",
-    actions: [
-      ...personal,
-      "scan_workflow_risks",
-      "get_plan_progress",
-      "get_monthly_dev_queue",
-      "get_member_schedule",
-    ],
-  },
-} as const;
+import {
+  authorizePortalToolInput,
+  portalDenied as denied,
+  portalRolePage,
+  portalRoles,
+  roleChoices,
+  snapshotTools,
+  type PageTool,
+  type PortalRole,
+  type PortalTool,
+  type RolePage,
+} from "./portal-policy.ts";
 
-export type PortalRole = keyof typeof rolePages;
-export type PageTool = (typeof rolePages)[PortalRole]["actions"][number];
-export type PortalTool = PageTool | "confirm_operation" | "get_operation";
-const snapshotTools = new Set<string>([
-  ...personal,
-  "get_team_work",
-  "get_member_schedule",
-  "get_plan_progress",
-  "get_monthly_dev_queue",
-  "scan_workflow_risks",
-]);
-interface RolePage {
-  id: PortalRole;
-  label: string;
-  actions: readonly PageTool[];
-}
-
-const roleIds = Object.keys(rolePages).filter(isRole);
-const roleChoices = roleIds.map((id) => ({ id, label: rolePages[id].label }));
-
-export function portalRoles(
-  table: TeamConfig["roles"],
-  account: string,
-): RolePage[] {
-  const result: RolePage[] = [];
-  for (const id of roleIds) {
-    if (
-      table[id]?.includes(account) ||
-      (id === "QA" && table.QA_LEAD?.includes(account))
-    )
-      result.push({ id, ...rolePages[id] });
-  }
-  return result;
-}
-
-function isRole(id: string): id is PortalRole {
-  return Object.hasOwn(rolePages, id);
-}
-
-function allowed(tool: string, page: RolePage): tool is PageTool {
-  return page.actions.some((action) => action === tool);
-}
-
-function denied(): never {
-  throw new BztError("PERMISSION_DENIED", "当前职责无权执行该操作。");
-}
+export {
+  authorizePortalToolInput,
+  portalRolePage,
+  portalRoles,
+  type PageTool,
+  type PortalRole,
+  type PortalTool,
+  type RolePage,
+};
 
 export async function dispatchPortalTool(
   w: Workbench,
@@ -196,7 +95,6 @@ export async function dispatchPortalTool(
 }
 
 const previewId = z.object({ opId: z.string().min(1), preview: z.object({}) });
-const formFields = z.record(z.string(), z.unknown());
 export function runPortalAction(
   execute: (
     tool: PortalTool,
@@ -255,85 +153,25 @@ export function runPortalAction(
         snapshots?.invalidate();
       return result;
     }
-    if (!allowed(name, page)) return denied();
-    const fields = formFields.safeParse(input);
-    if (
-      role !== "PM" &&
-      role !== "PJ" &&
-      name === "get_plan_progress" &&
-      fields.data?.view !== "release"
-    )
-      return denied();
-    if (!fields.success || !allTools[name].input.safeParse(fields.data).success)
-      throw new BztError("INVALID_INPUT", "请核对表单字段。");
-    const data = fields.data;
-    if (name === "get_my_work") {
-      data.markSeen = false;
-      if (role === "FB") data.groups = ["raised"];
-    }
-    if (name === "get_team_work" && role === "RD") {
-      if (data.view !== "all_open") return denied();
-      delete data.team;
-      data.members = [account];
-    }
-    if (name === "query_stories" && role === "FB") {
-      data.role = "raised";
-      data.who = account;
-    }
-    if (
-      name === "decompose_stories" &&
-      role !== "RM" &&
-      data.template !== "design"
-    )
-      return denied();
-    if (name === "get_member_schedule" && (role === "RD" || role === "QA")) {
-      if (data.newTask) return denied();
-      data.members = [account];
-    }
-    const reportMonth =
-      name !== "get_story_progress" && snapshotTools.has(name)
-        ? month
-        : undefined;
-    if (
-      reportMonth &&
-      (name === "get_plan_progress" || name === "get_monthly_dev_queue")
-    )
-      data.month = reportMonth;
-    if (
-      name === "scan_workflow_risks" &&
-      ["DM", "DS", "RD", "QA"].includes(role)
-    )
-      data.scope = { ...formFields.parse(data.scope ?? {}), mine: true };
-    if (reportMonth && name === "scan_workflow_risks")
-      data.scope = {
-        ...formFields.parse(data.scope ?? {}),
-        month: reportMonth,
-      };
-    if (
-      name === "set_story_meta" &&
-      !z
-        .strictObject({
-          storyId: z.number(),
-          waiver: z.strictObject({
-            rule: z.literal("R13"),
-            reason: z.string(),
-          }),
-        })
-        .safeParse(data).success
-    )
-      return denied();
+    const { tool, data, reportMonth } = authorizePortalToolInput(
+      page,
+      name,
+      input,
+      account,
+      month,
+    );
     const read = async () =>
-      allTools[name].output.parse(
+      allTools[tool].output.parse(
         await (reportMonth
-          ? execute(name, data, page.id, mode === "sync", reportMonth)
+          ? execute(tool, data, page.id, mode === "sync", reportMonth)
           : mode === "sync"
-            ? execute(name, data, page.id, true)
-            : execute(name, data, page.id)),
+            ? execute(tool, data, page.id, true)
+            : execute(tool, data, page.id)),
       );
-    if (snapshots && snapshotTools.has(name))
+    if (snapshots && snapshotTools.has(tool))
       return snapshots.read(
         role,
-        name,
+        tool,
         reportMonth ? { ...data, reportMonth } : data,
         mode,
         read,
@@ -442,7 +280,7 @@ export async function loginPortal(
       },
       get intakeCatalog(): ReturnType<typeof w.intakeCatalog> | undefined {
         return mayEdit &&
-          this.roles.some((page) => allowed("create_story", page))
+          this.roles.some((page) => page.actions.includes("create_story"))
           ? w.intakeCatalog()
           : undefined;
       },

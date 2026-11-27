@@ -115,24 +115,9 @@ const profiles = {
 };
 
 const modes = [
-  [
-    "zentao",
-    "一档·禅道原生",
-    "一档 · 禅道原生风格",
-    "高密度表格台账与多维条件检索",
-  ],
-  [
-    "hybrid",
-    "二档·融合增强",
-    "二档 · 工作台+禅道融合",
-    "工作台卡片、可视化进度与多维筛选",
-  ],
-  [
-    "meridian",
-    "三档·全封装",
-    "三档 · 完全封装工作台",
-    "业务分组与可视化进度卡片",
-  ],
+  ["zentao", "表格台账", "表格台账视图", "高密度表格台账与多维条件检索"],
+  ["hybrid", "混合视图", "混合工作台视图", "工作台卡片、可视化进度与多维筛选"],
+  ["meridian", "卡片概览", "卡片概览视图", "业务分组与可视化进度卡片"],
 ];
 
 const percent = new Intl.NumberFormat("zh-CN", {
@@ -1757,7 +1742,7 @@ export async function renderWorkbench(container, ctx) {
   const actions = add(head, "div", undefined, "page-head-actions");
   const switcher = add(actions, "div", undefined, "mode-tier-bar");
   switcher.setAttribute("role", "group");
-  switcher.setAttribute("aria-label", "三档交互模式切换");
+  switcher.setAttribute("aria-label", "工作台视图偏好");
   for (const [key, text, label, hint] of modes) {
     const choice = button(
       switcher,
@@ -1785,7 +1770,9 @@ export async function renderWorkbench(container, ctx) {
   if (ctx.role.id === "FB" && mode !== "zentao") feedbackForm(root, ctx);
 
   const teams = ctx.role.id === "RM" ? (ctx.developmentTeams ?? []) : [];
-  const teamStoreKey = `bzt.portal.rm.team/${ctx.account ?? ""}`;
+  const teamStoreKey = ctx.instanceId
+    ? `bzt.portal.rm.team/${encodeURIComponent(ctx.instanceId)}/${encodeURIComponent(ctx.account ?? "")}`
+    : `bzt.portal.rm.team/${ctx.account ?? ""}`;
   let savedTeam;
   try {
     savedTeam = sessionStorage.getItem(teamStoreKey);
