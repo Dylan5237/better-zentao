@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
@@ -51,6 +51,12 @@ function ownerDenied(): BztError {
     "PERMISSION_DENIED",
     "本地状态库所有者与当前账号不一致，拒绝打开。",
   );
+}
+
+function busyOperation(): BztError {
+  return new BztError("INVALID_INPUT", "本地操作正在执行，请稍后查询回执。", {
+    conflict: true,
+  });
 }
 
 function ensureDirectory(dbPath: string): void {
@@ -135,6 +141,9 @@ function ensureOwnerMeta(
 }
 
 export class LocalStore {
+  /** 进程内同库同 opId 并发确认的守卫。 */
+  private static readonly activeOps = new WeakMap<LocalStore, Set<string>>();
+
   public readonly location: StoreLocation;
   public readonly operations: OperationsRepository;
   public readonly operationSteps: OperationStepsRepository;
@@ -211,6 +220,37 @@ export class LocalStore {
         // 事务可能已被 SQLite 自动回滚，保留最初的报错。
       }
       throw error;
+    }
+  }
+
+  /**
+   * CR-009 §4.2（G-03）：操作执行器独占确认端口。
+   * 进程内按 opId 互斥；文件库另持 `state.db.operation-lock` 的
+   * `BEGIN IMMEDIATE` 写锁，网络等待期间主库检查点可独立提交，
+   * 同一库的其他进程无法同时派发；进程退出后 SQLite 自动释放锁。
+   */
+  public async withExclusiveLock<T>(
+    opId: string,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const guards = LocalStore.activeOps.get(this) ?? new Set<string>();
+    LocalStore.activeOps.set(this, guards);
+    if (guards.has(opId)) throw busyOperation();
+    guards.add(opId);
+    try {
+      const dbPath = this.location.dbPath;
+      if (dbPath === memoryPath) return await work();
+      using lock = new DatabaseSync(realpathSync(dbPath) + ".operation-lock", {
+        timeout: 0,
+      });
+      try {
+        lock.exec("BEGIN IMMEDIATE");
+      } catch {
+        throw busyOperation();
+      }
+      return await work();
+    } finally {
+      guards.delete(opId);
     }
   }
 

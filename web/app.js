@@ -560,6 +560,7 @@ export function createPortalSession(send = fetch) {
           : undefined;
       const preserveForm =
         retained &&
+        Boolean(next?.readOnly) === Boolean(identity?.readOnly) &&
         JSON.stringify(retained.actions) === JSON.stringify(role.actions);
       identity = next;
       role = retained ?? next?.roles[0];
@@ -1651,6 +1652,8 @@ function mountPortal(
     return {
       role,
       month,
+      instanceId: session.identity.instanceId,
+      readOnly: Boolean(session.identity.readOnly),
       account: session.identity.account,
       displayName: session.identity.displayName || session.identity.account,
       releaseCalendar:
@@ -1722,7 +1725,7 @@ function mountPortal(
           role.id,
           session.identity.account,
           initial,
-          { ...options, signal },
+          { ...options, instanceId: session.identity.instanceId, signal },
         ),
     };
   }

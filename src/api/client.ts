@@ -26,6 +26,8 @@ export type ZentaoReadConfig = ZentaoReadCredentials & {
   readonly logSink?: (line: string) => void;
   readonly onAuthFailed?: () => void;
   readonly isRevoked?: () => boolean;
+  /** CR-009 CAP-02：在取得写锁后、实际派发写请求前的最终授权校验钩子。 */
+  readonly assertBeforeWrite?: (opId?: string) => void | Promise<void>;
   readonly readPool?: PartitionedReadPool;
   readonly instanceHash?: string;
 };

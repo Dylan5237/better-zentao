@@ -1,8 +1,6 @@
 import type { ZentaoReadClient } from "../api/client.ts";
-import { listExecutionsIncludingClosed } from "../api/execution.ts";
-import { getCurrentUser, listUsers } from "../api/org.ts";
-import { listProductPlans } from "../api/plan.ts";
-import { getProductModules, listProducts } from "../api/product.ts";
+import { createZentaoBusinessProvider } from "./providers/zentao-business-provider.ts";
+import type { BusinessProvider } from "./ports/business-provider.ts";
 import {
   resolveContextInputSchema,
   resolveContextOutputSchema,
@@ -28,7 +26,9 @@ export interface DirectoryCache {
 }
 
 interface DirectoryOptions {
-  readonly client: ZentaoReadClient;
+  /** CR-009 §4.1：优先注入业务底座；仅传 client 时自动包一层禅道适配器。 */
+  readonly provider?: BusinessProvider;
+  readonly client?: ZentaoReadClient;
   readonly config: TeamConfig;
   readonly clock: Clock;
   readonly cache?: DirectoryCache;
@@ -37,7 +37,7 @@ interface DirectoryOptions {
 type Context = ResolveContextOutput["data"];
 type Person = Context["people"][number];
 type ReadState = Pick<ResolveContextOutput, "gaps" | "truncated">;
-type Rows<T> = { items: T[]; truncated: boolean };
+type Rows<T> = { readonly items: readonly T[]; truncated: boolean };
 
 function key(value: string): string {
   return value.normalize("NFKC").trim().toLowerCase();
@@ -218,7 +218,41 @@ function executionMetadata(
 }
 
 export class DirectoryService {
-  constructor(private readonly options: DirectoryOptions) {}
+  private readonly provider: BusinessProvider;
+
+  constructor(private readonly options: DirectoryOptions) {
+    if (options.provider) this.provider = options.provider;
+    else if (options.client)
+      this.provider = createZentaoBusinessProvider({
+        client: options.client,
+        baseUrl: "",
+      });
+    else throw new BztError("CONFIG_MISSING", "请为目录服务配置业务底座。");
+  }
+
+  private readUser(): Promise<CurrentUser | User> {
+    return this.provider.getCurrentUser();
+  }
+
+  private listUsers(): Promise<Rows<User>> {
+    return this.provider.listUsers();
+  }
+
+  private listProducts(): Promise<Rows<Product>> {
+    return this.provider.listProducts();
+  }
+
+  private getProductModules(productId: number) {
+    return this.provider.listProductModules(productId);
+  }
+
+  private listProductPlans(productId: number) {
+    return this.provider.listProductPlans(productId);
+  }
+
+  private listExecutionsIncludingClosed(): Promise<Rows<Execution>> {
+    return this.provider.listExecutions();
+  }
 
   resolveTeam(input: string) {
     if (!input.trim())
@@ -254,7 +288,7 @@ export class DirectoryService {
       );
     }
     const input = parsed.data;
-    const { client, clock, config, cache } = this.options;
+    const { clock, config, cache } = this.options;
     const now = clock();
     const currentMonth = formatLocalDate(now, config.timezone).slice(0, 7);
     const month = input.month
@@ -285,7 +319,7 @@ export class DirectoryService {
     const inferences: ResolveContextOutput["inferences"] = [];
     let me: Context["me"];
     try {
-      me = this.identity(await getCurrentUser(client));
+      me = this.identity(await this.readUser());
     } catch (error) {
       if (!(error instanceof BztError)) throw error;
       throw new BztError(error.code, "无法确认当前禅道用户。", {
@@ -307,13 +341,15 @@ export class DirectoryService {
       let products: Rows<Product> = { items: [], truncated: false };
       let product: Product | undefined;
       if (input.product || input.module || input.plan) {
-        products = await readRows(state, "products", () =>
-          listProducts(client),
-        );
-        products.items = uniqueBy(
-          products.items.filter(({ deleted }) => !deleted),
-          ({ id }) => id,
-        );
+        products = {
+          items: uniqueBy(
+            (
+              await readRows(state, "products", () => this.listProducts())
+            ).items.filter(({ deleted }) => !deleted),
+            ({ id }) => id,
+          ),
+          truncated: products.truncated,
+        };
       }
       const productInput =
         input.product ??
@@ -421,9 +457,7 @@ export class DirectoryService {
 
   async listAccountNames() {
     const state: ReadState = { gaps: [] };
-    const rows = await readRows(state, "users", () =>
-      listUsers(this.options.client),
-    );
+    const rows = await readRows(state, "users", () => this.listUsers());
     const people = new Map(
       rows.items.flatMap(({ account, realname, deleted }) =>
         account && !deleted
@@ -435,8 +469,8 @@ export class DirectoryService {
   }
 
   private async people(inputs: string[], state: ReadState): Promise<Person[]> {
-    const { client, config } = this.options;
-    const rows = await readRows(state, "users", () => listUsers(client));
+    const { config } = this.options;
+    const rows = await readRows(state, "users", () => this.listUsers());
     const missingAccounts = rows.items.some(
       ({ account, deleted }) => !deleted && !account,
     );
@@ -531,7 +565,7 @@ export class DirectoryService {
     const perProduct = await Promise.all(
       parents.items.map(async ({ id }) =>
         readRows(state, `modules:${id}`, async () => ({
-          items: await getProductModules(this.options.client, id),
+          items: await this.getProductModules(id),
           truncated: false,
         })),
       ),
@@ -590,9 +624,7 @@ export class DirectoryService {
   ) {
     const perProduct = await Promise.all(
       parents.items.map(async ({ id }) =>
-        readRows(state, `plans:${id}`, () =>
-          listProductPlans(this.options.client, id),
-        ),
+        readRows(state, `plans:${id}`, () => this.listProductPlans(id)),
       ),
     );
     const plans = uniqueBy(
@@ -706,7 +738,7 @@ export class DirectoryService {
     month: string | undefined,
     state: ReadState,
   ) {
-    const { client, config } = this.options;
+    const { config } = this.options;
     const projects = product
       ? config.products[product.id]?.projects
       : undefined;
@@ -718,7 +750,7 @@ export class DirectoryService {
       return undefined;
     }
     const rows = await readRows(state, "executions", () =>
-      listExecutionsIncludingClosed(client),
+      this.listExecutionsIncludingClosed(),
     );
     const query = key(input);
     const executions = uniqueBy(

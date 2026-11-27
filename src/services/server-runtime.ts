@@ -97,7 +97,9 @@ interface ServerSession {
   revoked: boolean;
   busy: number;
   readonly previews: Map<string, PreviewGrant>;
+  readonly writeGuards: Map<string, () => Promise<void>>;
   linkProjector?: Promise<ReturnType<typeof portalLinkProjector>>;
+  resolvedLinkProjector?: ReturnType<typeof portalLinkProjector>;
 }
 
 const writeTools = new Set<string>([
@@ -124,7 +126,7 @@ const previewIdSchema = z.object({
   preview: z.object({}),
 });
 
-function hashText(text: string): string {
+export function hashText(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
@@ -237,6 +239,7 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
     session.revoked = true;
     revokeZentaoReadClient(session.client);
     session.previews.clear();
+    session.writeGuards.clear();
     if (sessions.get(session.sessionId) === session) {
       sessions.delete(session.sessionId);
     }
@@ -293,6 +296,54 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
     return { config: loaded.config, version };
   }
 
+  /**
+   * CR-009 F-P1-02（SRV-OP-03）：终态幂等重放校验。
+   * 仅当操作记录属于 (session.account, session.instanceHash)、持久化的
+   * opGrant 匹配 (session.instanceId, roleId)、已执行（executedAt 非空）、
+   * 且操作已终态（confirmed/failed 或全部步骤 done/skipped）时允许重放。
+   */
+  function terminalReplayAllowed(
+    session: ServerSession,
+    opId: string,
+    page: Readonly<{ id: string; actions: readonly string[] }>,
+  ): boolean {
+    if (session.writeGuards.has(opId)) return false;
+    try {
+      const store = session.userContext.store;
+      const record = store.operations.get(opId);
+      const meta = storedInstanceSchema.safeParse(JSON.parse(record.planJson));
+      const rawGrant = store.cache.get(opGrantPrefix + opId, 0);
+      const parsedGrant = rawGrant
+        ? storedOpGrantSchema.safeParse(JSON.parse(rawGrant))
+        : undefined;
+      if (
+        record.actor !== session.account ||
+        !meta.success ||
+        meta.data.instanceHash !== session.instanceHash ||
+        record.executedAt === null ||
+        !parsedGrant?.success ||
+        parsedGrant.data.instanceId !== session.instanceId ||
+        parsedGrant.data.role !== page.id ||
+        !page.actions.some((action) => action === record.kind)
+      )
+        return false;
+      const steps = store.operationSteps.list(opId);
+      const allSkipped =
+        record.status === "not_executed" &&
+        steps.length > 0 &&
+        steps.every(({ state }) => state === "skipped");
+      const terminal =
+        ((record.status === "confirmed" || record.status === "failed") &&
+          steps.every(
+            ({ state }) => state !== "pending" && state !== "unknown",
+          )) ||
+        allSkipped;
+      return terminal;
+    } catch {
+      return false;
+    }
+  }
+
   function buildIdentity(session: ServerSession, teamConfig: TeamConfig) {
     const roles = portalRoles(teamConfig.roles, session.account);
     const granted = new Set<string>(roles.map(({ id }) => id));
@@ -335,11 +386,18 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
     };
   }
 
-  async function projectLinks(session: ServerSession, value: unknown) {
-    session.linkProjector ??= (async () => {
+  async function projectLinks(
+    session: ServerSession,
+    value: unknown,
+    localOnly = false,
+  ) {
+    if (localOnly) {
+      // 终态重放绝不等待在途的 /index.php 探测，仅使用已解析投影、本地缓存或默认格式。
+      if (session.resolvedLinkProjector)
+        return session.resolvedLinkProjector(value);
       const key = "portal-link-route-v1";
       try {
-        const saved = session.userContext.store.cache.get(key);
+        const saved = session.userContext.store.cache.get(key, 0);
         if (saved) {
           const info = instanceWebRouteDto.parse(JSON.parse(saved));
           return portalLinkProjector(
@@ -347,7 +405,27 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
             info.requestType,
             info.moduleVar,
             info.methodVar,
+          )(value);
+        }
+      } catch {
+        // 路由缓存损坏时回退默认链接格式，不触发上游请求。
+      }
+      return portalLinkProjector(session.baseUrl)(value);
+    }
+    session.linkProjector ??= (async () => {
+      const key = "portal-link-route-v1";
+      try {
+        const saved = session.userContext.store.cache.get(key);
+        if (saved) {
+          const info = instanceWebRouteDto.parse(JSON.parse(saved));
+          const projector = portalLinkProjector(
+            session.baseUrl,
+            info.requestType,
+            info.moduleVar,
+            info.methodVar,
           );
+          session.resolvedLinkProjector = projector;
+          return projector;
         }
       } catch {
         // 路由缓存损坏时回退。
@@ -363,12 +441,14 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
         } catch {
           // 缓存失败不影响业务响应。
         }
-        return portalLinkProjector(
+        const projector = portalLinkProjector(
           session.baseUrl,
           info.requestType,
           info.moduleVar,
           info.methodVar,
         );
+        session.resolvedLinkProjector = projector;
+        return projector;
       } catch {
         session.linkProjector = undefined;
         return portalLinkProjector(session.baseUrl);
@@ -436,6 +516,17 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
           }
         },
         isRevoked: () => bound.session?.revoked === true,
+        assertBeforeWrite: async (opId) => {
+          const guard = opId ? bound.session?.writeGuards.get(opId) : undefined;
+          if (!guard) {
+            throw new BztError(
+              "PERMISSION_DENIED",
+              "当前操作授权上下文缺失或已失效，已阻断写入。",
+              { phase: "pre_send", authRevoked: true },
+            );
+          }
+          await guard();
+        },
       });
       // 登录必须先回读并核对禅道身份，核对通过前不创建会话也不打开 state.db。
       const viewer = await getCurrentUser(client);
@@ -481,6 +572,7 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
         revoked: false,
         busy: 0,
         previews: new Map(),
+        writeGuards: new Map(),
       };
       bound.session = session;
       sessions.set(sessionId, session);
@@ -537,6 +629,36 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
         if (config.readOnly && writeTools.has(request.tool))
           throw new BztError("PERMISSION_DENIED", "当前服务处于只读模式。");
 
+        const verifyDispatchAllowed = async () => {
+          // CR-009 F-P1-01 / CAP-02：在执行器步骤前与 HTTP 写锁内最终发送前
+          // 双重重检会话、团队配置版本与角色授权，撤权后零上游写入。
+          if (session.revoked)
+            throw new BztError("AUTH_FAILED", "本次会话已结束。", {
+              phase: "pre_send",
+              authRevoked: true,
+            });
+          const latest = await loadInstanceTeamConfig(session.instanceId);
+          // 异步读取配置返回后再次同步复核会话状态，防止在读取期间登出后继续放行。
+          if (session.revoked)
+            throw new BztError("AUTH_FAILED", "本次会话已结束。", {
+              phase: "pre_send",
+              authRevoked: true,
+            });
+          if (team.version !== latest.version)
+            throw new BztError(
+              "PERMISSION_DENIED",
+              "团队配置已变更，请重新确认操作。",
+              { phase: "pre_send", authRevoked: true },
+            );
+          const active = portalRoles(latest.config.roles, session.account);
+          if (!active.some(({ id }) => id === page.id))
+            throw new BztError(
+              "PERMISSION_DENIED",
+              "当前职责已被撤销，无法继续执行写入。",
+              { phase: "pre_send", authRevoked: true },
+            );
+        };
+
         const wb = createServerWorkbench({
           client: session.client,
           viewer: session.viewer,
@@ -548,10 +670,7 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
           env: { ...baseEnv, ZENTAO_BASE_URL: session.baseUrl },
           logSink,
           writeCoordinator,
-          assertBeforeDispatch: () => {
-            if (session.revoked)
-              throw new BztError("AUTH_FAILED", "本次会话已结束。");
-          },
+          assertBeforeDispatch: verifyDispatchAllowed,
         });
 
         // 集中端独立处理 get_operation 与 confirm_operation（F-07 / SRV-OP-01）：
@@ -624,15 +743,57 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
             grant.role !== page.id ||
             grant.configVersion !== team.version
           ) {
+            // CR-009 F-P1-02（SRV-OP-03）：预览授权已被消费时，区分
+            // 「原主体终态操作幂等重放」与越权请求。直接读取本地已落盘回执与本地链接投影，
+            // 零上游禅道请求（含 /index.php）、零重复写入或通知；跨账号/实例/职责/未执行一律拒绝。
+            const replay = grant === undefined && !parsed.data.resume;
+            if (
+              replay &&
+              terminalReplayAllowed(session, parsed.data.opId, page)
+            ) {
+              const receipt = allTools.confirm_operation.output.parse(
+                wb.getOperation({ opId: parsed.data.opId }).data,
+              );
+              const projected = await projectLinks(session, receipt, true);
+              if (session.revoked)
+                throw new BztError("AUTH_FAILED", "本次会话已结束。");
+              return projected;
+            }
             if (grant) session.previews.delete(parsed.data.opId);
             throw new BztError("PERMISSION_DENIED", "无权确认该操作计划。");
           }
           if (parsed.data.previewAck !== true)
             throw new BztError("PREVIEW_REQUIRED", "请先确认已阅读预览。");
-          const result = allTools.confirm_operation.output.parse(
-            await wb.confirmOperation(parsed.data),
-          );
-          session.previews.delete(parsed.data.opId);
+          const opId = parsed.data.opId;
+          // CR-009 CAP-02：仅由取得执行权的请求独占 writeGuards，
+          // 并发重复确认直接返回 409 conflict，绝不覆盖或提前删除在途请求的派发校验。
+          if (session.writeGuards.has(opId))
+            throw new BztError(
+              "INVALID_INPUT",
+              "本地操作正在执行，请稍后查询回执。",
+              { conflict: true },
+            );
+          const verifyConfirmDispatch = async () => {
+            await verifyDispatchAllowed();
+            const record = session.userContext.store.operations.get(opId);
+            if (record.expiresAt !== null && clock() >= record.expiresAt)
+              throw new BztError(
+                "PLAN_EXPIRED",
+                "操作计划已过期，请重新生成预览。",
+                { phase: "pre_send", authRevoked: true },
+              );
+          };
+          session.writeGuards.set(opId, verifyConfirmDispatch);
+          let result: unknown;
+          try {
+            result = allTools.confirm_operation.output.parse(
+              await wb.confirmOperation(parsed.data),
+            );
+          } finally {
+            if (session.writeGuards.get(opId) === verifyConfirmDispatch)
+              session.writeGuards.delete(opId);
+          }
+          session.previews.delete(opId);
           if (
             ["confirmed", "partial", "unknown"].includes(
               z.object({ status: z.string() }).parse(result).status,

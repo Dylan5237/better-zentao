@@ -415,7 +415,9 @@ function mountTabs(
       id,
       button(tabsBar, label, () => activate(id), "seg-tab", glyph),
     );
-  const tabStoreKey = `bzt.portal.tab/${ctx.account ?? ""}/${ctx.role.id}/${title}`;
+  const tabStoreKey = ctx.instanceId
+    ? `bzt.portal.tab/${encodeURIComponent(ctx.instanceId)}/${encodeURIComponent(ctx.account ?? "")}/${ctx.role.id}/${title}`
+    : `bzt.portal.tab/${ctx.account ?? ""}/${ctx.role.id}/${title}`;
   let savedTab;
   try {
     savedTab = sessionStorage.getItem(tabStoreKey);

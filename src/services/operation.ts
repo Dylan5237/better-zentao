@@ -1,6 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-import { realpathSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { assertCapabilityExecutable } from "../api/capabilities.ts";
 import {
@@ -21,92 +19,38 @@ import type { Clock } from "../core/clock.ts";
 import type { TeamConfig } from "../core/config.ts";
 import { BztError } from "../core/errors.ts";
 import type {
-  LocalStore,
   OperationLevel,
   OperationRecord,
   OperationStatus,
   OperationStepRecord,
 } from "../core/store/index.ts";
 import { instanceHashOf } from "../core/store/index.ts";
-import { queryAll } from "../core/store/sqlite-support.ts";
+import {
+  idSchema,
+  lookupResult,
+  readbackReceipt,
+  targetSnapshot,
+  writeReceipt,
+  type OperationGateway,
+  type OperationTarget as Target,
+  type OperationTargetSnapshot,
+  type StepRequest,
+} from "./ports/operation-gateway.ts";
+import type { OperationStateStore } from "./ports/operation-store.ts";
 import type {
   TargetWriteCoordinator,
   WriteTarget,
 } from "./write-coordinator.ts";
 
 export type { OperationPlan } from "../contracts/operation.ts";
-
-const idSchema = z.int().positive();
-const targetSnapshot = z.object({
-  id: idSchema,
-  type: z.enum(["story", "task", "comment", "link"]),
-  product: idSchema,
-  status: z.string().nullable().optional(),
-  maintainer: z.string().nullable().optional(),
-  assignedTo: z.string().nullable().optional(),
-  plan: z.array(idSchema).optional(),
-  executions: z.array(idSchema).optional(),
-  lastEditedDate: z.int().nullable().optional(),
-  spec: z.string().nullable().optional(),
-});
-export type OperationTargetSnapshot = z.infer<typeof targetSnapshot>;
-type Target = Pick<OperationTargetSnapshot, "id" | "type" | "product">;
-
-interface StepRequest {
-  opId: string;
-  seq: number;
-  step: Readonly<OperationStep>;
-  id?: number | undefined;
-}
-
-interface ReverseQuery {
-  opId: string;
-  type: OperationStep["type"];
-  product: number;
-  title: string;
-  execution?: number;
-  createdBy: string;
-  since: number;
-  until: number;
-}
-
-const lookupResult = z.object({
-  complete: z.boolean(),
-  matches: z.array(
-    z.object({
-      id: idSchema,
-      product: idSchema,
-      title: z.string(),
-      createdBy: z.string(),
-      createdAt: z.int(),
-    }),
-  ),
-});
-const writeReceipt = z.object({
-  id: idSchema.optional(),
-  actionId: idSchema.optional(),
-});
-const readbackReceipt = z.object({
-  verified: z.boolean(),
-  snapshot: targetSnapshot.optional(),
-});
-
-/** 业务服务注入已投影的 API 调用。校验和反查必须绕过查询缓存。 */
-export interface OperationGateway {
-  readTarget(target: Target): Promise<OperationTargetSnapshot>;
-  write(request: StepRequest): Promise<z.infer<typeof writeReceipt>>;
-  readback(
-    request: StepRequest & {
-      zentaoId?: number;
-      actionId?: number;
-      attemptedAt?: number;
-    },
-  ): Promise<z.infer<typeof readbackReceipt>>;
-  reverseLookup(query: ReverseQuery): Promise<z.infer<typeof lookupResult>>;
-}
+export type {
+  OperationGateway,
+  OperationTargetSnapshot,
+} from "./ports/operation-gateway.ts";
 
 interface ExecutorOptions {
-  store: LocalStore;
+  /** CR-009 §4.2：窄存储端口，LocalStore 与内存实现都满足。 */
+  store: OperationStateStore;
   baseUrl: string;
   config: Pick<TeamConfig, "mode" | "write">;
   gateway: OperationGateway;
@@ -115,8 +59,21 @@ interface ExecutorOptions {
   instanceVersion?: string | undefined;
   /** CR-008 §4.4：跨账号同目标写入协调器，可选注入。 */
   writeCoordinator?: TargetWriteCoordinator | undefined;
-  /** CR-008 Gate C：派发写请求前的最终会话/授权校验钩子。 */
-  assertBeforeDispatch?: (() => void) | undefined;
+  /** CR-008 Gate C / CR-009 F-P1-01：派发写请求前的最终会话/授权校验钩子。 */
+  assertBeforeDispatch?: (() => void | Promise<void>) | undefined;
+  /** CR-009 §4.1（G-02）：能力校验注入，默认为禅道能力注册表。 */
+  checkCapability?:
+    | ((
+        id: string,
+        options: Readonly<{
+          channel?: "mcp" | "cli";
+          instanceVersion?: string;
+        }>,
+      ) => void)
+    | undefined;
+  /** CR-009 §4.1（G-02）：对象链接格式化注入，默认拼禅道 view 路径。 */
+  formatObjectUrl?:
+    ((type: OperationStep["type"], id: number) => string) | undefined;
 }
 
 const fingerprintSchema = targetSnapshot.omit({ spec: true }).extend({
@@ -145,8 +102,8 @@ const isoFormatter = new Intl.DateTimeFormat("sv-SE", {
   fractionalSecondDigits: 3,
 });
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const inFlight = new WeakMap<LocalStore, Set<string>>();
-const memoryHistory = new WeakMap<LocalStore, string[]>();
+/** 内存存储（含内存 LocalStore）的近期回执序列，按插入时间倒序。 */
+const memoryHistory = new WeakMap<OperationStateStore, string[]>();
 const createsObject = new Set([
   "story.create",
   "story.create.design",
@@ -317,6 +274,8 @@ function rejectWrite(error: unknown): boolean {
 
 export class OperationExecutor {
   private readonly baseUrl: URL;
+  /** 同一存储实例内并发的同 opId 确认互斥（进程内守卫）。 */
+  private readonly activeOps = new Set<string>();
 
   constructor(private readonly options: ExecutorOptions) {
     const url = normalizeZentaoBaseUrl(options.baseUrl);
@@ -328,7 +287,7 @@ export class OperationExecutor {
     this.baseUrl = url;
   }
 
-  private get store(): LocalStore {
+  private get store(): OperationStateStore {
     return this.options.store;
   }
 
@@ -385,7 +344,9 @@ export class OperationExecutor {
         });
       }
     });
-    if (this.store.location.dbPath === ":memory:") {
+    // 内存实现无 rowid 可排序，插入时即记录倒序历史，与 SQLite 的
+    // ORDER BY created_at DESC, rowid DESC 语义对齐。
+    if (this.usesMemoryHistory()) {
       const history = memoryHistory.get(this.store) ?? [];
       history.unshift(opId);
       memoryHistory.set(this.store, history);
@@ -414,7 +375,18 @@ export class OperationExecutor {
   }
 
   private checkCapabilities(plan: OperationPlan): void {
-    const { channel, instanceVersion, config } = this.options;
+    const { channel, instanceVersion, config, checkCapability } = this.options;
+    const assert =
+      checkCapability ??
+      ((
+        id: string,
+        options: Readonly<{
+          channel?: "mcp" | "cli";
+          instanceVersion?: string;
+        }>,
+      ) => {
+        void assertCapabilityExecutable(id, options);
+      });
     for (const [index, step] of plan.steps.entries()) {
       if (step.action !== "read") {
         const capabilities = new Set([step.action]);
@@ -425,7 +397,7 @@ export class OperationExecutor {
             capabilities.add("story.create.feedbackBy");
         }
         for (const capability of capabilities) {
-          assertCapabilityExecutable(capability, {
+          assert(capability, {
             channel: channel ?? "mcp",
             instanceVersion,
           });
@@ -439,7 +411,7 @@ export class OperationExecutor {
       }
       if (createsObject.has(step.action)) {
         if (Object.hasOwn(step.fields, "plan"))
-          assertCapabilityExecutable("story.create.plan", {
+          assert("story.create.plan", {
             channel: channel ?? "mcp",
           });
         if (
@@ -537,20 +509,17 @@ export class OperationExecutor {
     });
   }
 
+  /** 内存实现没有持久 rowid：读取时优先用插入序，SQLite 走 listRecent SQL。 */
+  private usesMemoryHistory(): boolean {
+    // LocalStore 的 location.dbPath === ":memory:" 表示内存库；
+    // createInMemoryOperationStore 的 location 不含 dbPath，同为内存实现。
+    const dbPath = this.store.location.dbPath;
+    return dbPath === undefined || dbPath === ":memory:";
+  }
+
   private recent(limit: number): string[] {
-    const { dbPath, account, instanceHash } = this.store.location;
-    if (dbPath === ":memory:")
-      return (memoryHistory.get(this.store) ?? []).slice(0, limit);
-    using database = new DatabaseSync(dbPath, { readOnly: true });
-    return queryAll(
-      database,
-      `SELECT op_id FROM operations WHERE actor = ? AND
-        CASE WHEN json_valid(plan_json) THEN json_extract(plan_json, '$.instanceHash') END = ?
-        ORDER BY created_at DESC, rowid DESC LIMIT ?`,
-      [account, instanceHash, limit],
-      z.object({ op_id: z.string() }),
-      "读取近期操作回执",
-    ).map(({ op_id }) => op_id);
+    const { account, instanceHash } = this.store.location;
+    return [...this.store.operations.listRecent(account, instanceHash, limit)];
   }
 
   resume(input: Omit<ConfirmOperation, "resume">): Promise<OperationResult> {
@@ -559,31 +528,30 @@ export class OperationExecutor {
 
   async confirm(input: ConfirmOperation): Promise<OperationResult> {
     const query = parseInput(confirmOperationSchema, input);
-    const { dbPath } = this.store.location;
-    const active = inFlight.get(this.store) ?? new Set<string>();
-    inFlight.set(this.store, active);
-    if (active.has(query.opId)) throw this.busy();
-    active.add(query.opId);
+    // 执行器守卫按 opId 互斥同实例并发确认；存储端独占锁再覆盖跨执行器并发。
+    if (this.activeOps.has(query.opId))
+      throw new BztError(
+        "INVALID_INPUT",
+        "本地操作正在执行，请稍后查询回执。",
+        {
+          conflict: true,
+        },
+      );
+    this.activeOps.add(query.opId);
     try {
-      if (dbPath === ":memory:") return await this.execute(query);
-      // LocalStore 没有原子抢占接口。单独持有 SQLite 写锁，主库检查点可独立提交，
-      // 同一库的其他进程无法同时派发；进程退出后 SQLite 自动释放锁。
-      using lock = new DatabaseSync(realpathSync(dbPath) + ".operation-lock");
-      try {
-        lock.exec("BEGIN IMMEDIATE");
-      } catch {
-        throw this.busy();
-      }
-      return await this.execute(query);
+      return await this.store.withExclusiveLock(query.opId, () =>
+        this.execute(query),
+      );
     } finally {
-      active.delete(query.opId);
+      this.activeOps.delete(query.opId);
     }
   }
 
-  private busy(): BztError {
-    return new BztError("INVALID_INPUT", "本地操作正在执行，请稍后查询回执。", {
-      conflict: true,
-    });
+  private formatUrl(type: OperationStep["type"], id: number): string {
+    const format = this.options.formatObjectUrl;
+    return format
+      ? format(type, id)
+      : new URL(`${type}-view-${id}.html`, this.baseUrl).href;
   }
 
   private checkExpiry(record: OperationRecord): void {
@@ -675,25 +643,53 @@ export class OperationExecutor {
     const dispatch = async () => {
       await this.checkTargets(opId, targets, current, eligible, plan);
       this.checkExpiry(record);
-      this.options.assertBeforeDispatch?.();
+      await this.options.assertBeforeDispatch?.();
+      // 首次异步授权检查返回后、落盘 executedAt 前再次复核过期，避免未派发计划留下 executedAt。
+      this.checkExpiry(record);
+      const hadExecutedAt = record.executedAt !== null;
       this.store.operations.updateStatus(opId, {
         status: record.status,
         executedAt: record.executedAt ?? this.options.clock(),
       });
-      for (const row of eligible) {
-        this.options.assertBeforeDispatch?.();
-        const step = plan.steps[row.seq - 1];
-        if (!step) continue;
-        if (
-          step.fromStep !== undefined &&
-          this.store.operationSteps.get(opId, step.fromStep).state === "skipped"
-        ) {
-          this.store.operationSteps.update(opId, row.seq, { state: "skipped" });
-          continue;
+      try {
+        for (const row of eligible) {
+          this.checkExpiry(record);
+          await this.options.assertBeforeDispatch?.();
+          const step = plan.steps[row.seq - 1];
+          if (!step) continue;
+          if (
+            step.fromStep !== undefined &&
+            this.store.operationSteps.get(opId, step.fromStep).state ===
+              "skipped"
+          ) {
+            this.store.operationSteps.update(opId, row.seq, {
+              state: "skipped",
+            });
+            continue;
+          }
+          const request = this.resolveRequest(opId, row.seq, step);
+          if (!request) continue;
+          if (!(await this.runStep(request))) break;
         }
-        const request = this.resolveRequest(opId, row.seq, step);
-        if (!request) continue;
-        if (!(await this.runStep(request))) break;
+      } catch (error) {
+        // 若全部步骤尚未实际派发（发送前因过期或撤权阻断），恢复 executedAt=null，
+        // 确保后续重复确认继续走过期与授权校验，而非误入幂等 not_executed 返回。
+        if (
+          !hadExecutedAt &&
+          error instanceof BztError &&
+          (error.code === "PLAN_EXPIRED" ||
+            (error.details?.phase === "pre_send" &&
+              error.details?.authRevoked === true)) &&
+          this.store.operationSteps
+            .list(opId)
+            .every(({ state }) => state === "pending" || state === "skipped")
+        ) {
+          this.store.operations.updateStatus(opId, {
+            status: "not_executed",
+            executedAt: null,
+          });
+        }
+        throw error;
       }
     };
     const coordinator = this.options.writeCoordinator;
@@ -822,6 +818,18 @@ export class OperationExecutor {
     try {
       result = writeReceipt.parse(await gateway.write(request));
     } catch (error) {
+      if (
+        error instanceof BztError &&
+        error.details?.phase === "pre_send" &&
+        error.details?.authRevoked === true
+      ) {
+        this.store.operationSteps.update(opId, seq, {
+          state: "pending",
+          readbackJson: null,
+          error: null,
+        });
+        throw error;
+      }
       if (rejectWrite(error)) {
         this.store.operationSteps.update(opId, seq, {
           state: "failed",
@@ -993,10 +1001,7 @@ export class OperationExecutor {
       if (row.error !== null) item.error = row.error;
       if (step && row.zentaoId !== null) {
         item.zentaoId = row.zentaoId;
-        item.url = new URL(
-          `${step.type}-view-${row.zentaoId}.html`,
-          this.baseUrl,
-        ).href;
+        item.url = this.formatUrl(step.type, row.zentaoId);
         if (createsObject.has(step.action))
           created.push({ type: step.type, id: row.zentaoId, url: item.url });
       }

@@ -219,7 +219,7 @@ describe("WEB-03 原型角色工作台", () => {
     shows(
       root,
       "登录姓名（设计主管）",
-      "三档·全封装",
+      "卡片概览",
       "现在需要您处理的事项",
       "团队与我维护的需求（按维护人筛选）",
       "全部设计团队",
@@ -238,7 +238,7 @@ describe("WEB-03 原型角色工作台", () => {
     expect(root.textContent).not.toContain(personal.title);
     find(root, "button", "转发进度卡").click();
     expect(ctx.openStory).toHaveBeenCalledWith(managed.id, "card");
-    find(root, "button", "二档·融合增强").click();
+    find(root, "button", "混合视图").click();
     expect(ctx.setMode).toHaveBeenCalledWith("hybrid");
     expect(ctx.call).toHaveBeenCalledWith("scan_workflow_risks", {
       scope: { mine: true },
@@ -294,7 +294,7 @@ describe("WEB-03 原型角色工作台", () => {
     await renderWorkbench(root, ctx);
     shows(
       root,
-      "一档·禅道原生",
+      "表格台账",
       "研发需求列表",
       "用户需求池",
       "阶段进展",

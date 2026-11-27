@@ -49,6 +49,8 @@ export interface ZentaoHttpOptions {
   readonly onAuthFailed?: () => void;
   /** 发送前最终撤销检查（在取得写锁与异步等待之后、实际 fetch 之前调用）。 */
   readonly isRevoked?: () => boolean;
+  /** CR-009 CAP-02：发送前最终授权校验（取得写锁后、fetch 之前调用）。 */
+  readonly assertBeforeWrite?: (opId?: string) => void | Promise<void>;
   /** 可选分区读取并发池（Server 1.0）。 */
   readonly readPool?: PartitionedReadPool;
   /** 分区并发池所需的实例哈希键。 */
@@ -642,6 +644,14 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
           throw preSendAuthFailure(error);
         throw error;
       }
+      if (isRevoked?.()) {
+        auth.invalidate(session);
+        throw preSendAuthFailure(authFailed());
+      }
+      if (options.assertBeforeWrite) {
+        await options.assertBeforeWrite(request.opId);
+      }
+      // 所有异步守卫完成后、调用 send 前做最后一次同步撤销复核，消除异步读取窗口。
       if (isRevoked?.()) {
         auth.invalidate(session);
         throw preSendAuthFailure(authFailed());
