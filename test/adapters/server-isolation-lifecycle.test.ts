@@ -324,6 +324,20 @@ it("SRV-ISO-03 query_stories 在途时上游撤销 ACL，迟到报表不返回�
   expect(JSON.stringify(cached.body)).not.toContain(initialTitle);
 });
 
+it("SRV-ISO-03 详情返回 404 时聚合报表不回退列表行输出受影响需求", async () => {
+  const client = browser(await fixture.start());
+  await login(client);
+  const upstream = fixture.upstream();
+  const { initialTitle } = upstream.instances.instanceA;
+  expectReport(await client.call(report), initialTitle);
+
+  upstream.fail("instanceA", "alice", storyPath, 404);
+  const blocked = await client.call(report);
+  expect(blocked.status).toBe(400);
+  expect(blocked.body).toMatchObject({ ok: false, code: "NOT_FOUND" });
+  expect(JSON.stringify(blocked.body)).not.toContain(initialTitle);
+});
+
 it("SRV-OP-01 未执行预览绑定会话，已派发回执只对原主体跨重启可读", async () => {
   const server = await fixture.start({ readOnly: false });
   const owner = browser(server);

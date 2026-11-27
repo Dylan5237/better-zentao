@@ -674,6 +674,7 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
           clock(),
           team.config.timezone,
         ).slice(0, 7);
+        const aclStamp = session.userContext.snapshots.aclVersion();
         const value = await action(
           request.role,
           request.tool,
@@ -706,6 +707,12 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
         if (session.revoked) {
           session.userContext.snapshots.invalidate();
           throw new BztError("AUTH_FAILED", "本次会话已结束。");
+        }
+        if (session.userContext.snapshots.aclVersion() !== aclStamp) {
+          throw new BztError(
+            "PERMISSION_DENIED",
+            "上游权限已变更，请重新读取。",
+          );
         }
         return projected;
       } catch (error) {

@@ -45,14 +45,24 @@ function response(entry: Snapshot, fromCache: boolean, retained = false) {
   };
 }
 
-function hasPermissionGap(result: unknown): boolean {
+function accessGapCode(
+  result: unknown,
+): "PERMISSION_DENIED" | "NOT_FOUND" | undefined {
   const parsed = gapList.safeParse(result);
-  if (!parsed.success || !parsed.data.gaps) return false;
-  return parsed.data.gaps.some(
-    ({ reason }) =>
-      reason.includes("PERMISSION_DENIED") ||
-      reason.includes("没有该迭代的查看权限"),
-  );
+  if (!parsed.success || !parsed.data.gaps) return undefined;
+  if (
+    parsed.data.gaps.some(
+      ({ reason }) =>
+        reason.includes("PERMISSION_DENIED") ||
+        reason.includes("没有该迭代的查看权限"),
+    )
+  ) {
+    return "PERMISSION_DENIED";
+  }
+  if (parsed.data.gaps.some(({ reason }) => reason.includes("NOT_FOUND"))) {
+    return "NOT_FOUND";
+  }
+  return undefined;
 }
 
 export interface PortalSnapshotOptions {
@@ -126,12 +136,22 @@ export function createPortalSnapshots(
         const parsed = report.safeParse(result);
         if (parsed.success && parsed.data.completeness === "partial") {
           invalidate();
-          if (disableReportCache && hasPermissionGap(result)) {
-            aclGeneration++;
-            throw new BztError(
-              "PERMISSION_DENIED",
-              "当前账号无权查看所请求的禅道数据。",
-            );
+          if (disableReportCache) {
+            const gapCode = accessGapCode(result);
+            if (gapCode === "PERMISSION_DENIED") {
+              aclGeneration++;
+              throw new BztError(
+                "PERMISSION_DENIED",
+                "当前账号无权查看所请求的禅道数据。",
+              );
+            }
+            if (gapCode === "NOT_FOUND") {
+              aclGeneration++;
+              throw new BztError(
+                "NOT_FOUND",
+                "所请求的对象不存在或当前账号无权查看。",
+              );
+            }
           }
         }
         if (disableReportCache && aclGeneration !== aclStamp) {
@@ -267,9 +287,14 @@ export function createPortalSnapshots(
     }
   }
 
+  function aclVersion() {
+    return aclGeneration;
+  }
+
   return {
     read,
     check,
     invalidate,
+    aclVersion,
   };
 }
