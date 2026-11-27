@@ -161,7 +161,10 @@ export async function dispatchPortalTool(
     case "get_team_work":
       return tracking.getTeamWork(raw, month);
     case "get_story_progress":
-      return tracking.getStoryProgress(raw, { raisedByMe: role === "FB" });
+      return tracking.getStoryProgress(raw, {
+        raisedByMe: role === "FB",
+        requirementAssignedToMe: role === "DS",
+      });
     case "query_stories":
       return tracking.queryStories(raw, month);
     case "get_plan_progress":

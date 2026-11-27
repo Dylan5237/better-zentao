@@ -2350,17 +2350,26 @@ export class TrackingService {
           story = storyDetail ?? row;
         }
         if (scope.module && story.module !== scope.module.id) return undefined;
+        const people = await state.roles(story);
+        const { roles, intakes } = people;
+        const feedbackText = displayFeedback(
+          intakes[0]?.feedbackByText ??
+            story.feedbackBy ??
+            roles.feedback.original,
+        );
         if (
           keyword &&
           ![
+            String(story.id),
+            `#${story.id}`,
             story.title,
             story.keywords,
+            story.moduleTitle,
+            feedbackText,
             "spec" in story ? story.spec : undefined,
           ].some((value) => includesText(value, keyword))
         )
           return undefined;
-        const people = await state.roles(story);
-        const { roles, intakes } = people;
         const openedDates = [
           story.openedDate,
           ...intakes.map(({ createdAt }) => createdAt),
@@ -2472,7 +2481,7 @@ export class TrackingService {
 
   async getStoryProgress(
     raw: unknown,
-    { raisedByMe = false } = {},
+    { raisedByMe = false, requirementAssignedToMe = false } = {},
   ): Promise<GetStoryProgressOutput> {
     const input = parseInput(getStoryProgressInputSchema, raw);
     const { client, store } = this.options;
@@ -2506,7 +2515,7 @@ export class TrackingService {
       );
     }
     if (requirementId) {
-      const [detail, links] = await Promise.all([
+      const [detail, links, me] = await Promise.all([
         state.read(`requirement:${requirementId}`, async () => {
           const row = await getRequirementDetail(client, requirementId);
           if (row.story.id !== requirementId || row.story.deleted)
@@ -2519,7 +2528,13 @@ export class TrackingService {
         state.read(`sourceLinks:requirement:${requirementId}`, () =>
           store.sourceLinks.listFrom("requirement", String(requirementId)),
         ),
+        requirementAssignedToMe ? state.me() : undefined,
       ]);
+      if (
+        requirementAssignedToMe &&
+        (!me?.account || (detail && detail.story.assignedTo !== me.account))
+      )
+        throw new BztError("NOT_FOUND", "没有找到指派给本人的用户需求。");
       ids = numericIds([
         ...(detail?.story.linkStories ?? []),
         ...(detail?.relations ?? [])

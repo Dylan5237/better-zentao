@@ -530,9 +530,10 @@ export async function renderIntake(container, ctx, initial = {}) {
         ? await Promise.allSettled([
             ctx
               .call("query_stories", {
-                ...pendingInput,
+                type: "requirement",
+                unlinked: true,
                 ...raised,
-                page: currentPage,
+                limit: 100,
               })
               .then(accepted),
             ctx
@@ -540,8 +541,7 @@ export async function renderIntake(container, ctx, initial = {}) {
                 ...raised,
                 type: "story",
                 status: ["all"],
-                page: currentPage,
-                limit: pageSize,
+                limit: 100,
               })
               .then(accepted),
           ])
@@ -557,6 +557,15 @@ export async function renderIntake(container, ctx, initial = {}) {
             },
           ];
       if (!current()) return;
+      if (!fb && results[0]?.status === "fulfilled") {
+        const first = results[0].value;
+        const totalItems = first.data.total ?? total(first);
+        const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+        if (currentPage > totalPages && !first.data.items.length) {
+          currentPage = totalPages;
+          return load();
+        }
+      }
       list.replaceChildren();
       let resultCount = 0;
       let partial = false;
@@ -599,7 +608,9 @@ export async function renderIntake(container, ctx, initial = {}) {
             put(
               pager,
               "span",
-              `第 ${currentPage} / ${totalPages} 页（共 ${totalItems} 条）`,
+              result.completeness === "partial"
+                ? `第 ${currentPage} / ${totalPages} 页（已读取 ${totalItems} 条，数据不完整）`
+                : `第 ${currentPage} / ${totalPages} 页（共 ${totalItems} 条）`,
               "daily-pager-info",
             );
             const next = button(pager, "下一页", () => {
@@ -1239,45 +1250,33 @@ export async function renderStories(container, ctx, initial = {}) {
   let finishPending;
 
   function setKeyword() {
-    keyword = search.value.trim().toLowerCase();
+    const nextKeyword = search.value.trim();
     clear.hidden = !search.value;
-    if (ledgerResult) showLedger();
+    if (nextKeyword === keyword) return;
+    keyword = nextKeyword;
+    ledgerPage = 1;
+    if (active === "all-stories") void load();
   }
   search.addEventListener("input", setKeyword);
 
   function showLedger() {
     const { items } = ledgerResult.data;
-    const checked = keyword.trim().toLowerCase();
-    const filtered = checked
-      ? items.filter((item) =>
-          [
-            String(item.id),
-            `#${item.id}`,
-            item.title,
-            item.module?.path,
-            item.feedbackBy,
-          ].some((value) => value?.toLowerCase().includes(checked)),
-        )
-      : items;
     tableWrap.replaceChildren();
     ledger(
       tableWrap,
       ctx,
-      filtered,
+      items,
       ledgerResult.completeness !== "partial" && !ledgerResult.truncated,
       keyword || filter
         ? () => {
             search.value = "";
             keyword = "";
             clear.hidden = true;
-            if (filter) {
-              filter = "";
-              select.value = "";
-              saveState();
-              void load();
-            } else {
-              showLedger();
-            }
+            filter = "";
+            select.value = "";
+            ledgerPage = 1;
+            saveState();
+            void load();
           }
         : undefined,
     );
@@ -1352,12 +1351,21 @@ export async function renderStories(container, ctx, initial = {}) {
             ? { category: "design", limit: 100 }
             : {
                 ...(filter && { progress: [filter] }),
+                ...(keyword && { keyword }),
                 page: ledgerPage,
                 limit: ledgerPageSize,
               }),
         }),
       );
       if (!current()) return;
+      if (!board) {
+        const totalItems = result.data.total ?? total(result);
+        const totalPages = Math.max(1, Math.ceil(totalItems / ledgerPageSize));
+        if (ledgerPage > totalPages && !result.data.items.length) {
+          ledgerPage = totalPages;
+          return load();
+        }
+      }
       status.replaceChildren();
       statusOf(status, result);
       const { items, countsByProgress } = result.data;
@@ -1373,7 +1381,7 @@ export async function renderStories(container, ctx, initial = {}) {
           result.completeness !== "partial" && !result.truncated,
         );
       } else {
-        if (!filter) {
+        if (!filter && !keyword) {
           const allCount =
             result.completeness === "partial" ? undefined : total(result);
           choose.controls.get("all-stories").textContent =
@@ -1404,7 +1412,9 @@ export async function renderStories(container, ctx, initial = {}) {
           put(
             ledgerPager,
             "span",
-            `第 ${ledgerPage} / ${totalPages} 页（共 ${totalItems} 条）`,
+            result.completeness === "partial"
+              ? `第 ${ledgerPage} / ${totalPages} 页（已读取 ${totalItems} 条，数据不完整）`
+              : `第 ${ledgerPage} / ${totalPages} 页（共 ${totalItems} 条）`,
             "daily-pager-info",
           );
           const next = button(ledgerPager, "下一页", () => {
