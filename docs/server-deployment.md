@@ -37,7 +37,15 @@ node dist/adapters/cli/bzt.js serve --server-config /etc/bzt/server.json
 
 也可通过环境变量 `BZT_SERVER_CONFIG=/etc/bzt/server.json` 传入配置路径。健康检查端点：`GET /healthz` 返回 `{"ok":true,"mode":"server"}`。
 
-### 3.2 Docker Compose（候选交付）
+### 3.2 内网 Linux 受控部署 Skill（systemd + Nginx，推荐）
+
+若目标内网宿主机已具备 Linux + Nginx + systemd 基础设施，推荐使用仓库内置的脱敏发布 Skill [ops/skills/better-zentao-release/SKILL.md](../ops/skills/better-zentao-release/SKILL.md)：
+
+- **复用 `linux-server-ops` 凭证包装器**：真实主机地址、SSH 主机指纹、运行时 `server.json` / `team.primary.json` 与凭据均保存在 Git 仓库之外的受控本机目录与目标宿主机，绝不入库。
+- **隔离运行架构**：独立非特权系统用户 + 隔离 Node 24 运行时 + `systemd` 单进程服务（仅监听 `127.0.0.1`）+ 独立 HTTPS Nginx 反向代理 + 不可变版本目录与原子 `current` 软链切换。
+- **完整运维闭环**：覆盖 `bootstrap`（首次初始化）、`probe`（只读巡检）、`verify`（外部 HTTPS 核验）、`logs`（日志诊断）、`build`（`origin/main` 干净构建）、`backup`（SQLite 一致性快照）、`release`（两段式发布与自动回滚）、`rollback`（校验回滚与可选数据恢复）。
+
+### 3.3 Docker Compose（候选交付）
 
 参考 [docker/Dockerfile](../docker/Dockerfile)、[docker/compose.example.yml](../docker/compose.example.yml) 与 [docker/nginx.example.conf](../docker/nginx.example.conf)：
 

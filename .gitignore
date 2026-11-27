@@ -15,8 +15,11 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Local git worktrees
+# Local git worktrees & release artifacts
 .worktrees/
+artifacts/
+__pycache__/
+*.pyc
 
 # v3.0 local state, SQLite & private team config
 *.db
