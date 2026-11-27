@@ -48,7 +48,9 @@ export const queryStoriesInputSchema = z
     plan: text.optional(),
     month: z.union([month, z.enum(["本月", "下月", "上月"])]).optional(),
     version: text.optional(),
-    role: z.enum(["maintainer", "receiver", "raised", "assigned"]).optional(),
+    role: z
+      .enum(["created", "maintainer", "receiver", "raised", "assigned"])
+      .optional(),
     who: text.optional(),
     feedbackBy: text.optional(),
     openedFrom: z.iso.date().optional(),

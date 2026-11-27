@@ -942,6 +942,55 @@ it("DS 按 requirementId 查询在详情读取失败时即使存在历史 source
   localStore.close();
 });
 
+it("query_stories role=created 仅按 openedBy 精确过滤，不混入仅 feedbackBy 匹配的需求，并支持 reviewing/closed 原生状态", async () => {
+  const createdByDesign = {
+    ...story,
+    id: 601,
+    openedBy: "design",
+    feedbackBy: "other",
+    status: "reviewing",
+    executions: [],
+  };
+  const feedbackOnlyByDesign = {
+    ...story,
+    id: 602,
+    openedBy: "pm",
+    feedbackBy: "design",
+    status: "reviewing",
+    executions: [],
+  };
+  const closedByDesign = {
+    ...story,
+    id: 603,
+    openedBy: "design",
+    feedbackBy: "other",
+    status: "closed",
+    executions: [],
+  };
+  const { service } = setup({
+    stories: [createdByDesign, feedbackOnlyByDesign, closedByDesign],
+  });
+  const reviewingCreated = queryStoriesOutputSchema.parse(
+    await service.queryStories({
+      product: "29",
+      role: "created",
+      who: "design",
+      status: ["reviewing"],
+    }),
+  );
+  expect(reviewingCreated.data.items.map((item) => item.id)).toEqual([601]);
+
+  const closedCreated = queryStoriesOutputSchema.parse(
+    await service.queryStories({
+      product: "29",
+      role: "created",
+      who: "design",
+      status: ["closed"],
+    }),
+  );
+  expect(closedCreated.data.items.map((item) => item.id)).toEqual([603]);
+});
+
 it("N5/N6 较长文档保留可用内容，缺范围提示 R05，卡片不预计过去日期", async () => {
   const designRef = "章节：2.1。".repeat(400);
   const verify = "可以搜索。".repeat(75);

@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>better-zentao 1.0 试用版 · 六职责统一工作台原型（合成数据）</title>
+    <style>
+      :root {
+        --bg: #f5f7fa;
+        --surface: #ffffff;
+        --surface-2: #f1f5f9;
+        --border: #dfe5ee;
+        --border-strong: #c7d2e0;
+        --ink: #0f172a;
+        --ink-2: #334155;
+        --muted: #64748b;
+        --primary: #1d4ed8;
+        --primary-bg: #eff6ff;
+        --success: #15803d;
+        --success-bg: #dcfce7;
+        --warn: #b45309;
+        --warn-bg: #fef3c7;
+        --danger: #b91c1c;
+        --danger-bg: #fee2e2;
+        --purple: #6d28d9;
+        --purple-bg: #f3e8ff;
+        --radius: 8px;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        font-size: 13px;
+        color: var(--ink);
+        background: var(--bg);
+        line-height: 1.45;
+      }
+      .shell { display: flex; flex-direction: column; min-height: 100vh; }
+      .topbar {
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        padding: 10px 18px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        position: sticky;
+        top: 0;
+        z-index: 20;
+      }
+      .brand { display: flex; align-items: center; gap: 10px; }
+      .logo {
+        width: 30px; height: 30px; border-radius: 7px;
+        background: var(--primary); color: #fff; font-weight: 700;
+        display: grid; place-items: center; font-size: 12px;
+      }
+      .brand h1 { margin: 0; font-size: 15px; font-weight: 700; }
+      .brand small { color: var(--muted); font-size: 11.5px; display: block; }
+      .role-tabs {
+        display: flex; flex-wrap: wrap; gap: 4px;
+        background: var(--surface-2); padding: 3px; border-radius: 8px;
+      }
+      .role-tab {
+        border: 0; background: transparent; color: var(--ink-2);
+        padding: 5px 11px; border-radius: 6px; cursor: pointer;
+        font-size: 12.5px; font-weight: 500;
+      }
+      .role-tab.active {
+        background: var(--surface); color: var(--primary);
+        font-weight: 700; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+      }
+      .top-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .month-select, .text-input, .select-input {
+        border: 1px solid var(--border-strong); background: var(--surface);
+        color: var(--ink); border-radius: 6px; padding: 5px 9px; font-size: 12.5px;
+      }
+      .btn {
+        border: 1px solid var(--border-strong); background: var(--surface);
+        color: var(--ink); border-radius: 6px; padding: 5px 10px;
+        font-size: 12.5px; cursor: pointer;
+      }
+      .btn:hover:not(:disabled) { background: var(--surface-2); }
+      .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+      .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+      .btn-primary:hover:not(:disabled) { opacity: 0.92; }
+      .btn-xs { padding: 3px 8px; font-size: 11.5px; }
+      .main {
+        max-width: 1440px; width: 100%; margin: 0 auto;
+        padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 12px;
+      }
+      .meta-bar {
+        display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+        gap: 8px; font-size: 12px; color: var(--muted);
+      }
+      .pill {
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+        white-space: nowrap;
+      }
+      .pill-neutral { background: var(--surface-2); color: var(--ink-2); }
+      .pill-primary { background: var(--primary-bg); color: var(--primary); }
+      .pill-success { background: var(--success-bg); color: var(--success); }
+      .pill-warn { background: var(--warn-bg); color: var(--warn); }
+      .pill-danger { background: var(--danger-bg); color: var(--danger); }
+      .pill-purple { background: var(--purple-bg); color: var(--purple); }
+      .notice {
+        padding: 8px 12px; border-radius: var(--radius);
+        background: var(--warn-bg); border: 1px solid #fcd34d; color: var(--warn);
+        font-size: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      }
+      .card {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); overflow: hidden;
+      }
+      .card-head {
+        padding: 10px 14px; border-bottom: 1px solid var(--border);
+        display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+      }
+      .card-title { margin: 0; font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+      .filter-bar {
+        padding: 9px 14px; border-bottom: 1px solid var(--border);
+        background: #fafbfd; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+      }
+      .seg-group { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+      .seg-label { font-size: 12px; color: var(--muted); margin-right: 2px; }
+      .chip {
+        border: 1px solid var(--border-strong); background: var(--surface);
+        color: var(--ink-2); padding: 3px 9px; border-radius: 999px;
+        font-size: 12px; cursor: pointer;
+      }
+      .chip.active {
+        background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600;
+      }
+      .search-box { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+      .table-wrap { overflow-x: auto; }
+      table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+      th, td {
+        padding: 8px 10px; border-bottom: 1px solid var(--border);
+        text-align: left; vertical-align: middle;
+      }
+      th {
+        background: var(--surface-2); color: var(--ink-2);
+        font-weight: 600; font-size: 12px; white-space: nowrap;
+      }
+      tbody tr { cursor: pointer; }
+      tbody tr:hover { background: #f8fafc; }
+      .id-cell { font-family: ui-monospace, Consolas, monospace; color: var(--primary); font-weight: 600; white-space: nowrap; }
+      .title-cell { max-width: 380px; }
+      .title-main { font-weight: 600; color: var(--ink); display: block; }
+      .title-sub { font-size: 11.5px; color: var(--muted); }
+      .pager {
+        padding: 9px 14px; display: flex; align-items: center; justify-content: space-between;
+        font-size: 12px; color: var(--muted); background: #fafbfd;
+      }
+      .secondary-strip {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 9px 14px;
+      }
+      .secondary-head {
+        display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer;
+      }
+      .secondary-body { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+      .kpi-inline { display: flex; flex-wrap: wrap; gap: 8px; }
+      .kpi-chip {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: 7px; padding: 6px 11px; display: flex; align-items: baseline; gap: 6px;
+      }
+      .kpi-chip strong { font-size: 15px; }
+      .kpi-chip span { font-size: 12px; color: var(--muted); }
+      .drawer-backdrop {
+        position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35);
+        z-index: 40; display: flex; justify-content: flex-end;
+      }
+      .drawer-backdrop[hidden] { display: none; }
+      .drawer {
+        width: min(560px, 95vw); height: 100%; background: var(--surface);
+        box-shadow: -8px 0 28px rgba(15, 23, 42, 0.16);
+        display: flex; flex-direction: column; overflow: hidden;
+      }
+      .drawer-head {
+        padding: 14px 16px; border-bottom: 1px solid var(--border);
+        display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+      }
+      .drawer-body { padding: 14px 16px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 12px; }
+      .kv-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; font-size: 12px; }
+      .kv { background: var(--surface-2); padding: 7px 10px; border-radius: 6px; }
+      .kv b { display: block; color: var(--muted); font-weight: 500; font-size: 11px; }
+      pre.card-copy {
+        margin: 0; background: #0f172a; color: #e2e8f0;
+        padding: 10px 12px; border-radius: 6px; font-size: 12px; white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo">BZT</div>
+          <div>
+            <h1>better-zentao 1.0 试用工作台 · 六职责统一原型</h1>
+            <small>合成脱敏数据 · Web 专注进度与状态跟踪 · 提报与任务拆解由本地 Skill + MCP 完成</small>
+          </div>
+        </div>
+        <nav class="role-tabs" id="role-tabs" aria-label="职责视角"></nav>
+        <div class="top-controls">
+          <select class="month-select" id="month-select" aria-label="月份">
+            <option value="2026-12">2026-12（下月计划）</option>
+            <option value="2026-11" selected>2026-11（本月）</option>
+          </select>
+          <label style="font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:4px;">
+            <input type="checkbox" id="chk-partial" /> 模拟部分数据缺口
+          </label>
+          <span class="pill pill-neutral">只读跟踪模式</span>
+        </div>
+      </header>
+
+      <main class="main" id="app"></main>
+    </div>
+
+    <div class="drawer-backdrop" id="drawer-backdrop" hidden>
+      <aside class="drawer" role="dialog" aria-modal="true">
+        <div class="drawer-head">
+          <div>
+            <div id="drawer-code" class="id-cell"></div>
+            <h2 id="drawer-title" style="margin:4px 0 0;font-size:15px;"></h2>
+          </div>
+          <button type="button" class="btn btn-xs" id="drawer-close">关闭</button>
+        </div>
+        <div class="drawer-body" id="drawer-body"></div>
+      </aside>
+    </div>
+
+    <script>
+      const ROLES = [
+        { id: "DS", name: "设计人员 (DS)", desc: "研发需求台账优先 · 个人关系 × 原生状态组合筛选 · 用户需求次级化" },
+        { id: "DM", name: "设计主管 (DM)", desc: "团队设计需求把关 · 待评审与待移交优先" },
+        { id: "RD", name: "研发人员 (RD)", desc: "我的叶子任务与关联研发需求范围" },
+        { id: "RM", name: "研发主管 (RM)", desc: "月度研发队列五桶、接收与排期视角" },
+        { id: "PM", name: "产品管理 (PM)", desc: "L3 计划交付率与版本发布门禁" },
+        { id: "PJ", name: "项目管理 (PJ)", desc: "逾期、风险巡检、月度承诺与顺延" },
+      ];
+
+      const ME = "ds_lin";
+      const STATUS_LABELS = {
+        draft: ["草稿", "pill-neutral"],
+        reviewing: ["待审核", "pill-warn"],
+        active: ["激活", "pill-primary"],
+        changing: ["变更中", "pill-purple"],
+        closed: ["已关闭", "pill-success"],
+      };
+
+      const SYNTHETIC_STORIES = [
+        { id: 3101, title: "权限中心-多租户角色矩阵交互方案", product: "天宫平台（设计态）", module: "权限管理", category: "design", status: "active", progress: "设计中", openedBy: "ds_lin", assignedTo: "ds_lin", maintainer: "ds_lin", receiver: "rm_fe", plan: "【设计】权限-2026年11月", month: "2026-11", version: "V7.1.0", nextStage: "【评审】交互评审", nextDeadline: "2026-11-29", feedbackBy: "业务代表A", tasks: [{ id: 8101, name: "【设计】输出角色矩阵高保真稿", status: "doing", owner: "ds_lin", deadline: "2026-11-28" }, { id: 8102, name: "【评审】组织前后端评审", status: "wait", owner: "dm_chen", deadline: "2026-11-29" }], riskCodes: [] },
+        { id: 3102, title: "工作台-研发需求组合筛选与分页台账", product: "天宫平台（设计态）", module: "工作台", category: "design", status: "active", progress: "待移交", openedBy: "ds_lin", assignedTo: "ds_lin", maintainer: "ds_lin", receiver: "rm_fe", plan: "【设计】工作台-2026年11月", month: "2026-11", version: "V7.1.0", nextStage: "【传递】移交研发", nextDeadline: "2026-11-30", feedbackBy: "内部试用反馈", tasks: [{ id: 8103, name: "【设计】筛选栏与分页原型", status: "done", owner: "ds_lin", deadline: "2026-11-26" }, { id: 8104, name: "【评审】设计主管验收", status: "done", owner: "dm_chen", deadline: "2026-11-27" }], riskCodes: ["R04"] },
+        { id: 3103, title: "报表中心-下月指标口径配置向导", product: "天宫平台（设计态）", module: "数据看板", category: "design", status: "reviewing", progress: "待评审", openedBy: "ds_lin", assignedTo: "dm_chen", maintainer: "ds_lin", receiver: "rm_be", plan: "【设计】看板-2026年12月", month: "2026-12", version: "V7.2.0", nextStage: "等待原生审核通过", nextDeadline: "2026-12-02", feedbackBy: "运营团队", tasks: [], riskCodes: [] },
+        { id: 3104, title: "消息中心-企微卡片模板样式规范", product: "天宫平台（设计态）", module: "消息通知", category: "design", status: "draft", progress: "未就绪", openedBy: "ds_lin", assignedTo: "ds_lin", maintainer: "ds_lin", receiver: "rm_fe", plan: "【设计】消息-2026年12月", month: "2026-12", version: "V7.2.0", nextStage: "完善范围与验收后提审", nextDeadline: "2026-12-04", feedbackBy: "产品经理甲", tasks: [], riskCodes: ["R05"] },
+        { id: 3105, title: "网关鉴权-Token 续期异常引导页", product: "OneLink（运行态）", module: "网关", category: "feature", status: "active", progress: "研发中", openedBy: "dm_chen", assignedTo: "rd_wang", maintainer: "ds_lin", receiver: "rm_be", plan: "【研发】网关-2026年11月", month: "2026-11", version: "V7.1.0", nextStage: "【测试】联调验证", nextDeadline: "2026-11-30", feedbackBy: "技术支持乙", tasks: [{ id: 8105, name: "【研发】实现续期拦截提示", status: "doing", owner: "rd_wang", deadline: "2026-11-29" }], riskCodes: [] },
+        { id: 3106, title: "组织架构-部门树按层级检索组件", product: "OneLink（运行态）", module: "组织管理", category: "feature", status: "active", progress: "待验收", openedBy: "ds_zhao", assignedTo: "ds_lin", maintainer: "ds_zhao", receiver: "rm_fe", plan: "【研发】组织-2026年11月", month: "2026-11", version: "V7.1.0", nextStage: "【验收】设计走查验收", nextDeadline: "2026-11-29", feedbackBy: "实施顾问丙", tasks: [{ id: 8106, name: "【验收】走查交互还原度", status: "wait", owner: "ds_lin", deadline: "2026-11-29" }], riskCodes: [] },
+        { id: 3107, title: "审批流-驳回意见留痕弹窗优化", product: "天宫平台（设计态）", module: "流程引擎", category: "design", status: "closed", progress: "已关闭", openedBy: "ds_lin", assignedTo: "ds_lin", maintainer: "ds_lin", receiver: "rm_fe", plan: "【设计】流程-2026年11月", month: "2026-11", version: "V7.0.9", nextStage: "已完成收尾", nextDeadline: "", feedbackBy: "业务代表B", tasks: [], riskCodes: [] },
+        { id: 3108, title: "统一搜索-历史记录与快捷跳转设计", product: "天宫平台（设计态）", module: "全局导航", category: "design", status: "reviewing", progress: "待评审", openedBy: "ds_zhao", assignedTo: "dm_chen", maintainer: "ds_zhao", receiver: "rm_fe", plan: "【设计】导航-2026年11月", month: "2026-11", version: "V7.1.0", nextStage: "设计主管审核", nextDeadline: "2026-11-29", feedbackBy: "产品经理甲", tasks: [], riskCodes: [] },
+      ];
+
+      const SYNTHETIC_REQUIREMENTS = [
+        { id: 4901, title: "客户希望角色维护支持按部门筛选", product: "天宫平台（设计态）", module: "权限管理", assignedTo: "ds_lin", feedbackBy: "客户成功部", openedDate: "2026-11-25" },
+        { id: 4902, title: "月末导出设计任务周报支持按版本汇总", product: "天宫平台（设计态）", module: "工作台", assignedTo: "ds_lin", feedbackBy: "业务代表C", openedDate: "2026-11-26" },
+      ];
+
+      const state = {
+        role: "DS",
+        month: "2026-11",
+        partial: false,
+        relation: "all",
+        status: "unclosed",
+        keyword: "",
+        page: 1,
+        pageSize: 5,
+        reqExpanded: false,
+      };
+
+      const roleTabs = document.getElementById("role-tabs");
+      const app = document.getElementById("app");
+      const drawerBackdrop = document.getElementById("drawer-backdrop");
+
+      function renderRoleTabs() {
+        roleTabs.replaceChildren();
+        for (const r of ROLES) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "role-tab" + (state.role === r.id ? " active" : "");
+          btn.textContent = r.name;
+          btn.addEventListener("click", () => {
+            state.role = r.id;
+            state.page = 1;
+            state.relation = r.id === "DS" ? "created" : "all";
+            state.status = "unclosed";
+            state.keyword = "";
+            render();
+          });
+          roleTabs.append(btn);
+        }
+      }
+
+      function filterStories() {
+        const kw = state.keyword.trim().toLowerCase();
+        return SYNTHETIC_STORIES.filter((s) => {
+          if (state.month && s.month !== state.month) return false;
+          if (state.role === "DM" && s.category !== "design") return false;
+          if (state.relation === "created" && s.openedBy !== ME) return false;
+          if (state.relation === "assigned" && s.assignedTo !== ME) return false;
+          if (state.relation === "maintainer" && s.maintainer !== ME) return false;
+          if (state.status === "unclosed" && s.status === "closed") return false;
+          if (!["all", "unclosed"].includes(state.status) && s.status !== state.status) return false;
+          if (kw) {
+            const hay = [`#${s.id}`, String(s.id), s.title, s.module, s.feedbackBy, s.version].join(" ").toLowerCase();
+            if (!hay.includes(kw)) return false;
+          }
+          return true;
+        });
+      }
+
+      function openDrawer(story) {
+        document.getElementById("drawer-code").textContent = `#${story.id} · ${story.product} / ${story.module}`;
+        document.getElementById("drawer-title").textContent = story.title;
+        const body = document.getElementById("drawer-body");
+        const [stLabel] = STATUS_LABELS[story.status] || [story.status];
+        const cardText = [
+          `【需求进度】${story.title}`,
+          `当前：${story.progress}（记录）｜原生状态：${stLabel}`,
+          `负责人：${story.assignedTo}｜维护人：${story.maintainer}`,
+          `下一步：${story.nextStage}${story.nextDeadline ? `（预计 ${story.nextDeadline}）` : ""}`,
+          `数据时间：2026-11-28T00:30:00+08:00`,
+        ].join("\n");
+        body.innerHTML = `
+          <div class="kv-grid">
+            <div class="kv"><b>禅道原生状态</b>${stLabel} (${story.status})</div>
+            <div class="kv"><b>业务进展阶段</b>${story.progress}</div>
+            <div class="kv"><b>创建人 (openedBy)</b>${story.openedBy}</div>
+            <div class="kv"><b>当前指派 (assignedTo)</b>${story.assignedTo}</div>
+            <div class="kv"><b>进度维护人</b>${story.maintainer}</div>
+            <div class="kv"><b>计划与版本</b>${story.plan} · ${story.version}</div>
+          </div>
+          <div>
+            <strong style="font-size:12.5px;">关联阶段任务（${story.tasks.length}）</strong>
+            ${story.tasks.length ? `<ul style="margin:6px 0 0;padding-left:18px;">${story.tasks.map((t) => `<li>#${t.id} ${t.name}（${t.owner} · 截止 ${t.deadline}）</li>`).join("")}</ul>` : `<p style="color:var(--muted);margin:6px 0 0;">暂无已拆解任务（注意：草稿/待审核需求须先审核激活后才可拆解任务）。</p>`}
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <strong style="font-size:12.5px;">可转发业务进度卡</strong>
+              <button type="button" class="btn btn-xs" id="btn-copy-card">复制卡片</button>
+            </div>
+            <pre class="card-copy">${cardText}</pre>
+          </div>
+        `;
+        body.querySelector("#btn-copy-card").addEventListener("click", () => {
+          navigator.clipboard?.writeText(cardText);
+          alert("已复制业务进度卡到剪贴板");
+        });
+        drawerBackdrop.hidden = false;
+      }
+
+      function render() {
+        renderRoleTabs();
+        const roleMeta = ROLES.find((r) => r.id === state.role);
+        const rows = filterStories();
+        const totalPages = Math.max(1, Math.ceil(rows.length / state.pageSize));
+        if (state.page > totalPages) state.page = totalPages;
+        const pageRows = rows.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
+
+        app.replaceChildren();
+
+        const metaBar = document.createElement("div");
+        metaBar.className = "meta-bar";
+        metaBar.innerHTML = `<span><strong>${roleMeta.name}</strong> · ${roleMeta.desc}</span><span>数据时间 2026-11-28 00:30 · 月份 ${state.month}</span>`;
+        app.append(metaBar);
+
+        if (state.partial) {
+          const notice = document.createElement("div");
+          notice.className = "notice";
+          notice.innerHTML = `<span><strong>数据不完整（partial）</strong>：1 个非核心数据源超时，下方计数仅代表已读取且匹配范围，不伪装全量。</span><span>gap: execution:219 · 读取超时</span>`;
+          app.append(notice);
+        }
+
+        // 轻量顶部指标条（不挤占主列表）
+        const kpi = document.createElement("div");
+        kpi.className = "kpi-inline";
+        const kpisByRole = {
+          DS: [["当前筛选研发需求", rows.length, "条"], ["待审核 (reviewing)", rows.filter((r) => r.status === "reviewing").length, "条"], ["草稿待完善", rows.filter((r) => r.status === "draft").length, "条"], ["待移交研发", rows.filter((r) => r.progress === "待移交").length, "条"]],
+          DM: [["团队设计需求", rows.length, "条"], ["待评审", rows.filter((r) => r.progress === "待评审").length, "条"], ["待移交", rows.filter((r) => r.progress === "待移交").length, "条"], ["风险命中", rows.filter((r) => r.riskCodes.length).length, "条"]],
+          RD: [["进行中叶子任务", 3, "个"], ["关联研发需求", rows.length, "条"], ["临期任务", 1, "个"]],
+          RM: [["本月研发队列", rows.length, "条"], ["未就绪", rows.filter((r) => r.progress === "未就绪").length, "条"], ["待排期", 2, "条"]],
+          PM: [["L3 计划需求", rows.length, "条"], ["已关闭", rows.filter((r) => r.status === "closed").length, "条"], ["版本门禁", "V7.1.0", "观察中"]],
+          PJ: [["月度承诺需求", rows.length, "条"], ["风险项", rows.filter((r) => r.riskCodes.length).length, "条"], ["顺延项", 0, "条"]],
+        };
+        for (const [label, val, unit] of kpisByRole[state.role]) {
+          const item = document.createElement("div");
+          item.className = "kpi-chip";
+          item.innerHTML = `<span>${label}</span><strong>${val}</strong><span>${unit}</span>`;
+          kpi.append(item);
+        }
+        app.append(kpi);
+
+        // 主台账卡片（统一台账组件，六视角共用）
+        const card = document.createElement("section");
+        card.className = "card";
+        card.innerHTML = `
+          <div class="card-head">
+            <h2 class="card-title">
+              ${state.role === "DS" ? "我的研发需求台账" : state.role === "DM" ? "团队设计需求台账" : `${roleMeta.name.split(" ")[0]} · 统一需求台账`}
+              <span class="pill pill-primary">${state.partial ? `已读 ${rows.length} 条` : `共 ${rows.length} 条`}</span>
+            </h2>
+            <span style="font-size:12px;color:var(--muted);">点击任意行打开统一详情抽屉 · 提需与任务拆解请使用本地 Agent Skill + MCP</span>
+          </div>
+        `;
+
+        const filterBar = document.createElement("div");
+        filterBar.className = "filter-bar";
+
+        const relGroup = document.createElement("div");
+        relGroup.className = "seg-group";
+        relGroup.innerHTML = `<span class="seg-label">关系：</span>`;
+        for (const [key, text] of [["created", "我创建的"], ["assigned", "指派给我"], ["maintainer", "我维护的"], ["all", "全部可见"]]) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "chip" + (state.relation === key ? " active" : "");
+          b.textContent = text;
+          b.addEventListener("click", () => { state.relation = key; state.page = 1; render(); });
+          relGroup.append(b);
+        }
+
+        const stGroup = document.createElement("div");
+        stGroup.className = "seg-group";
+        stGroup.innerHTML = `<span class="seg-label">原生状态：</span>`;
+        for (const [key, text] of [["unclosed", "未关闭"], ["all", "全部"], ["reviewing", "待审核"], ["draft", "草稿"], ["active", "激活"], ["closed", "已关闭"]]) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "chip" + (state.status === key ? " active" : "");
+          b.textContent = text;
+          b.addEventListener("click", () => { state.status = key; state.page = 1; render(); });
+          stGroup.append(b);
+        }
+
+        const searchBox = document.createElement("div");
+        searchBox.className = "search-box";
+        const searchInput = document.createElement("input");
+        searchInput.type = "search";
+        searchInput.className = "text-input";
+        searchInput.placeholder = "跨页搜 #编号、标题、模块或反馈方…";
+        searchInput.value = state.keyword;
+        searchInput.addEventListener("input", () => { state.keyword = searchInput.value; state.page = 1; render(); });
+        searchBox.append(searchInput);
+
+        filterBar.append(relGroup, stGroup, searchBox);
+        card.append(filterBar);
+
+        const wrap = document.createElement("div");
+        wrap.className = "table-wrap";
+        const table = document.createElement("table");
+        table.innerHTML = `
+          <thead>
+            <tr>
+              <th>编号</th>
+              <th>需求标题 / 模块</th>
+              <th>类别</th>
+              <th>原生状态</th>
+              <th>业务阶段</th>
+              <th>创建 / 指派 / 维护</th>
+              <th>下一节点与截止</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        `;
+        const tbody = table.querySelector("tbody");
+        if (!pageRows.length) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `<td colspan="8" style="text-align:center;color:var(--muted);padding:24px;">当前组合筛选条件下暂无匹配的研发需求</td>`;
+          tbody.append(tr);
+        } else {
+          for (const s of pageRows) {
+            const tr = document.createElement("tr");
+            const [stText, stCls] = STATUS_LABELS[s.status] || [s.status, "pill-neutral"];
+            tr.innerHTML = `
+              <td class="id-cell">#${s.id}</td>
+              <td class="title-cell">
+                <span class="title-main">${s.title}</span>
+                <span class="title-sub">${s.product} · ${s.module} · ${s.version}${s.feedbackBy ? ` · 反馈：${s.feedbackBy}` : ""}</span>
+              </td>
+              <td><span class="pill ${s.category === "design" ? "pill-purple" : "pill-neutral"}">${s.category === "design" ? "设计类" : "研发类"}</span></td>
+              <td><span class="pill ${stCls}">${stText}</span></td>
+              <td>${s.progress}${s.riskCodes.length ? ` <span class="pill pill-danger">${s.riskCodes.join(",")}</span>` : ""}</td>
+              <td style="font-size:11.5px;color:var(--ink-2);">${s.openedBy} / <b>${s.assignedTo}</b> / ${s.maintainer}</td>
+              <td style="font-size:11.5px;">${s.nextStage}${s.nextDeadline ? `<br><span style="color:var(--muted);">${s.nextDeadline}</span>` : ""}</td>
+              <td><button type="button" class="btn btn-xs">详情</button></td>
+            `;
+            tr.addEventListener("click", () => openDrawer(s));
+            tbody.append(tr);
+          }
+        }
+        wrap.append(table);
+        card.append(wrap);
+
+        const pager = document.createElement("div");
+        pager.className = "pager";
+        pager.innerHTML = `<span>${state.partial ? `第 ${state.page} / ${totalPages} 页（已读取 ${rows.length} 条，数据不完整）` : `第 ${state.page} / ${totalPages} 页（共 ${rows.length} 条）`}</span>`;
+        const pBtns = document.createElement("div");
+        pBtns.style.display = "flex";
+        pBtns.style.gap = "6px";
+        const prev = document.createElement("button");
+        prev.className = "btn btn-xs";
+        prev.textContent = "上一页";
+        prev.disabled = state.page <= 1;
+        prev.addEventListener("click", () => { state.page -= 1; render(); });
+        const next = document.createElement("button");
+        next.className = "btn btn-xs";
+        next.textContent = "下一页";
+        next.disabled = state.page >= totalPages;
+        next.addEventListener("click", () => { state.page += 1; render(); });
+        pBtns.append(prev, next);
+        pager.append(pBtns);
+        card.append(pager);
+        app.append(card);
+
+        // DS / DM 次级用户需求池（默认折叠，不淹没主列表）
+        if (state.role === "DS" || state.role === "DM") {
+          const sec = document.createElement("section");
+          sec.className = "secondary-strip";
+          const head = document.createElement("div");
+          head.className = "secondary-head";
+          head.innerHTML = `
+            <div style="display:flex;align-items:center;gap:8px;">
+              <strong>次级入口 · ${state.role === "DS" ? "指派给我的待关联用户需求" : "团队待关联用户需求池"}</strong>
+              <span class="pill pill-warn">${SYNTHETIC_REQUIREMENTS.length} 条</span>
+              <span style="font-size:12px;color:var(--muted);">已按角色权限过滤，仅展示授权范围内的用户需求</span>
+            </div>
+            <button type="button" class="btn btn-xs">${state.reqExpanded ? "收起" : "展开查看"}</button>
+          `;
+          head.addEventListener("click", () => { state.reqExpanded = !state.reqExpanded; render(); });
+          sec.append(head);
+
+          if (state.reqExpanded) {
+            const body = document.createElement("div");
+            body.className = "secondary-body";
+            body.innerHTML = SYNTHETIC_REQUIREMENTS.map((r) => `
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed var(--border);">
+                <div>
+                  <span class="id-cell">#${r.id}</span> <b>${r.title}</b>
+                  <span style="font-size:11.5px;color:var(--muted);"> · ${r.product} / ${r.module} · 反馈方 ${r.feedbackBy} · 登记 ${r.openedDate}</span>
+                </div>
+                <button type="button" class="btn btn-xs btn-primary" onclick="alert('将带入用户需求 #${r.id} 到提需流程（真实写入走预览确认）')">带入关联</button>
+              </div>
+            `).join("");
+            sec.append(body);
+          }
+          app.append(sec);
+        }
+      }
+
+      document.getElementById("month-select").addEventListener("change", (e) => {
+        state.month = e.target.value;
+        state.page = 1;
+        render();
+      });
+      document.getElementById("chk-partial").addEventListener("change", (e) => {
+        state.partial = e.target.checked;
+        render();
+      });
+      document.getElementById("drawer-close").addEventListener("click", () => {
+        drawerBackdrop.hidden = true;
+      });
+      drawerBackdrop.addEventListener("click", (e) => {
+        if (e.target === drawerBackdrop) drawerBackdrop.hidden = true;
+      });
+
+      state.relation = "created";
+      render();
+    </script>
+  </body>
+</html>

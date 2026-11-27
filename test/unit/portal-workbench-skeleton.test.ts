@@ -109,9 +109,9 @@ const roles = [
     tabs: 2,
     columns: 11,
     nativeFields: 7,
-    fields: [1, 5],
-    kpis: 3,
-    panels: 2,
+    fields: [],
+    kpis: 0,
+    panels: 1,
     row: "item-row",
   },
   {

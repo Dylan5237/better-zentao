@@ -505,7 +505,366 @@ function designRows(ctx, { work, design }) {
   return { rows, source, members };
 }
 
+const nativeStatusLabels = {
+  draft: "草稿",
+  reviewing: "待审核",
+  active: "激活",
+  changing: "变更中",
+  closed: "已关闭",
+};
+
+function renderDesignMember(parent, ctx, { unlinked }) {
+  const requirements = unique(unlinked.data?.items);
+  const unlinkedTotal = unlinked.data?.countsByProgress
+    ? Object.values(unlinked.data.countsByProgress).reduce(
+        (sum, n) => sum + n,
+        0,
+      )
+    : requirements.length;
+  const unlinkedScope = { ...unlinked, truncated: false };
+  ctx.setBadge?.(
+    "intake",
+    unlinked.data && !limited(unlinkedScope) ? unlinkedTotal : undefined,
+  );
+
+  let relation = "created";
+  let statusFilter = "unclosed";
+  let keyword = "";
+  let page = 1;
+  const pageSize = 20;
+  let seq = 0;
+  let expandedReq = false;
+
+  const { panel, header } = card(parent, "我的研发需求", {
+    subtitle: "研发需求优先视图 · 组合筛选直查服务端并分页",
+    grouped: true,
+  });
+  const totalTag = resultBadge(header, ctx, "primary");
+
+  const filterBar = add(panel, "div", undefined, "ds-filter-bar");
+  const relWrap = add(filterBar, "div", undefined, "ds-filter-group");
+  add(relWrap, "span", "关系：", "ds-filter-label");
+  const relButtons = new Map();
+  for (const [key, label] of [
+    ["created", "我创建的"],
+    ["assigned", "指派给我"],
+    ["maintainer", "我维护的"],
+    ["", "全部可见"],
+  ]) {
+    const btn = button(
+      relWrap,
+      label,
+      () => {
+        if (relation === key) return;
+        relation = key;
+        page = 1;
+        syncChips();
+        void loadStories();
+      },
+      "btn-sm ds-chip",
+    );
+    relButtons.set(key, btn);
+  }
+
+  const stWrap = add(filterBar, "div", undefined, "ds-filter-group");
+  add(stWrap, "span", "原生状态：", "ds-filter-label");
+  const stButtons = new Map();
+  for (const [key, label] of [
+    ["unclosed", "未关闭"],
+    ["all", "全部"],
+    ["reviewing", "待审核"],
+    ["draft", "草稿"],
+    ["active", "激活"],
+    ["closed", "已关闭"],
+  ]) {
+    const btn = button(
+      stWrap,
+      label,
+      () => {
+        if (statusFilter === key) return;
+        statusFilter = key;
+        page = 1;
+        syncChips();
+        void loadStories();
+      },
+      "btn-sm ds-chip",
+    );
+    stButtons.set(key, btn);
+  }
+
+  const searchWrap = add(filterBar, "div", undefined, "ds-search-group");
+  const searchInput = add(searchWrap, "input", undefined, "ds-search-input");
+  searchInput.type = "search";
+  searchInput.placeholder = "跨页搜 #编号、标题、模块或反馈方…";
+  searchInput.setAttribute("aria-label", "检索研发需求");
+  const clearBtn = button(
+    searchWrap,
+    "清空",
+    () => {
+      searchInput.value = "";
+      if (!keyword) return;
+      keyword = "";
+      page = 1;
+      clearBtn.hidden = true;
+      void loadStories();
+    },
+    "btn-sm",
+  );
+  clearBtn.hidden = true;
+  searchInput.addEventListener("input", () => {
+    const next = searchInput.value.trim();
+    clearBtn.hidden = !searchInput.value;
+    if (next === keyword) return;
+    keyword = next;
+    page = 1;
+    void loadStories();
+  });
+
+  const noticeHost = add(panel, "div", undefined, "ds-status-host");
+  const tableWrap = add(
+    panel,
+    "div",
+    undefined,
+    "table-wrap vp-table-scroll vp-scroll",
+  );
+  const pagerHost = add(panel, "div", undefined, "ds-pager");
+  pagerHost.hidden = true;
+
+  function syncChips() {
+    for (const [key, btn] of relButtons) {
+      btn.setAttribute("aria-pressed", String(key === relation));
+      btn.className = `btn-sm ds-chip${key === relation ? " is-active" : ""}`;
+    }
+    for (const [key, btn] of stButtons) {
+      btn.setAttribute("aria-pressed", String(key === statusFilter));
+      btn.className = `btn-sm ds-chip${key === statusFilter ? " is-active" : ""}`;
+    }
+  }
+  syncChips();
+
+  async function loadStories() {
+    const currentSeq = ++seq;
+    const stillHere = () =>
+      ctx.current() && panel.isConnected && currentSeq === seq;
+    noticeHost.replaceChildren();
+    tableWrap.replaceChildren();
+    add(tableWrap, "p", "正在读取研发需求…", "empty-inline");
+    try {
+      const result = await ctx.call("query_stories", {
+        type: "story",
+        ...(relation && { role: relation }),
+        status: [statusFilter],
+        ...(keyword && { keyword }),
+        page,
+        limit: pageSize,
+      });
+      if (!stillHere()) return;
+      if (!result?.ok) {
+        noticeHost.replaceChildren();
+        tableWrap.replaceChildren();
+        add(
+          noticeHost,
+          "p",
+          result?.message || "读取研发需求失败，请稍后重试。",
+          "notice",
+        );
+        return;
+      }
+      const items = result.data?.items ?? [];
+      const totalItems =
+        result.data?.total ??
+        Object.values(result.data?.countsByProgress ?? {}).reduce(
+          (sum, n) => sum + n,
+          0,
+        );
+      const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+      if (page > totalPages && !items.length) {
+        page = totalPages;
+        return loadStories();
+      }
+      const isPartial = result.completeness === "partial";
+      totalTag.textContent = isPartial
+        ? `已读 ${totalItems} 条`
+        : `${totalItems} 条`;
+      noticeHost.replaceChildren();
+      if (isPartial) {
+        add(
+          noticeHost,
+          "p",
+          "部分数据源未完整读取，下方计数与列表仅覆盖已读取范围。",
+          "notice",
+        );
+      }
+      tableWrap.replaceChildren();
+      if (!items.length) {
+        add(tableWrap, "p", "当前筛选条件下暂无研发需求。", "empty-inline");
+      } else {
+        const table = add(tableWrap, "table", undefined, "ds-story-table");
+        const thead = add(table, "thead");
+        const hr = add(thead, "tr");
+        for (const h of [
+          "编号",
+          "标题 / 模块",
+          "类别",
+          "原生状态",
+          "业务阶段",
+          "指派 / 维护",
+          "下一节点",
+          "操作",
+        ]) {
+          add(hr, "th", h);
+        }
+        const tbody = add(table, "tbody");
+        for (const story of items) {
+          const tr = add(tbody, "tr");
+          add(tr, "td", `#${story.id}`, "ds-id-cell");
+          const tdTitle = add(tr, "td");
+          add(tdTitle, "span", story.title, "ds-title-main");
+          add(
+            tdTitle,
+            "span",
+            [
+              story.product?.name,
+              story.module?.path,
+              story.version,
+              story.feedbackBy ? `反馈：${story.feedbackBy}` : "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            "ds-title-sub",
+          );
+          add(
+            tr,
+            "td",
+            story.category === "design"
+              ? "设计类"
+              : story.category === "feature"
+                ? "研发类"
+                : "其他",
+          );
+          add(tr, "td", nativeStatusLabels[story.status] ?? story.status);
+          add(tr, "td", story.progress?.value ?? "—");
+          add(
+            tr,
+            "td",
+            `${person(story.currentOwner)} / ${person(story.maintainer)}`,
+          );
+          add(
+            tr,
+            "td",
+            [story.nextStage, story.nextDeadline].filter(Boolean).join(" · ") ||
+              "—",
+          );
+          const tdAct = add(tr, "td");
+          button(
+            tdAct,
+            "查看详情",
+            storyAction(ctx, story.id),
+            "btn-primary btn-sm",
+          );
+        }
+      }
+      pagerHost.replaceChildren();
+      if (totalPages > 1 || page > 1) {
+        pagerHost.hidden = false;
+        const prev = button(
+          pagerHost,
+          "上一页",
+          () => {
+            if (page <= 1) return;
+            page -= 1;
+            void loadStories();
+          },
+          "btn-sm",
+        );
+        prev.disabled = page <= 1;
+        add(
+          pagerHost,
+          "span",
+          isPartial
+            ? `第 ${page} / ${totalPages} 页（已读取 ${totalItems} 条，数据不完整）`
+            : `第 ${page} / ${totalPages} 页（共 ${totalItems} 条）`,
+          "ds-pager-info",
+        );
+        const next = button(
+          pagerHost,
+          "下一页",
+          () => {
+            if (page >= totalPages) return;
+            page += 1;
+            void loadStories();
+          },
+          "btn-sm",
+        );
+        next.disabled = page >= totalPages;
+      } else {
+        pagerHost.hidden = true;
+      }
+    } catch (error) {
+      if (!stillHere()) return;
+      noticeHost.replaceChildren();
+      tableWrap.replaceChildren();
+      add(
+        noticeHost,
+        "p",
+        error?.message || "读取研发需求失败，请稍后重试。",
+        "notice",
+      );
+    }
+  }
+  if (ctx.pending) {
+    pendingItems(tableWrap);
+    return;
+  }
+  void loadStories();
+
+  // 次级入口：指派给我的待关联用户需求（默认折叠，保留真实关联能力）
+  const sec = add(parent, "section", undefined, "panel-card ds-secondary-req");
+  const secHead = add(sec, "div", undefined, "panel-head");
+  const secCopy = add(secHead, "div", undefined, "workbench-panel-heading");
+  add(
+    secCopy,
+    "h3",
+    `次级入口 · 指派给我的待关联用户需求（${count(unlinkedScope, unlinkedTotal)}）`,
+    "panel-title",
+  );
+  const secBody = add(sec, "div", undefined, "ds-secondary-body");
+  secBody.hidden = true;
+  const toggleBtn = button(
+    secHead,
+    "展开查看",
+    () => {
+      expandedReq = !expandedReq;
+      secBody.hidden = !expandedReq;
+      toggleBtn.textContent = expandedReq ? "收起" : "展开查看";
+    },
+    "btn-sm",
+  );
+  if (!requirements.length) {
+    add(secBody, "p", "当前没有指派给您的待关联用户需求。", "empty-inline");
+  } else {
+    for (const req of requirements) {
+      const row = item(
+        secBody,
+        `#${req.id} ${req.title}`,
+        `${req.product?.name || ""} · 反馈方 ${req.feedbackBy || "未登记"}`,
+      );
+      if (allowed(ctx, "create_story")) {
+        button(
+          row,
+          "一键生成研发需求",
+          createFromRequirement(ctx, req),
+          "btn-primary btn-sm",
+        );
+      }
+    }
+  }
+}
+
 function renderDesign(parent, ctx, { work, unlinked, design }) {
+  if (ctx.role.id === "DS") {
+    return renderDesignMember(parent, ctx, { unlinked });
+  }
   const requirements = unique(unlinked.data?.items);
   const {
     rows: maintained,

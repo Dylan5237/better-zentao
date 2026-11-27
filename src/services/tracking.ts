@@ -2292,6 +2292,8 @@ export class TrackingService {
         (!scope.plan || row.plan == null || row.plan.includes(scope.plan.id)) &&
         (!(role === "assigned" && account && row.assignedTo !== undefined) ||
           row.assignedTo === account) &&
+        (!(role === "created" && account && row.openedBy !== undefined) ||
+          row.openedBy === account) &&
         (status.includes("all") ||
           status.includes(row.status) ||
           (status.includes("unclosed") && row.status !== "closed")),
@@ -2389,7 +2391,8 @@ export class TrackingService {
           return undefined;
         if (
           account &&
-          ((role === "maintainer" && roles.maintainer !== account) ||
+          ((role === "created" && story.openedBy !== account) ||
+            (role === "maintainer" && roles.maintainer !== account) ||
             (role === "receiver" && roles.receiver !== account) ||
             (role === "assigned" && roles.currentHandler !== account) ||
             (role === "raised" &&
