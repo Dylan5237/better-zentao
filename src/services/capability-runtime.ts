@@ -36,6 +36,7 @@ export interface CapabilityRuntimeOptions {
     tool: string,
     input: unknown,
     role: PortalRole,
+    month?: string,
   ) => Promise<unknown>;
   /** 读取当前有效角色（默认直接使用 principal.roles 快照）。 */
   readonly readRoles?: () => Promise<readonly { id: PortalRole }[]>;
@@ -120,7 +121,7 @@ export function createCapabilityRuntime(options: CapabilityRuntimeOptions) {
           throw new BztError("INVALID_INPUT", "工具参数不合法。");
         effectiveInput = parsed.data;
       }
-      const value = await execute(tool, effectiveInput, granted);
+      const value = await execute(tool, effectiveInput, granted, month);
       return contract.output.parse(value);
     },
   };

@@ -113,6 +113,7 @@ const assets = new Map<string, readonly [string, string]>([
     "workbench-page",
     "review-page",
     "review-content",
+    "ai-copilot",
   ].map((name): [string, readonly [string, string]] => [
     "/" + name + ".js",
     [name + ".js", "text/javascript"],
@@ -124,6 +125,7 @@ const assets = new Map<string, readonly [string, string]>([
     "daily-pages",
     "management-pages",
     "workbench-page",
+    "ai-copilot",
   ].map((name): [string, readonly [string, string]] => [
     "/" + name + ".css",
     [name + ".css", "text/css"],

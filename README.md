@@ -25,9 +25,9 @@ better-zentao 在保留禅道作为业务数据事实源的基础上，把需求
 | 本地 Web 工作台 | 个人使用、独立试用 | 在自己的电脑上运行 `bzt web` |
 | MCP / CLI | AI Agent 用户、开发与运维人员 | 在本地运行 `bzt mcp` 或 CLI 命令 |
 
-Web 工作台提供按职责组织的工作台、提需求、需求流转、拆解与排期、发布与风险页面。顶部时间范围可按自然月切换，首页提供禅道原生、融合增强、全封装等视图模式。集中端的职责由管理员统一维护，个人模式允许本机用户配置自己的职责。
+Web 工作台提供按职责组织的工作台、提需求、需求流转、拆解与排期、发布与风险页面。顶部操作栏提供工作月份切换、手动同步与真实快照状态反馈，首页提供表格台账、混合视图、卡片概览等个人视图偏好。集中端的职责由管理员统一维护，个人模式允许本机用户配置自己的职责。
 
-**当前交付范围**：Server 1.0 已实现多用户集中服务端及离线验证，目标 Linux 宿主机上的 Docker / HTTPS 实跑与真实禅道上线验收仍待完成。AI 自然语言交互当前通过外部 MCP Agent 提供；工作台内置 AI 对话助手尚未实现。
+**当前交付范围**：Server 1.0 已实现多用户集中服务端并独立推进内网试用；2.0 Product RC（分支 `feat/bzt-2.0-rc`，见 [CR-009 2.0 架构与原位协作](docs/changes/CR-009-platform-2.0-baseline.md)）在保持 1.0 人工工作台完全兼容的前提下，完成了前端外壳产品化与默认关闭（`ai.enabled: false`）的**原位 AI 协作助手（In-context Copilot）**（含 L1 规则短路 + L3 个人大模型意图兜底、个人企业大模型网关加密凭据隔离与受控出站传输）。真实公司企业大模型网关协议、私有 CA 与业务数据出网授权仍待项目所有者在受控私网环境独立验证，尚未合入 `main` 或上线现网。
 
 ## 快速开始
 
@@ -51,6 +51,15 @@ node dist/adapters/cli/bzt.js serve --server-config /etc/bzt/server.json
 也可以参考 [Docker Compose 部署模板](docker/compose.example.yml) 和 [Nginx 配置示例](docker/nginx.example.conf)。按部署指南配置监听地址、可信代理及证书后，先在隔离环境验证，再开放内网访问。
 
 默认只读（`readOnly: true`），管理员验证双用户隔离、权限及业务读取后才可显式开启写入。集中端只允许管理员预登记的禅道实例，禁止普通用户自行更改共享角色配置，默认关闭企微群推。服务重启或上游认证失效后用户须重新登录。
+
+#### 2.0 原位 AI 助手启用说明（默认关闭）
+
+集中服务端默认 `ai.enabled: false`，所有 AI 控件隐藏，人工工作台零大模型依赖。仅在私有内网经管理员授权后，可在 `server.json` 中显式启用：
+
+- **独立主密钥（D-203）**：通过环境变量 `BZT_AI_MASTER_KEY`（64 位十六进制 32 字节密钥）或 `ai.masterKeyFile`（独立于业务数据目录、`0600` 权限）注入；若主密钥缺失，系统仅降级关闭 AI 功能，人工工作台 100% 正常可用。
+- **受信任网关白名单**：在 `ai.allowedGateways` 中精确配置公司授权模型网关的 `origin` 与 `pathPrefix`（禁止放宽 TLS 或允许未授权内网地址）。
+- **个人凭据与验证**：员工登录工作台后，在右上角账号菜单 → **个人 AI 设置** 中填写个人模型 Token 并通过最小探活测试后，方可使用原位 AI 助手；绝不共享或回退他人 Token。
+- **当前状态**：上述配置已在本地离线/受控 loopback 替身环境验证通过，真实公司企业模型网关尚未完成私网联调上线。
 
 ### 2. 个人本地工作台
 
@@ -136,7 +145,7 @@ corepack pnpm test
 | [工具契约](docs/07-工具契约.md) · [配置说明](docs/08-配置说明.md) | 工具输入输出、个人及团队配置 |
 | [测试与验收](docs/09-测试与验收.md) · [实施计划](docs/10-实施计划.md) | 测试门禁与实施路径 |
 | [需求演进指南](docs/11-需求演进指南.md) · [架构决策](docs/12-决策与待确认.md) · [术语与追溯](docs/13-术语与追溯.md) | 演进、ADR 和需求追溯 |
-| [服务端部署指南](docs/server-deployment.md) · [Server 1.0 需求卡](docs/changes/CR-008-server-multi-user.md) | 集中部署、运维、升级与回滚 |
+| [服务端部署指南](docs/server-deployment.md) · [Server 1.0 需求卡](docs/changes/CR-008-server-multi-user.md) · [2.0 平台与原位协作需求卡](docs/changes/CR-009-platform-2.0-baseline.md) | 集中部署、运维升级与 2.0 架构演进 |
 | [AGENTS.md](AGENTS.md) · [Agent Skill](skills/better-zentao/SKILL.md) | 编码 Agent 守则及使用者 Agent 业务指导 |
 
 业务规范与工程文档的优先级和变更规则以 [AGENTS.md](AGENTS.md) 为准。新需求遵循 CR / ADR 流程，避免不同入口产生不同业务口径。

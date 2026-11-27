@@ -14,7 +14,7 @@ import type { WorkspaceContextSnapshot } from "./contracts.ts";
  * 歧义澄清、缺项追问、多意图拆解、不支持拒识与不可信文本标记全部落地。
  */
 
-/** L3 模型分类器适配器：输入文本，输出意图标签（替身实现用于离线验证）。 */
+/** L3 模型分类器适配器：输入文本与工作台上下文，输出结构化意图判定。 */
 export type IntentClassifier = (
   text: string,
   context: WorkspaceContextSnapshot,
@@ -24,17 +24,32 @@ export type IntentClassifier = (
       readonly intent: string;
       readonly confidence: "high" | "medium";
     }
-  | { readonly kind: "ambiguous" }
-  | { readonly kind: "unsupported" }
+  | { readonly kind: "ambiguous"; readonly question?: string | undefined }
+  | { readonly kind: "unsupported"; readonly reason?: string | undefined }
 >;
 
-const storyRef = /[##]?\b(\d{2,6})\b/u;
-const riskWords = /风险|巡检|逾期|超期|滞留|缺口/u;
-const draftWords = /(拟定|起草|提交|创建|新建)一条?(需求|story)/iu;
-const myWorkWords = /(我|本人)?(今天|当前)?(要做什么|的工作|待办|任务列表)/u;
-const progressWords = /(进展|进度|做到哪|什么状态|什么阶段)/u;
+const dateLikePattern = /\b\d{4}-\d{2}(?:-\d{2})?\b/gu;
+const storyRef = /(?:#|(?:需求|story)\s*#?)(\d{2,6})\b/iu;
+export const riskWords = /风险|巡检|扫描|排查|逾期|超期|阻塞|滞留|缺口/u;
+export const myWorkWords =
+  /(我|本人)?(今天|当前)?(要做什么|的工作|待办|任务列表)/u;
+const draftWords =
+  /(?:拟定|起草|提交|创建|新建|发起)(?:一[条个])?(?:需求|story)/iu;
+export const progressWords = /(进展|进度|做到哪|什么状态|什么阶段)/u;
+const storyContextWords =
+  /(?:需求|story|这条|这个需求|该需求|选中需求|当前需求)/iu;
+const multiIntentJoinWords = /(?:同时|顺便|顺带|并且|另外|再帮我)/u;
+const standaloneProgressPattern =
+  /^(?:请|帮我)?(?:看|查|查看)?(?:一下)?(?:当前)?(?:进展|进度|做到哪了?|什么状态|什么阶段)[？?]?$/u;
 const injectionMarkers =
   /(忽略(以上|之前)(的)?(指令|提示)|disregard|system\s*prompt|你现在是|假装你是|jailbreak)/iu;
+
+/** 提取文本中的需求编号，自动排除 YYYY-MM / YYYY-MM-DD 日期中的年份（如「巡检 2026-11」）。 */
+export function extractStoryRef(text: string): number | undefined {
+  const withoutDates = text.replace(dateLikePattern, " ");
+  const matched = storyRef.exec(withoutDates)?.[1];
+  return matched === undefined ? undefined : Number(matched);
+}
 
 const intentLabels = [
   "my_work",
@@ -57,19 +72,33 @@ export interface IntentRouterOptions {
 export function createIntentRouter(options: IntentRouterOptions = {}) {
   const l1Route = (input: IntentRouteRequest): IntentResult | undefined => {
     const text = input.text;
-    const storyMatch = storyRef.exec(text);
-    if (input.storyId !== undefined || storyMatch) {
-      if (progressWords.test(text) || input.storyId !== undefined)
-        return {
-          kind: "routed",
-          intent: "story_progress",
-          confidence: "high",
-          source: "l1",
-          missing: [],
-          untrusted: false,
-        };
-    }
-    if (riskWords.test(text))
+    const explicitStory = extractStoryRef(text);
+    const hasRisk = riskWords.test(text);
+    const hasMyWork = myWorkWords.test(text);
+    const hasDraft = draftWords.test(text);
+    // 仅当文本显式提及需求编号，或在选中需求时具备明确需求语境/纯进展问法，才命中需求进展；
+    // 绝不因页面存在 selectedStoryId 就把「航班什么状态」等无关请求或歧义文本劫持进 story_progress。
+    const hasProgress =
+      explicitStory !== undefined
+        ? progressWords.test(text) ||
+          (!hasRisk &&
+            !hasDraft &&
+            !hasMyWork &&
+            /(?:看|查|查看|打开|了解|详情|需求|story|^)\s*#?\d{2,6}/iu.test(
+              text,
+            ))
+        : input.storyId !== undefined &&
+          progressWords.test(text) &&
+          (storyContextWords.test(text) ||
+            standaloneProgressPattern.test(text.trim()));
+
+    // 多意图共存（命中多个意图族，或包含明确并列连接词）时，L1 不静默择一，交由 L3 澄清或拆解。
+    const familyCount = [hasRisk, hasMyWork, hasDraft, hasProgress].filter(
+      Boolean,
+    ).length;
+    if (familyCount > 1 || multiIntentJoinWords.test(text)) return undefined;
+
+    if (hasRisk && explicitStory === undefined)
       return {
         kind: "routed",
         intent: "workflow_risks",
@@ -78,7 +107,28 @@ export function createIntentRouter(options: IntentRouterOptions = {}) {
         missing: [],
         untrusted: false,
       };
-    if (draftWords.test(text))
+    if (
+      hasProgress &&
+      (explicitStory !== undefined || input.storyId !== undefined)
+    )
+      return {
+        kind: "routed",
+        intent: "story_progress",
+        confidence: "high",
+        source: "l1",
+        missing: [],
+        untrusted: false,
+      };
+    if (hasRisk)
+      return {
+        kind: "routed",
+        intent: "workflow_risks",
+        confidence: "high",
+        source: "l1",
+        missing: [],
+        untrusted: false,
+      };
+    if (hasDraft)
       return {
         kind: "routed",
         intent: "draft_story",
@@ -90,7 +140,7 @@ export function createIntentRouter(options: IntentRouterOptions = {}) {
         ],
         untrusted: false,
       };
-    if (myWorkWords.test(text))
+    if (hasMyWork)
       return {
         kind: "routed",
         intent: "my_work",
@@ -114,11 +164,16 @@ export function createIntentRouter(options: IntentRouterOptions = {}) {
       };
     const verdict = await classifier(input.text, context);
     if (verdict.kind === "unsupported")
-      return { kind: "rejection", reason: "该请求不在当前支持范围内。" };
+      return {
+        kind: "rejection",
+        reason: verdict.reason?.trim() || "该请求不在当前支持范围内。",
+      };
     if (verdict.kind === "ambiguous")
       return {
         kind: "clarification",
-        question: "请问您想查询个人工作、需求进展还是扫描风险？",
+        question:
+          verdict.question?.trim() ||
+          "请问您想查询个人工作、需求进展、扫描风险还是提出新需求？",
       };
     if (!isIntentLabel(verdict.intent))
       return { kind: "rejection", reason: "该请求不在当前支持范围内。" };

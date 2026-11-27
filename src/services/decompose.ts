@@ -32,6 +32,10 @@ import { parseStoryRoleTag } from "../domain/story-html-spec.ts";
 import { isCancelledTask } from "../domain/task.ts";
 import type { DirectoryService } from "./directory.ts";
 import type { OperationExecutor } from "./operation.ts";
+import {
+  foldExplicitStageRequirements,
+  resolveStoryStageApprovers,
+} from "./structured-notes.ts";
 
 type Options = {
   readonly client: ZentaoReadClient;
@@ -42,9 +46,11 @@ type Options = {
   readonly baseUrl: string;
   readonly instanceVersion?: string;
   readonly stageRequirements?: {
-    listByStory(
-      storyId: number,
-    ): readonly { stage: string; required: boolean }[];
+    listByStory(storyId: number): readonly {
+      stage: string;
+      required: boolean;
+      decidedBy?: string | null;
+    }[];
   };
   readonly storyRoles?: {
     get(storyId: number): { maintainer?: string | null };
@@ -454,18 +460,37 @@ export class DecomposeService {
         story,
         executionKinds,
       );
-      const overrides = new Map(
-        stageRequirements
-          ?.listByStory(id)
-          .map(({ stage, required }) => [stage, required]),
-      );
       const stageList = category === "design" ? design : feature;
       const defaults: Partial<Record<Stage, { required: boolean }>> =
         config.stageDefaults[category];
+      let storedRole: { maintainer?: string | null } | undefined;
+      try {
+        storedRole = this.options.storyRoles?.get(id);
+      } catch (error) {
+        if (!(error instanceof BztError && error.code === "NOT_FOUND"))
+          throw error;
+      }
+      const explicitStages = foldExplicitStageRequirements(
+        stageList,
+        stageRequirements?.listByStory(id) ?? [],
+        story.actions,
+        resolveStoryStageApprovers(
+          config,
+          story,
+          storedRole
+            ? {
+                storyId: id,
+                maintainer: storedRole.maintainer ?? null,
+                receiver: null,
+                updatedAt: 0,
+              }
+            : undefined,
+        ),
+      );
       const stages = stageList.filter(
         (stage) =>
           !existing.has(stage) &&
-          (overrides.get(stage) ??
+          (explicitStages.get(stage) ??
             (stage === "interface" || stage === "delivery"
               ? input.include?.[stage]
               : undefined) ??

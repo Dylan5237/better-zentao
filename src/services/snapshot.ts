@@ -36,7 +36,10 @@ import {
 import { isDevExecutionInMonth, planOverlapDays } from "../domain/month.ts";
 import { featureProgress, type FeatureProgress } from "../domain/progress.ts";
 import { summarizeStages } from "../domain/stage.ts";
-import { foldStageRequirements } from "./structured-notes.ts";
+import {
+  foldStageRequirements,
+  resolveStoryStageApprovers,
+} from "./structured-notes.ts";
 
 const maxSnapshotBytes = 8 * 1024 * 1024;
 const id = z.int().positive();
@@ -374,7 +377,8 @@ class SnapshotCapture {
   constructor(
     private readonly client: ZentaoReadClient,
     private readonly config: TeamConfig,
-    private readonly store: Pick<LocalStore, "stageRequirements">,
+    private readonly store: Pick<LocalStore, "stageRequirements"> &
+      Partial<Pick<LocalStore, "storyRoles">>,
   ) {}
 
   executions() {
@@ -620,13 +624,34 @@ class SnapshotCapture {
             "stageRequirements:" + story.id,
             async () => this.store.stageRequirements.listByStory(story.id),
           );
+          const storedRoles = this.store.storyRoles
+            ? await readEvidence(
+                this.gaps,
+                "storyRoles:" + story.id,
+                async () => {
+                  try {
+                    return this.store.storyRoles?.get(story.id);
+                  } catch (error) {
+                    if (error instanceof BztError && error.code === "NOT_FOUND")
+                      return undefined;
+                    throw error;
+                  }
+                },
+              )
+            : undefined;
+          const effectiveStory = detail ?? story;
           const progress = featureProgress({
-            ...(detail ?? story),
+            ...effectiveStory,
             ...tasks.stages,
             required: foldStageRequirements(
               this.config.stageDefaults.feature,
               cachedRequirements,
               detail?.actions,
+              resolveStoryStageApprovers(
+                this.config,
+                effectiveStory,
+                storedRoles,
+              ),
             ),
             tasksComplete:
               tasks.complete &&

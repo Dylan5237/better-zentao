@@ -375,7 +375,6 @@ function assembleFromParts({
       return (await flow()).setStoryMeta(input);
     },
     async confirmOperation(input: ConfirmOperation) {
-      const options = await forWrite();
       let replay = false;
       try {
         const existing = store.operations.get(input.opId);
@@ -388,13 +387,24 @@ function assembleFromParts({
       } catch {
         // 未知 opId 交由执行器统一校验并报错。
       }
+      if (replay) {
+        // 终态重放零上游调用（不刷新实例版本、不重发企微），直接返回本地回执并幂等补写阶段要求缓存。
+        const result = await history.confirm(input);
+        new FlowService({
+          ...common,
+          directory,
+          executor: history,
+          storyRoles: store.storyRoles,
+        }).recordConfirmed(result.opId, result);
+        return result;
+      }
+      const options = await forWrite();
       const result = await options.executor.confirm(input);
-      if (replay) return result;
       new IntakeService(options).recordConfirmed(result.opId, result);
-      new FlowService({
+      await new FlowService({
         ...options,
         storyRoles: store.storyRoles,
-      }).recordConfirmed(result.opId, result);
+      }).recordConfirmedWithStory(result.opId, result);
       await notifyConfirmed(result);
       return result;
     },

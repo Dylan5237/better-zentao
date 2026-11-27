@@ -3,12 +3,6 @@ import { roleGuide } from "./review-content.js";
 import { beginSkeleton } from "./skeleton.js";
 import { commandSkeleton } from "./portal-skeleton.js";
 
-const groups = [
-  ["biz", "业务", "业务侧", ["FB"]],
-  ["design", "设计", "设计侧", ["DM", "DS"]],
-  ["rd", "产研测", "产研测", ["RM", "RD", "QA"]],
-  ["mgmt", "管理", "管理侧", ["PM", "PJ"]],
-];
 const modes = [
   ["zentao", "表格台账"],
   ["hybrid", "混合视图"],
@@ -154,35 +148,23 @@ export function createMeridianShell({
     const compact = (identity.roles?.length ?? 0) > 3;
     tabs.classList.toggle("is-compact", compact);
     if (!compact) {
-      for (const [key, label, , order] of groups) {
-        const entries = order
-          .map((id) => identity.roles.find((r) => r.id === id))
-          .filter(Boolean);
-        if (!entries.length) continue;
-        const cluster = el("div", "role-group-cluster");
-        if (tabs.childElementCount)
-          cluster.append(el("span", "role-group-sep"));
-        cluster.append(el("span", "role-group-tag grp-" + key, label));
-        for (const entry of entries) {
-          const active = entry.id === role?.id;
-          const control = btn(
-            "role-pill" + (active ? " is-active grp-" + key : ""),
-            entry.label,
-            () => {
-              if (!active) selectRole(entry.id);
-            },
-          );
-          control.dataset.role = entry.id;
-          control.setAttribute("aria-pressed", String(active));
-          control.title =
-            entry.label + " · " + (identity.displayName || identity.account);
-          cluster.append(control);
-        }
-        tabs.append(cluster);
+      for (const entry of identity.roles ?? []) {
+        const active = entry.id === role?.id;
+        const control = btn(
+          "role-pill" + (active ? " is-active" : ""),
+          entry.label,
+          () => {
+            if (!active) selectRole(entry.id);
+          },
+        );
+        control.dataset.role = entry.id;
+        control.setAttribute("aria-pressed", String(active));
+        control.title =
+          entry.label + " · " + (identity.displayName || identity.account);
+        tabs.append(control);
       }
       return;
     }
-    const currentGroup = groups.find((g) => g[3].includes(role?.id));
     const trigger = btn("role-dropdown-trigger", null, (e) => {
       e.stopPropagation();
       const next = menu.hidden;
@@ -191,43 +173,30 @@ export function createMeridianShell({
     });
     trigger.setAttribute("aria-haspopup", "true");
     trigger.setAttribute("aria-expanded", "false");
-    trigger.title = "切换已分配的角色视角 (Alt+1–8)";
-    if (currentGroup)
-      trigger.append(
-        el("span", "role-chip grp-" + currentGroup[0], currentGroup[1]),
-      );
+    trigger.title = "切换已授权职责 (Alt+1–8)";
     trigger.append(
       el("span", null, role?.label || "选择职责"),
       icon("ChevronDown", 14),
     );
     const menu = el("div", "role-dropdown-menu");
     menu.hidden = true;
-    for (const [key, label, , order] of groups) {
-      const entries = order
-        .map((id) => identity.roles.find((r) => r.id === id))
-        .filter(Boolean);
-      if (!entries.length) continue;
-      const section = el("div", "role-dropdown-group");
-      section.append(el("span", "role-dropdown-group-title grp-" + key, label));
-      const list = el("div", "role-dropdown-items");
-      for (const entry of entries) {
-        const active = entry.id === role?.id;
-        const control = btn(
-          "role-pill" + (active ? " is-active grp-" + key : ""),
-          entry.label,
-          () => {
-            menu.hidden = true;
-            trigger.setAttribute("aria-expanded", "false");
-            if (!active) selectRole(entry.id);
-          },
-        );
-        control.dataset.role = entry.id;
-        control.setAttribute("aria-pressed", String(active));
-        list.append(control);
-      }
-      section.append(list);
-      menu.append(section);
+    const list = el("div", "role-dropdown-items");
+    for (const entry of identity.roles ?? []) {
+      const active = entry.id === role?.id;
+      const control = btn(
+        "role-pill" + (active ? " is-active" : ""),
+        entry.label,
+        () => {
+          menu.hidden = true;
+          trigger.setAttribute("aria-expanded", "false");
+          if (!active) selectRole(entry.id);
+        },
+      );
+      control.dataset.role = entry.id;
+      control.setAttribute("aria-pressed", String(active));
+      list.append(control);
     }
+    menu.append(list);
     const onOutside = (e) => {
       if (!menu.hidden && !tabs.contains(e.target)) {
         menu.hidden = true;
@@ -254,19 +223,30 @@ export function createMeridianShell({
     byId("nav-heading").textContent =
       role.id === "FB" ? "业务反馈入口" : "工作导航";
     byId("fb-perm-note").hidden = role.id !== "FB";
-    const [key, , groupLabel] = groups.find((g) => g[3].includes(role.id));
-    const chip = byId("role-group");
-    chip.className = "role-chip grp-" + key;
-    chip.textContent = groupLabel;
-    const roleCode = byId("role-code");
-    if (roleCode) roleCode.textContent = role.id;
-    byId("account-menu").textContent =
-      (identity.displayName || identity.account) + "（" + role.label + "）";
+    const displayName = identity.displayName || identity.account || "";
+    const avatarEl = byId("account-avatar");
+    if (avatarEl)
+      avatarEl.textContent =
+        displayName.trim().slice(0, 1).toUpperCase() || "U";
+    const triggerName = byId("account-trigger-name");
+    if (triggerName) triggerName.textContent = displayName;
+    const roleMeta = byId("account-role-meta");
+    if (roleMeta) {
+      const modeLabel = identity.instanceId
+        ? identity.readOnly
+          ? "集中工作台（只读）"
+          : "集中工作台"
+        : "本机工作台";
+      roleMeta.textContent = `${role.label} · ${modeLabel}`;
+    }
     const focusText = roleGuide[role.id]?.focus || "";
     const focusEl = byId("role-focus");
-    focusEl.textContent = focusText;
-    focusEl.title = focusText;
-    byId("as-of").textContent = "";
+    if (focusEl) {
+      focusEl.textContent = focusText;
+      focusEl.title = focusText;
+    }
+    const asOfEl = byId("as-of");
+    if (asOfEl) asOfEl.textContent = "";
     drawModes();
     for (const [i, section] of sectionsFor(role).entries()) {
       if (section.id === "review-board") nav.append(el("div", "nav-divider"));
@@ -428,7 +408,8 @@ export function createMeridianShell({
         const b = btn(
           "cmd-item" + (i + offset === focus ? " is-active" : ""),
           null,
-          () => {
+          (event) => {
+            event.stopPropagation();
             dialog.close();
             item.run();
           },
@@ -547,10 +528,9 @@ export function createMeridianShell({
     ["command-button", "Search", 13],
     ["reset-view", "RotateCcw", 14],
     ["key-guide", "Keyboard", 15],
-    ["account-close", "X", 16],
+    ["about-close", "X", 16],
   ])
-    byId(id).prepend(icon(symbol, size));
-  byId("account-menu").onclick = showAccount;
+    byId(id)?.prepend(icon(symbol, size));
   byId("key-guide").onclick = keys;
   byId("command-button").onclick = commands;
   byId("theme-button").onclick = toggleTheme;

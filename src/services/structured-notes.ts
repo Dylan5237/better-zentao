@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { TeamConfig } from "../core/config.ts";
 import type { StoryDetail } from "../core/dto/story.ts";
-import type { WaiverRecord } from "../core/store/index.ts";
+import type { StoryRoleRecord, WaiverRecord } from "../core/store/index.ts";
+import { resolveStoryRoles } from "../domain/roles.ts";
 import { rules, type RuleInput } from "../rules/index.ts";
 
 type Actions = NonNullable<StoryDetail["actions"]>;
@@ -56,11 +57,106 @@ function orderedComments(actions: Actions = []) {
     });
 }
 
-// docs/04 §2：已验证的禅道评论覆盖缓存，缓存只补没有评论的阶段。
+/**
+ * CR-009 D-204：允许通过 `[bzt:meta v1]` 评论或本地缓存变更阶段要求的受权作者集合。
+ * 统一涵盖团队配置中的 PM / DM / RM 以及按统一规则解析出的当前需求维护人（maintainer）。
+ */
+export function stageRequirementApprovers(
+  roles: TeamConfig["roles"],
+  maintainer?: string | null,
+): readonly string[] {
+  return [
+    ...(roles.PM ?? []),
+    ...(roles.DM ?? []),
+    ...(roles.RM ?? []),
+    ...(maintainer ? [maintainer] : []),
+  ];
+}
+
+/**
+ * 统一解析需求维护人并产出阶段要求受权作者集合，确保 management / risk / snapshot / tracking / flow
+ * 五处入口使用完全一致的维护人与作者授权口径。
+ */
+export function resolveStoryStageApprovers(
+  config: Pick<TeamConfig, "roles" | "modules" | "moduleDefaults">,
+  story: Parameters<typeof resolveStoryRoles>[0]["story"] & {
+    readonly product: number;
+    readonly module?: number | null | undefined;
+  },
+  stored?: StoryRoleRecord,
+): readonly string[] {
+  const moduleKey = `${story.product}:${story.module ?? 0}`;
+  const mod = config.modules[moduleKey];
+  const fallback = config.moduleDefaults[story.product];
+  const { maintainer } = resolveStoryRoles({
+    story,
+    module: {
+      maintainer: mod?.designLead ?? fallback?.designLead,
+      devLead: mod?.devLead ?? fallback?.devLead,
+    },
+    ...(stored ? { stored } : {}),
+  });
+  return stageRequirementApprovers(config.roles, maintainer);
+}
+
+// docs/04 §2 & CR-009 D-204：仅提取经过受权作者校验的显式阶段要求决定（不含默认值），
+// 供拆解服务区分「显式要求为默认值」与「从未显式设置」。
+export function foldExplicitStageRequirements(
+  stages: readonly string[],
+  cached: readonly {
+    stage: string;
+    required: boolean;
+    decidedBy?: string | null | undefined;
+  }[] = [],
+  actions?: Actions,
+  authorizedActors?: readonly (string | null | undefined)[],
+): Map<string, boolean> {
+  const validStages = new Set(stages);
+  const explicit = new Map<string, boolean>();
+  const allowed = new Set(
+    (authorizedActors ?? []).filter(
+      (actor): actor is string =>
+        typeof actor === "string" && actor.trim().length > 0,
+    ),
+  );
+  const enforceAuthor = allowed.size > 0;
+  for (const entry of cached) {
+    if (!validStages.has(entry.stage)) continue;
+    // 若缓存记录了 decidedBy 且启用作者校验，则无权作者写入的缓存记录同样被忽略。
+    if (
+      enforceAuthor &&
+      typeof entry.decidedBy === "string" &&
+      entry.decidedBy.trim().length > 0 &&
+      !allowed.has(entry.decidedBy)
+    ) {
+      continue;
+    }
+    explicit.set(entry.stage, entry.required);
+  }
+  for (const { actor, text } of orderedComments(actions)) {
+    if (enforceAuthor && !allowed.has(actor)) continue;
+    const settings = readJsonNote("meta", text, stageNote)?.stageRequirements;
+    for (const [stage, value] of Object.entries(settings ?? {}))
+      if (validStages.has(stage)) explicit.set(stage, value.required);
+    const match = legacyStage.exec(text);
+    if (match?.[1] && validStages.has(match[1]))
+      explicit.set(match[1], match[2] === "true");
+  }
+  return explicit;
+}
+
+// docs/04 §2 & CR-009 D-204：已验证的禅道评论覆盖缓存，缓存只补没有评论的阶段。
+// 当提供受权作者名单且非空时，缓存记录（decidedBy）与禅道评论（actor）均严格校验受权作者；
+// 未配置任何受权职责的旧夹具（authorizedActors 为空）保留显式历史兼容口径。
 export function foldStageRequirements(
   defaults: Readonly<Record<string, { required: boolean }>>,
-  cached: readonly { stage: string; required: boolean }[] = [],
+  cached: readonly {
+    stage: string;
+    required: boolean;
+    decidedBy?: string | null | undefined;
+  }[] = [],
   actions?: Actions,
+  authorizedActors?: readonly (string | null | undefined)[],
 ) {
   const required = new Map(
     Object.entries(defaults).map(([stage, settings]) => [
@@ -68,16 +164,13 @@ export function foldStageRequirements(
       settings.required,
     ]),
   );
-  for (const entry of cached)
-    if (required.has(entry.stage)) required.set(entry.stage, entry.required);
-  for (const { text } of orderedComments(actions)) {
-    const settings = readJsonNote("meta", text, stageNote)?.stageRequirements;
-    for (const [stage, value] of Object.entries(settings ?? {}))
-      if (required.has(stage)) required.set(stage, value.required);
-    const match = legacyStage.exec(text);
-    if (match?.[1] && required.has(match[1]))
-      required.set(match[1], match[2] === "true");
-  }
+  const explicit = foldExplicitStageRequirements(
+    Object.keys(defaults),
+    cached,
+    actions,
+    authorizedActors,
+  );
+  for (const [stage, value] of explicit) required.set(stage, value);
   return Object.fromEntries(required);
 }
 

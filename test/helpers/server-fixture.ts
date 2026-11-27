@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { startServer } from "../../src/adapters/server/http.ts";
 import type { ServerConfig } from "../../src/core/server-config.ts";
+import type { ModelTransport } from "../../src/services/ai/model-gateway.ts";
 
 export const externalOrigin = "https://workbench.invalid";
 export const password = "synthetic-srv-password-85";
@@ -228,6 +229,10 @@ function fakeZentao() {
       }
       case "/api.php/v1/products/29/bugs":
         return Response.json({ bugs: [], total: 0 });
+      case "/api.php/v1/products/29/plans":
+        return Response.json({ plans: [], total: 0 });
+      case "/api.php/v1/executions":
+        return Response.json({ executions: [], total: 0 });
       case "/api.php/v2/my/contribute":
       case "/api.php/v2/my/work":
         return Response.json({
@@ -325,7 +330,13 @@ export function useServerFixture() {
       now += ms;
     },
     logs,
-    async start(overrides: Partial<ServerConfig> = {}) {
+    async start(
+      overrides: Partial<ServerConfig> = {},
+      runtimeOverrides: {
+        readonly env?: Record<string, string | undefined>;
+        readonly aiTransport?: ModelTransport;
+      } = {},
+    ) {
       const { startServer } = await import("../../src/adapters/server/http.ts");
       const { serverConfigSchema } =
         await import("../../src/core/server-config.ts");
@@ -364,8 +375,13 @@ export function useServerFixture() {
       const server = await startServer({
         config,
         clock: () => now,
-        env: { BZT_HOME: root, BZT_LOG_LEVEL: "debug" },
+        env: {
+          BZT_HOME: root,
+          BZT_LOG_LEVEL: "debug",
+          ...(runtimeOverrides.env ?? {}),
+        },
         fetch: upstream.fetcher,
+        aiTransport: runtimeOverrides.aiTransport,
         logSink: (line: string) => {
           logs.push(line);
         },

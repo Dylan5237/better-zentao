@@ -1,5 +1,6 @@
 import { icon } from "./meridian-icons.js";
 import { createMeridianShell } from "./meridian-shell.js";
+import { mountInContextCopilot } from "./ai-copilot.js";
 import { beginSkeleton, skeletonBlock } from "./skeleton.js";
 import { querySkeleton, roleOptionsSkeleton } from "./portal-skeleton.js";
 import { sectionsFor as prototypeSections } from "./review-page.js";
@@ -613,6 +614,44 @@ export function createPortalSession(send = fetch) {
           body: {},
         });
     },
+    aiConfig({ signal } = {}) {
+      return requestJson(send, "/api/ai/config", {
+        account: identity?.account,
+        signal,
+      });
+    },
+    saveAiConfig(body, { signal } = {}) {
+      return requestJson(send, "/api/ai/config", {
+        account: identity?.account,
+        csrfToken: identity?.csrfToken,
+        body,
+        signal,
+      });
+    },
+    testAiConfig({ signal } = {}) {
+      return requestJson(send, "/api/ai/config/test", {
+        account: identity?.account,
+        csrfToken: identity?.csrfToken,
+        body: {},
+        signal,
+      });
+    },
+    deleteAiConfig({ signal } = {}) {
+      return requestJson(send, "/api/ai/config/delete", {
+        account: identity?.account,
+        csrfToken: identity?.csrfToken,
+        body: {},
+        signal,
+      });
+    },
+    invokeCopilot(body, { signal } = {}) {
+      return requestJson(send, "/api/ai/copilot", {
+        account: identity?.account,
+        csrfToken: identity?.csrfToken,
+        body,
+        signal,
+      });
+    },
     selectRole(id) {
       const next = identity?.roles.find((entry) => entry.id === id);
       if (!next) return false;
@@ -628,6 +667,11 @@ export function createPortalSession(send = fetch) {
       const roleAtOpen = role;
       const current = () =>
         Boolean(roleAtOpen && version === versionAtOpen && !signal?.aborted);
+      const liveCsrf = () =>
+        identity?.account === accountAtOpen &&
+        (identity?.instanceId ?? "") === instanceAtOpen
+          ? identity?.csrfToken
+          : csrfAtOpen;
       function check() {
         if (!current()) throw new StalePortalRequest();
       }
@@ -663,9 +707,10 @@ export function createPortalSession(send = fetch) {
             });
           }
           try {
+            // P1-3：同账号换会话（preserveForm 保留活跃表单）时动态读取最新 CSRF Token，避免旧令牌 403。
             const result = await requestJson(send, "/api/call", {
               account: accountAtOpen,
-              csrfToken: csrfAtOpen,
+              csrfToken: liveCsrf(),
               signal,
               body: {
                 role: roleAtOpen.id,
@@ -686,7 +731,7 @@ export function createPortalSession(send = fetch) {
           check();
           const result = await requestJson(send, "/api/updates", {
             account: accountAtOpen,
-            csrfToken: csrfAtOpen,
+            csrfToken: liveCsrf(),
             signal,
             body: {
               role: roleAtOpen.id,
@@ -947,12 +992,24 @@ function mountPortal(
   reportMonth.onchange = () => changeMonth(reportMonth.value);
   reportMonthReset.onclick = () => changeMonth(currentMonth());
 
+  let lastSyncTone = "";
+  let lastSyncNotice = "";
   function showDataStatus() {
     syncButton.hidden = !currentView?.canSync();
     const changed = activity?.changed === true;
-    updateLabel.hidden = syncButton.hidden || !changed;
-    updateLabel.dataset.changed = String(changed);
-    updateLabel.textContent = changed ? "检测到待办有更新" : "";
+    const savedLabel = viewSavedAt
+      ? "更新于 " +
+        new Date(viewSavedAt).toLocaleTimeString("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : "";
+    const text = lastSyncNotice || (changed ? "检测到待办有更新" : savedLabel);
+    const showChanged = !lastSyncNotice && changed;
+    updateLabel.hidden = syncButton.hidden || !text;
+    updateLabel.dataset.changed = String(showChanged);
+    updateLabel.dataset.tone = lastSyncNotice ? lastSyncTone : "";
+    updateLabel.textContent = text;
     syncButton.title = viewSavedAt
       ? "本页最早快照：" + new Date(viewSavedAt).toLocaleString("zh-CN")
       : "从禅道同步当前页面的数据";
@@ -981,19 +1038,33 @@ function mountPortal(
     const revision = activity?.revision;
     syncButton.disabled = true;
     syncButton.textContent = "同步中…";
+    lastSyncTone = "";
+    lastSyncNotice = "";
     try {
       const result = await view.sync();
       if (currentView !== view || !view.current()) return;
-      if (result?.failed || result?.retained)
+      if (result?.failed || result?.retained) {
+        lastSyncTone = "danger";
+        lastSyncNotice = "同步未完成";
         shell.toast("有数据未能同步，请稍后重试。", "warning");
-      else if (result?.reads) {
-        if (result.partial)
+      } else if (result?.reads) {
+        if (result.partial) {
+          lastSyncTone = "warning";
+          lastSyncNotice = "部分数据";
           shell.toast("已同步，禅道仍有数据缺口。", "warning");
-        else shell.toast("本页数据已同步", "success");
+        } else {
+          shell.toast("本页数据已同步", "success");
+        }
         if (revision) void checkActivity(revision);
       }
+      showDataStatus();
     } catch {
-      if (view.current()) shell.toast("同步失败，请稍后重试。", "warning");
+      if (view.current()) {
+        lastSyncTone = "danger";
+        lastSyncNotice = "同步失败";
+        showDataStatus();
+        shell.toast("同步失败，请稍后重试。", "warning");
+      }
     } finally {
       syncButton.disabled = false;
       syncButton.textContent = "同步本页";
@@ -1031,7 +1102,58 @@ function mountPortal(
     }
   }
   const sidebar = byId("sidebar");
-  const accountDialog = byId("account-dialog");
+  const accountStart = byId("account-start");
+  const accountPopover = byId("account-popover");
+  const aboutDialog = byId("about-dialog");
+  const aboutBody = byId("about-body");
+  function closeAccountPopover() {
+    if (accountPopover) accountPopover.hidden = true;
+    accountStart?.setAttribute("aria-expanded", "false");
+  }
+  function toggleAccountPopover() {
+    if (!accountPopover) return;
+    const next = accountPopover.hidden;
+    accountPopover.hidden = !next;
+    accountStart?.setAttribute("aria-expanded", String(next));
+  }
+  function openAboutDialog() {
+    closeAccountPopover();
+    if (!aboutDialog || !aboutBody) return;
+    const identity = session.identity;
+    const modeLabel = identity?.instanceId
+      ? identity.readOnly
+        ? "集中工作台（只读模式）"
+        : "集中工作台（允许受控写入）"
+      : "本机工作台";
+    const rows = [
+      ["产品名称", "better-zentao"],
+      ["运行模式", modeLabel],
+      [
+        "当前账号",
+        identity
+          ? `${identity.displayName || identity.account} (${identity.account})`
+          : "未登录",
+      ],
+      ["当前职责", session.role?.label ?? "未配置"],
+      ["工作月份", selectedMonth ?? currentMonth()],
+      [
+        "AI 助手状态",
+        identity?.ai?.enabled
+          ? identity.ai.verified
+            ? "已启用（个人网关已验证）"
+            : "已启用（待配置或验证个人网关）"
+          : "未启用（纯人工工作台）",
+      ],
+    ];
+    aboutBody.replaceChildren(
+      ...rows.map(([k, v]) => {
+        const row = make("div", undefined, "about-row");
+        row.append(make("span", k), make("span", v));
+        return row;
+      }),
+    );
+    aboutDialog.showModal();
+  }
   const shell = createMeridianShell({
     byId,
     session,
@@ -1040,12 +1162,41 @@ function mountPortal(
     openStory,
     openTool,
     getCurrent: () => currentSection,
-    showAccount: () => accountDialog.showModal(),
+    showAccount: toggleAccountPopover,
     selectRole: (id) => {
       if (session.selectRole(id)) showSession();
     },
     toolsFor: navigationFor,
     contextFor: viewContext,
+  });
+  const copilot = mountInContextCopilot({
+    byId,
+    session,
+    getCurrentSection: () => currentSection,
+    getSelectedMonth: () => selectedMonth ?? currentMonth(),
+    getActiveStoryId: () => {
+      const id =
+        typeof activeStory === "number" ? activeStory : activeStory?.id;
+      return Number.isInteger(id) && id > 0 ? id : undefined;
+    },
+    openSection,
+    onApplyFilters: (filters) => {
+      if (!filters || typeof filters !== "object") return;
+      // 复用正式需求台账的状态入口（tab / progress / keyword / category），本页与跨页均生效。
+      openSection("stories", {
+        tab: "all-stories",
+        ...(typeof filters.progress === "string"
+          ? { progress: filters.progress }
+          : {}),
+        ...(typeof filters.keyword === "string"
+          ? { keyword: filters.keyword }
+          : {}),
+        ...(typeof filters.category === "string"
+          ? { category: filters.category }
+          : {}),
+      });
+    },
+    toast: shell.toast,
   });
 
   function openPendingLaunch() {
@@ -1063,10 +1214,13 @@ function mountPortal(
 
   function discardPage() {
     shell.clear();
+    copilot.clearForm();
     closeOverlay();
     page?.abort();
     currentView = undefined;
     viewSavedAt = undefined;
+    lastSyncTone = "";
+    lastSyncNotice = "";
     activity = undefined;
     showDataStatus();
     workspace.replaceChildren();
@@ -1074,8 +1228,7 @@ function mountPortal(
 
   function showRoleOptions(identity, role) {
     shell.drawRoles(identity, role);
-    byId("account-start").hidden = false;
-    byId("account-start").classList.toggle("only-compact", Boolean(role));
+    accountStart.hidden = false;
     roleTabs.hidden = !role;
     roleSettings.hidden = !identity.roleSetup || !role;
     reportPeriod.hidden = !role;
@@ -1097,6 +1250,7 @@ function mountPortal(
         else await showLogin("请重新登录禅道。");
       } else if (change === "roles") {
         showRoleOptions(session.identity, session.role);
+        copilot.syncIdentity(session.identity);
       }
     } catch {
       // 等待下一次会话信号或工具调用验证状态，避免中断正在填写的表单。
@@ -1117,6 +1271,7 @@ function mountPortal(
     loginStatus.textContent = identity ? "" : message;
     sessionStatus.textContent = identity ? message : "";
     sessionStatus.hidden = !sessionStatus.textContent;
+    copilot.syncIdentity(identity);
     nav.replaceChildren();
     resetBadges();
     clearInterval(activityTimer);
@@ -1131,13 +1286,25 @@ function mountPortal(
       periodAccount = nextPeriodKey;
     }
     if (!identity) {
-      accountDialog.close();
+      closeAccountPopover();
+      aboutDialog?.close?.();
       accountDisplay.textContent = "";
       roleTabs.replaceChildren();
       openPendingLaunch();
       return;
     }
-    accountDisplay.textContent = "当前账号 · " + identity.account;
+    accountDisplay.textContent =
+      (identity.displayName || identity.account) + " · " + identity.account;
+    const avatarEl = byId("account-avatar");
+    if (avatarEl)
+      avatarEl.textContent =
+        (identity.displayName || identity.account)
+          .trim()
+          .slice(0, 1)
+          .toUpperCase() || "U";
+    const triggerName = byId("account-trigger-name");
+    if (triggerName)
+      triggerName.textContent = identity.displayName || identity.account;
     passwordInput.value = "";
     showRoleOptions(identity, role);
     showPeriod();
@@ -1172,8 +1339,7 @@ function mountPortal(
     discardPage();
     editingRoles = true;
     sidebar.hidden = true;
-    byId("account-start").hidden = false;
-    byId("account-start").classList.remove("only-compact");
+    accountStart.hidden = false;
     nav.hidden = true;
     roleTabs.hidden = true;
     reportPeriod.hidden = true;
@@ -1497,6 +1663,7 @@ function mountPortal(
     if (!active) return;
     overlay = undefined;
     activeStory = undefined;
+    copilot.unbindOverlayForm();
     active.controller.abort();
     active.dialog.close();
     active.dialog.remove();
@@ -1717,6 +1884,8 @@ function mountPortal(
       },
       renderRead,
       tools: navigationFor(role),
+      bindForm: (bridge) => copilot.bindForm(bridge),
+      unbindForm: () => copilot.clearForm(),
       renderWrite: (container, tool, initial, options) =>
         renderWrite(
           container,
@@ -1725,7 +1894,15 @@ function mountPortal(
           role.id,
           session.identity.account,
           initial,
-          { ...options, instanceId: session.identity.instanceId, signal },
+          {
+            ...options,
+            instanceId: session.identity.instanceId,
+            signal,
+            onDraftBridge: (bridge) => {
+              options?.onDraftBridge?.(bridge);
+              copilot.bindForm(bridge, { inModal: Boolean(options?.inModal) });
+            },
+          },
         ),
     };
   }
@@ -1867,21 +2044,40 @@ function mountPortal(
   }
 
   roleSettings.addEventListener("click", () => {
-    accountDialog.close();
+    closeAccountPopover();
     showRoleSetup();
   });
-  byId("account-start").onclick = () => accountDialog.showModal();
-  byId("account-close").onclick = () => accountDialog.close();
-  accountDialog.addEventListener("click", (event) => {
-    if (event.target !== accountDialog) return;
-    const rect = accountDialog.getBoundingClientRect();
+  byId("about-button")?.addEventListener("click", openAboutDialog);
+  byId("about-close")?.addEventListener("click", () => aboutDialog?.close?.());
+  aboutDialog?.addEventListener("click", (event) => {
+    if (event.target !== aboutDialog) return;
+    const rect = aboutDialog.getBoundingClientRect();
     if (
       event.clientX < rect.left ||
       event.clientX > rect.right ||
       event.clientY < rect.top ||
       event.clientY > rect.bottom
     )
-      accountDialog.close();
+      aboutDialog.close();
+  });
+  accountStart.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleAccountPopover();
+  });
+  document.addEventListener("click", (event) => {
+    if (
+      accountPopover &&
+      !accountPopover.hidden &&
+      !byId("account-menu-wrap")?.contains(event.target)
+    ) {
+      closeAccountPopover();
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && accountPopover && !accountPopover.hidden) {
+      closeAccountPopover();
+      accountStart.focus();
+    }
   });
   loginForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1922,7 +2118,8 @@ function mountPortal(
     }
   });
   byId("logout-button").addEventListener("click", async () => {
-    accountDialog.close();
+    closeAccountPopover();
+    aboutDialog?.close?.();
     discardPage();
     portal.hidden = true;
     startup.hidden = false;

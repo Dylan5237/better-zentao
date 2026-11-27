@@ -46,6 +46,7 @@ import {
   foldRuleWaivers,
   foldStageRequirements,
   resolveReleaseWaiver,
+  stageRequirementApprovers,
 } from "./structured-notes.ts";
 import { DirectoryService } from "./directory.ts";
 
@@ -616,6 +617,7 @@ export class RiskService {
           : config.stageDefaults.feature,
         overrides,
         story.actions,
+        stageRequirementApprovers(config.roles, maintainer),
       );
       const stageTasks = linked.map((task) => ({
         ...task,

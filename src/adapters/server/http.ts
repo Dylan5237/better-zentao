@@ -5,6 +5,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { z } from "zod";
+import type { ModelTransport } from "../../services/ai/model-gateway.ts";
 import { portalMonthSchema } from "../../services/portal.ts";
 import {
   createServerRuntime,
@@ -21,6 +22,7 @@ export interface StartServerOptions {
   readonly env?: ConfigEnv;
   readonly fetch?: unknown;
   readonly logSink?: (line: string) => void;
+  readonly aiTransport?: ModelTransport | undefined;
 }
 
 const loginForm = z.strictObject({
@@ -50,6 +52,17 @@ const updateForm = z.strictObject({
 
 const emptyForm = z.strictObject({});
 
+const aiConfigSaveForm = z.strictObject({
+  baseUrl: z.string().trim().min(1).max(2048),
+  protocol: z.enum([
+    "openai-compatible",
+    "anthropic-compatible",
+    "enterprise-custom",
+  ]),
+  modelId: z.string().trim().min(1).max(128),
+  token: z.string().trim().max(4096).optional(),
+});
+
 const assets = new Map<string, readonly [string, string]>([
   ["/", ["index.html", "text/html"]],
   ["/app.js", ["app.js", "text/javascript"]],
@@ -71,6 +84,7 @@ const assets = new Map<string, readonly [string, string]>([
     "workbench-page",
     "review-page",
     "review-content",
+    "ai-copilot",
   ].map((name): [string, readonly [string, string]] => [
     "/" + name + ".js",
     [name + ".js", "text/javascript"],
@@ -82,6 +96,7 @@ const assets = new Map<string, readonly [string, string]>([
     "daily-pages",
     "management-pages",
     "workbench-page",
+    "ai-copilot",
   ].map((name): [string, readonly [string, string]] => [
     "/" + name + ".css",
     [name + ".css", "text/css"],
@@ -166,7 +181,13 @@ export async function startServer(options: StartServerOptions) {
   const isHttps = external.protocol === "https:";
   const expectedHost = external.host.toLowerCase();
   const trustedProxies = new Set(config.trustedProxies);
-  const runtime = createServerRuntime({ config, clock, env, logSink });
+  const runtime = createServerRuntime({
+    config,
+    clock,
+    env,
+    logSink,
+    aiTransport: options.aiTransport,
+  });
 
   let cookieName = isHttps ? "__Host-bzt_session" : "";
 
@@ -252,13 +273,23 @@ export async function startServer(options: StartServerOptions) {
         "/api/call",
         "/api/updates",
         "/api/roles",
+        "/api/ai/config",
+        "/api/ai/config/test",
+        "/api/ai/config/delete",
+        "/api/ai/copilot",
       ].includes(path)
     ) {
       return failure(res, 404, "NOT_FOUND", "页面不存在。");
     }
 
     const expectedMethod =
-      path === "/api/session" || path === "/api/startup" ? "GET" : "POST";
+      path === "/api/session" || path === "/api/startup"
+        ? "GET"
+        : path === "/api/ai/config"
+          ? req.method === "GET" || req.method === "POST"
+            ? req.method
+            : "GET"
+          : "POST";
     if (req.method !== expectedMethod) {
       return failure(res, 405, "INVALID_INPUT", "请求方法不正确。");
     }
@@ -318,6 +349,14 @@ export async function startServer(options: StartServerOptions) {
       }
     }
 
+    if (path === "/api/ai/config" && req.method === "GET") {
+      try {
+        return reply(res, 200, runtime.getAiConfig(sessionId));
+      } catch (error) {
+        return businessError(res, runtime.projectError(error));
+      }
+    }
+
     // 所有认证后 POST 必须通过会话绑定 CSRF 校验。
     try {
       runtime.verifyCsrf(sessionId, readHeader(req.headers["x-bzt-csrf"]));
@@ -362,6 +401,80 @@ export async function startServer(options: StartServerOptions) {
         );
       } catch (error) {
         return businessError(res, runtime.projectError(error));
+      }
+    }
+
+    if (path === "/api/ai/config") {
+      const fields = aiConfigSaveForm.safeParse(body);
+      if (!fields.success) {
+        return failure(res, 400, "INVALID_INPUT", "个人模型配置参数不合法。");
+      }
+      try {
+        return reply(res, 200, runtime.saveAiConfig(sessionId, fields.data));
+      } catch (error) {
+        return businessError(res, runtime.projectError(error));
+      }
+    }
+
+    if (path === "/api/ai/config/test") {
+      if (!emptyForm.safeParse(body).success) {
+        return failure(res, 400, "INVALID_INPUT", "连接测试参数不合法。");
+      }
+      const disconnect = new AbortController();
+      const onDisconnect = () => {
+        if (!res.writableEnded) disconnect.abort();
+      };
+      req.on("aborted", onDisconnect);
+      res.on("close", onDisconnect);
+      try {
+        return reply(
+          res,
+          200,
+          await runtime.testAiConfig(sessionId, disconnect.signal),
+        );
+      } catch (error) {
+        if (disconnect.signal.aborted || res.writableEnded) return;
+        return businessError(res, runtime.projectError(error));
+      } finally {
+        req.off("aborted", onDisconnect);
+        res.off("close", onDisconnect);
+      }
+    }
+
+    if (path === "/api/ai/config/delete") {
+      if (!emptyForm.safeParse(body).success) {
+        return failure(res, 400, "INVALID_INPUT", "删除参数不合法。");
+      }
+      try {
+        return reply(res, 200, runtime.deleteAiConfig(sessionId));
+      } catch (error) {
+        return businessError(res, runtime.projectError(error));
+      }
+    }
+
+    if (path === "/api/ai/copilot") {
+      const disconnect = new AbortController();
+      const onDisconnect = () => {
+        if (!res.writableEnded) disconnect.abort();
+      };
+      req.on("aborted", onDisconnect);
+      res.on("close", onDisconnect);
+      try {
+        return reply(
+          res,
+          200,
+          await runtime.invokeCopilot(sessionId, body, disconnect.signal),
+        );
+      } catch (error) {
+        if (disconnect.signal.aborted || res.writableEnded) return;
+        const projected = runtime.projectError(error);
+        if (isServerConflictError(error)) {
+          return reply(res, 409, projected);
+        }
+        return businessError(res, projected);
+      } finally {
+        req.off("aborted", onDisconnect);
+        res.off("close", onDisconnect);
       }
     }
 

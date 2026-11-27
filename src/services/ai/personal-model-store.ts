@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { BztError } from "../../core/errors.ts";
@@ -73,7 +73,9 @@ const recordSchema = z.strictObject({
 
 type StoredFile = z.infer<typeof recordSchema>;
 
-const emptyFile: StoredFile = { version: 1, records: {} };
+function createEmptyFile(): StoredFile {
+  return { version: 1, records: {} };
+}
 
 function aadOf(principal: ModelPrincipal): Buffer {
   return Buffer.from(
@@ -139,7 +141,7 @@ export function createPersonalModelStore(options: PersonalModelStoreOptions) {
       if (!parsed.success) throw new Error("bad-record");
       return parsed.data;
     } catch {
-      return emptyFile;
+      return createEmptyFile();
     }
   };
 
@@ -179,10 +181,19 @@ export function createPersonalModelStore(options: PersonalModelStoreOptions) {
     if (fileBacked) {
       const file = fileFor(principal);
       if (!file) return;
-      const data = loadFile(file);
-      if (record === undefined) delete data.records[key];
-      else data.records[key] = record;
-      saveFile(file, data);
+      // 物理隔离：每个主体文件只保留当前主体记录；删除时彻底移除磁盘文件，删除失败明确报错。
+      if (record === undefined) {
+        try {
+          rmSync(file, { force: true });
+        } catch {
+          throw new BztError(
+            "ZENTAO_UNAVAILABLE",
+            "未能彻底删除磁盘上的个人模型凭据文件。",
+          );
+        }
+        return;
+      }
+      saveFile(file, { version: 1, records: { [key]: record } });
       return;
     }
     if (record === undefined) memory.delete(key);
@@ -245,7 +256,7 @@ export function createPersonalModelStore(options: PersonalModelStoreOptions) {
       });
       return revision;
     },
-    /** 脱敏读取：永不返回原始 Token。 */
+    /** 脱敏读取：永不返回原始 Token；若当前主密钥无法解开既有密文则即时显式标注未就绪。 */
     getMasked(principal: ModelPrincipal): MaskedModelConfig {
       const record = loadRecord(principal);
       if (!record)
@@ -254,18 +265,26 @@ export function createPersonalModelStore(options: PersonalModelStoreOptions) {
           verified: false,
           lastErrorCode: undefined,
         };
+      let decryptable = true;
+      try {
+        decrypt(principal, record);
+      } catch {
+        decryptable = false;
+      }
       return {
         configured: true,
-        verified: record.verified,
-        verifiedAt: record.verifiedAt === null ? undefined : record.verifiedAt,
+        verified: decryptable ? record.verified : false,
+        verifiedAt:
+          decryptable && record.verifiedAt !== null
+            ? record.verifiedAt
+            : undefined,
         baseUrl: record.baseUrl,
         protocol: record.protocol,
         modelId: record.modelId,
         tokenHint: record.tokenHint,
-        lastErrorCode:
-          record.lastErrorCode === undefined
-            ? undefined
-            : (record.lastErrorCode ?? undefined),
+        lastErrorCode: decryptable
+          ? (record.lastErrorCode ?? undefined)
+          : "MASTER_KEY_MISMATCH",
       };
     },
     /** 仅返回本人（principal）的 Token；零回退、零跨主体读取。 */
