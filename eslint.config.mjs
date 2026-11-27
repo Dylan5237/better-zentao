@@ -7,6 +7,7 @@ const basePath = fileURLToPath(new URL(".", import.meta.url));
 const cli = "src/adapters/cli/bzt.ts";
 const logger = "src/core/logger.ts";
 const apiInternal = "src/api/internal/**";
+const aiInternal = "src/services/ai/internal/**";
 
 const layers = {
   adapters: ["adapters", "services", "contracts"],
@@ -53,6 +54,13 @@ const privateApiZone = {
   target: "./src",
   from: "./src/api/internal",
   message: "只允许通过 API 公共接口接收已投影的 DTO。",
+};
+
+const privateAiInternalZone = {
+  target: "./src",
+  from: "./src/services/ai/internal",
+  except: ["./src/services/ai"],
+  message: "模型 HTTP 传输仅限 src/services/ai 内部通过 ModelGateway 调用。",
 };
 
 function declaredInApiInternal(symbol) {
@@ -385,7 +393,7 @@ export default [
     rules: {
       "import/no-restricted-paths": [
         "error",
-        { basePath, zones: [...zones, privateApiZone] },
+        { basePath, zones: [...zones, privateApiZone, privateAiInternalZone] },
       ],
       "import/no-unresolved": "error",
       "no-console": "error",
@@ -411,12 +419,50 @@ export default [
     },
   },
   {
-    files: [apiInternal],
+    files: [apiInternal, aiInternal],
     rules: {
       "no-restricted-globals": restrictedGlobals([
         "process",
         ...nonFetchNetworkGlobals,
       ]),
+    },
+  },
+  {
+    files: ["src/services/ai/internal/http-transport.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            "process",
+            "node:process",
+            {
+              name: "node:http",
+              allowImportNames: ["request", "IncomingMessage", "ClientRequest"],
+            },
+            {
+              name: "node:https",
+              allowImportNames: ["request"],
+            },
+          ],
+          patterns: [
+            {
+              ...networkModules,
+              regex: "^(?!node:https?$)(?:" + networkModules.regex + ")",
+            },
+            restrictedModules[1],
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["src/services/ai/**/*.ts"],
+    rules: {
+      "import/no-restricted-paths": [
+        "error",
+        { basePath, zones: [...zones, privateApiZone] },
+      ],
     },
   },
   {
@@ -434,6 +480,11 @@ export default [
               except: ["./fixture-file.ts"],
               message: "独立脱敏脚本只从夹具文件入口接收脱敏结果。",
             },
+            {
+              target: "./scripts",
+              from: "./src/services/ai/internal",
+              message: "独立脚本不得导入 AI 内部受控传输层。",
+            },
           ],
         },
       ],
@@ -441,7 +492,12 @@ export default [
   },
   {
     files: ["src/api/**/*.ts"],
-    rules: { "import/no-restricted-paths": ["error", { basePath, zones }] },
+    rules: {
+      "import/no-restricted-paths": [
+        "error",
+        { basePath, zones: [...zones, privateAiInternalZone] },
+      ],
+    },
   },
   {
     files: ["src/api/**/*.ts"],

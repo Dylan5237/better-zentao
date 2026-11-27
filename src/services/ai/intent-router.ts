@@ -28,13 +28,22 @@ export type IntentClassifier = (
   | { readonly kind: "unsupported" }
 >;
 
+const dateLikePattern = /\b\d{4}-\d{2}(?:-\d{2})?\b/gu;
 const storyRef = /[##]?\b(\d{2,6})\b/u;
-const riskWords = /风险|巡检|逾期|超期|滞留|缺口/u;
+export const riskWords = /风险|巡检|扫描|排查|逾期|超期|阻塞|滞留|缺口/u;
+export const myWorkWords =
+  /(我|本人)?(今天|当前)?(要做什么|的工作|待办|任务列表)/u;
 const draftWords = /(拟定|起草|提交|创建|新建)一条?(需求|story)/iu;
-const myWorkWords = /(我|本人)?(今天|当前)?(要做什么|的工作|待办|任务列表)/u;
 const progressWords = /(进展|进度|做到哪|什么状态|什么阶段)/u;
 const injectionMarkers =
   /(忽略(以上|之前)(的)?(指令|提示)|disregard|system\s*prompt|你现在是|假装你是|jailbreak)/iu;
+
+/** 提取文本中的需求编号，自动排除 YYYY-MM / YYYY-MM-DD 日期中的年份（如「巡检 2026-11」）。 */
+export function extractStoryRef(text: string): number | undefined {
+  const withoutDates = text.replace(dateLikePattern, " ");
+  const matched = storyRef.exec(withoutDates)?.[1];
+  return matched === undefined ? undefined : Number(matched);
+}
 
 const intentLabels = [
   "my_work",
@@ -57,8 +66,18 @@ export interface IntentRouterOptions {
 export function createIntentRouter(options: IntentRouterOptions = {}) {
   const l1Route = (input: IntentRouteRequest): IntentResult | undefined => {
     const text = input.text;
-    const storyMatch = storyRef.exec(text);
-    if (input.storyId !== undefined || storyMatch) {
+    const explicitStory = extractStoryRef(text);
+    // 明确询问风险/逾期/阻塞/巡检且文本中未点名具体需求编号时，优先路由到风险扫描，不被环境 selectedStoryId 劫持。
+    if (riskWords.test(text) && explicitStory === undefined)
+      return {
+        kind: "routed",
+        intent: "workflow_risks",
+        confidence: "high",
+        source: "l1",
+        missing: [],
+        untrusted: false,
+      };
+    if (input.storyId !== undefined || explicitStory !== undefined) {
       if (progressWords.test(text) || input.storyId !== undefined)
         return {
           kind: "routed",

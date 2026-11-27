@@ -69,6 +69,7 @@ import {
   foldStageRequirements,
   readJsonNote,
   resolveReleaseWaiver,
+  stageRequirementApprovers,
 } from "./structured-notes.ts";
 
 interface ManagementOptions {
@@ -760,11 +761,6 @@ async function storyEvidence(
   const actions = [...(detail?.actions ?? [])].sort(
     (a, b) => (a.date ?? 0) - (b.date ?? 0) || a.id - b.id,
   );
-  const required = foldStageRequirements(
-    config.stageDefaults.feature,
-    cached,
-    actions,
-  );
   const stageTasks = stageInputs(rows, config);
   const stages = summarizeStages(stageTasks);
   const summary = {
@@ -792,6 +788,12 @@ async function storyEvidence(
     },
     ...(stored ? { stored } : {}),
   });
+  const required = foldStageRequirements(
+    config.stageDefaults.feature,
+    cached,
+    actions,
+    stageRequirementApprovers(config.roles, roles.maintainer),
+  );
   // docs/04 §4.4。测试任务完成后，严重 Bug 仍可阻止需求退出测试阶段。
   const bugs =
     options.bugs ??

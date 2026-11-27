@@ -469,6 +469,9 @@ export async function renderIntake(container, ctx, initial = {}) {
     editor.hidden = show;
     if (batch) batch.hidden = !show;
     if (routeStrip) routeStrip.hidden = show;
+    // P1-8：切入批量导入时解除单条提需表单绑定，避免原位 AI 误读隐藏表单；切回时恢复绑定。
+    if (show) ctx.unbindForm?.();
+    else if (writer?.draftBridge) ctx.bindForm?.(writer.draftBridge);
   }
   // The editor itself owns the scroll area. The FB heading stays visible above it.
   const form = fb
@@ -1099,6 +1102,10 @@ export async function renderStories(container, ctx, initial = {}) {
       : (initial.progress?.[0] ??
         (typeof saved.progress === "string" ? saved.progress : ""));
   let keyword = typeof initial.keyword === "string" ? initial.keyword : "";
+  let categoryFilter =
+    initial.category === "design" || initial.category === "feature"
+      ? initial.category
+      : "";
   let request = 0;
   const choose = tabs(head, "需求流转视图", entries, active, (value) => {
     if (value === active) return;
@@ -1219,13 +1226,14 @@ export async function renderStories(container, ctx, initial = {}) {
       ctx,
       filtered,
       ledgerResult.completeness !== "partial" && !ledgerResult.truncated,
-      keyword || filter
+      keyword || filter || categoryFilter
         ? () => {
             search.value = "";
             keyword = "";
             clear.hidden = true;
-            if (filter) {
+            if (filter || categoryFilter) {
               filter = "";
+              categoryFilter = "";
               select.value = "";
               saveState();
               void load();
@@ -1304,7 +1312,10 @@ export async function renderStories(container, ctx, initial = {}) {
           status: ["all"],
           ...(board
             ? { category: "design" }
-            : filter && { progress: [filter] }),
+            : {
+                ...(filter ? { progress: [filter] } : {}),
+                ...(categoryFilter ? { category: categoryFilter } : {}),
+              }),
           limit: 100,
         }),
       );

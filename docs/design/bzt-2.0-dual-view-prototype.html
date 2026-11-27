@@ -754,11 +754,11 @@
             </div>
           </div>
 
-          <div class="panel">
+          <div class="panel" id="human-ledger-panel">
             <div class="panel-head">
               <div>
                 <strong>需求与推进台账</strong>
-                <span class="hint" style="margin-left: 8px;">完整确定性字段 · 支持自由筛选、详情核对与人工接管</span>
+                <span class="hint" style="margin-left: 8px;">完整确定性字段 · 支持自由筛选、详情核对与 AI 原位协助</span>
               </div>
               <div style="display: flex; align-items: center; gap: 8px;">
                 <div class="view-switch" aria-label="列表展示偏好">
@@ -808,6 +808,78 @@
             </div>
 
             <div class="card-grid hidden" id="ledger-card-wrap"></div>
+          </div>
+
+          <!-- IN-CONTEXT FORM: REAL EDITABLE NEW STORY FORM (HUMAN + AI SHARE ONE DRAFT) -->
+          <div class="panel hidden" id="human-intake-panel" style="margin-top: 14px;">
+            <div class="panel-head">
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <strong>提出需求 · 正式业务表单</strong>
+                <span class="badge tone-accent mono" id="intake-rev-badge">草稿 r1</span>
+                <span class="hint">人工与右侧 AI 助手共享同一份草稿；空字段可辅助填充，已手工输入字段永不静默覆盖</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <button type="button" class="btn btn-sm hidden" id="btn-undo-ai">撤销上次 AI 修改</button>
+                <button type="button" class="btn btn-sm" id="btn-close-intake">返回台账</button>
+              </div>
+            </div>
+            <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+              <div id="intake-suggestions-box" class="hidden" style="display: flex; flex-direction: column; gap: 8px;"></div>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="f-product">产品名称 <span class="badge" id="orig-product">待填</span></label>
+                  <input class="input" id="f-product" data-draft-field="product" placeholder="例如：基础协作平台 (#10)" />
+                </div>
+                <div class="field">
+                  <label for="f-module">功能模块 <span class="badge" id="orig-module">待填</span></label>
+                  <input class="input" id="f-module" data-draft-field="module" placeholder="例如：权限管理 / 审批导出" />
+                </div>
+              </div>
+              <div class="form-grid">
+                <div class="field">
+                  <label for="f-category">需求类别（N02） <span class="badge" id="orig-category">默认</span></label>
+                  <select class="input" id="f-category" data-draft-field="category">
+                    <option value="">按规范推荐</option>
+                    <option value="design">先走设计（设计类）</option>
+                    <option value="feature">直接研发（研发类）</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="f-channel">反馈渠道（N01） <span class="badge" id="orig-channel">待填</span></label>
+                  <select class="input" id="f-channel" data-draft-field="channel">
+                    <option value="">选择来源渠道</option>
+                    <option value="wecom">企微沟通</option>
+                    <option value="meeting">业务评审会</option>
+                    <option value="zentao">禅道</option>
+                    <option value="other">其他</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field">
+                <label for="f-title">需求标题（必填） <span class="badge" id="orig-title">待填</span></label>
+                <input class="input" id="f-title" data-draft-field="title" placeholder="用清晰的结果描述诉求…" />
+              </div>
+              <div class="field">
+                <label for="f-scope">本次实现范围（必填 · 不编造事实性字段） <span class="badge" id="orig-scope">待填</span></label>
+                <textarea class="input" id="f-scope" data-draft-field="scope" rows="3" placeholder="写清本次要交付的功能范围…"></textarea>
+              </div>
+              <div class="field">
+                <label for="f-notInScope">本次不做什么（排除边界） <span class="badge" id="orig-notInScope">可选</span></label>
+                <input class="input" id="f-notInScope" data-draft-field="notInScope" placeholder="可选：明确本期排除边界，减少返工" />
+              </div>
+              <div class="field">
+                <label for="f-verify">验收标准（必填） <span class="badge" id="orig-verify">待填</span></label>
+                <textarea class="input" id="f-verify" data-draft-field="verify" rows="3" placeholder="列出可测量的验收条件…"></textarea>
+              </div>
+              <div id="intake-preview-box" class="hidden"></div>
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 8px; border-top: 1px solid var(--border); flex-wrap: wrap;">
+                <span class="hint" id="intake-status-hint">可直接手工填写，或在右侧 AI 助手用自然语言辅助填充与润色，最终走确定性预览与人工确认。</span>
+                <div style="display: flex; gap: 8px;">
+                  <button type="button" class="btn" id="btn-intake-reset">清空草稿</button>
+                  <button type="button" class="btn btn-primary" id="btn-intake-preview">预览并创建（确定性校验）</button>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -1028,6 +1100,7 @@
 
       const state = {
         view: "human",
+        humanPanel: "ledger",
         density: "table",
         role: "RM",
         month: "2026-11",
@@ -1035,8 +1108,27 @@
         selectedStoryId: 4102,
         aiDrawerOpen: true,
         aiScenario: "progress",
-        draft: null,
         pendingPreviewCount: 0,
+        intakeForm: {
+          formId: "create_story",
+          revision: 1,
+          fields: {
+            product: "",
+            module: "",
+            category: "",
+            channel: "",
+            title: "",
+            scope: "",
+            notInScope: "",
+            verify: "",
+          },
+          origins: {},
+          userEdited: new Set(),
+          pendingSuggestions: [],
+          undoStack: [],
+          preview: null,
+          lastCopilotNote: "",
+        },
         aiConfig: {
           configured: true,
           verified: true,
@@ -1046,6 +1138,17 @@
           tokenHint: "••••9f2a",
           lastError: "",
         },
+      };
+
+      const draftFieldLabels = {
+        product: "产品名称",
+        module: "功能模块",
+        category: "需求类别",
+        channel: "反馈渠道",
+        title: "需求标题",
+        scope: "本次实现范围",
+        notInScope: "本次不做什么",
+        verify: "验收标准",
       };
 
       const $ = (id) => document.getElementById(id);
@@ -1068,8 +1171,12 @@
         $("sim-readonly").classList.toggle("is-on", state.readOnly);
         $("sim-unconfigured").classList.toggle("is-on", !state.aiConfig.configured);
         $("sim-verified").classList.toggle("is-on", state.aiConfig.configured && state.aiConfig.verified);
-        $("ctx-selected").textContent = "#" + state.selectedStoryId;
-        $("ctx-draft").textContent = state.draft ? `草稿：${state.draft.title.slice(0, 12)}…` : "无待转交草稿";
+        $("ctx-selected").textContent = state.humanPanel === "intake"
+          ? `提出需求表单 · r${state.intakeForm.revision}`
+          : "#" + state.selectedStoryId;
+        $("ctx-draft").textContent = state.intakeForm.fields.title
+          ? `共享草稿 r${state.intakeForm.revision}：${state.intakeForm.fields.title.slice(0, 12)}`
+          : "无活跃草稿";
         $("kpi-preview-count").textContent = String(state.pendingPreviewCount);
 
         const ready = state.aiConfig.configured && state.aiConfig.verified;
@@ -1082,6 +1189,195 @@
           ? `个人网关已验证 · ${state.aiConfig.modelId}`
           : "个人大模型网关未配置或未验证";
         $("ai-stage-badge").className = "badge " + (ready ? "tone-ai" : "tone-warn");
+      }
+
+      function applyControlledPatch(proposal) {
+        const f = state.intakeForm;
+        if (proposal.formId !== f.formId || proposal.baseRevision !== f.revision) {
+          f.lastCopilotNote = `已拦截迟到/跨上下文建议（建议基于 r${proposal.baseRevision}，当前草稿为 r${f.revision}），零覆盖。`;
+          renderIntakeForm();
+          renderAiDrawer();
+          return { applied: 0, proposed: 0, stale: true };
+        }
+        const beforeFields = { ...f.fields };
+        const beforeOrigins = { ...f.origins };
+        let applied = 0;
+        const nextSuggestions = [];
+        for (const p of proposal.patches) {
+          if (!Object.prototype.hasOwnProperty.call(f.fields, p.field)) continue;
+          const current = (f.fields[p.field] || "").trim();
+          if (current === "" && !f.userEdited.has(p.field)) {
+            f.fields[p.field] = p.value;
+            f.origins[p.field] = "ai";
+            applied += 1;
+          } else if (current !== p.value) {
+            // 已有手工内容绝不静默覆盖，生成显式对比建议卡。
+            nextSuggestions.push({
+              field: p.field,
+              currentValue: f.fields[p.field],
+              proposedValue: p.value,
+              rationale: p.rationale || "AI 建议优化该字段",
+            });
+          }
+        }
+        if (applied > 0) {
+          f.undoStack.push({ fields: beforeFields, origins: beforeOrigins, revision: f.revision });
+          f.revision += 1;
+          f.preview = null;
+        }
+        f.pendingSuggestions = nextSuggestions;
+        f.lastCopilotNote = applied > 0 && nextSuggestions.length > 0
+          ? `已原位填充 ${applied} 个空字段（r${f.revision}），另有 ${nextSuggestions.length} 个已手工编辑字段生成待采纳建议，未静默覆盖。`
+          : applied > 0
+            ? `已原位填充 ${applied} 个空字段（草稿 r${f.revision}），可随时手工编辑或一键撤销。`
+            : nextSuggestions.length > 0
+              ? `检测到 ${nextSuggestions.length} 个字段已有手工输入，已生成对比建议卡待您采纳或忽略。`
+              : "当前草稿已完整，无新增变更。";
+        renderAll();
+        return { applied, proposed: nextSuggestions.length, stale: false };
+      }
+
+      function renderIntakeForm() {
+        const showIntake = state.view === "human" && state.humanPanel === "intake";
+        $("human-ledger-panel").classList.toggle("hidden", showIntake);
+        $("human-intake-panel").classList.toggle("hidden", !showIntake);
+        if (!showIntake) return;
+        const f = state.intakeForm;
+        $("intake-rev-badge").textContent = `草稿 r${f.revision}`;
+        $("btn-undo-ai").classList.toggle("hidden", f.undoStack.length === 0);
+        for (const key of Object.keys(f.fields)) {
+          const input = $("f-" + key);
+          if (input && input.value !== f.fields[key]) input.value = f.fields[key];
+          const badge = $("orig-" + key);
+          if (badge) {
+            const origin = f.origins[key];
+            badge.textContent = origin === "ai" ? "AI 辅助填充" : origin === "user" ? "人工填写" : key === "notInScope" ? "可选" : "待填";
+            badge.className = "badge" + (origin === "ai" ? " tone-ai" : origin === "user" ? " tone-success" : "");
+          }
+        }
+        const sugBox = $("intake-suggestions-box");
+        sugBox.replaceChildren();
+        if (f.pendingSuggestions.length > 0) {
+          sugBox.classList.remove("hidden");
+          for (const [idx, sug] of f.pendingSuggestions.entries()) {
+            const card = document.createElement("div");
+            card.className = "gen-card";
+            const head = document.createElement("div");
+            head.className = "gen-card-head";
+            const strong = document.createElement("strong");
+            strong.textContent = `待采纳 AI 建议 · ${draftFieldLabels[sug.field] || sug.field}（保护手工输入，未自动覆盖）`;
+            head.append(strong);
+            const cur = document.createElement("div");
+            cur.className = "hint";
+            cur.textContent = `当前手工值：${sug.currentValue}`;
+            const prop = document.createElement("div");
+            prop.style.margin = "6px 0";
+            prop.textContent = `AI 建议值：${sug.proposedValue}`;
+            const actions = document.createElement("div");
+            actions.style.cssText = "display:flex;gap:8px;margin-top:6px;";
+            const acceptBtn = document.createElement("button");
+            acceptBtn.type = "button";
+            acceptBtn.className = "btn btn-ai btn-sm";
+            acceptBtn.textContent = "采纳该建议";
+            acceptBtn.onclick = () => {
+              f.undoStack.push({ fields: { ...f.fields }, origins: { ...f.origins }, revision: f.revision });
+              f.fields[sug.field] = sug.proposedValue;
+              f.origins[sug.field] = "ai";
+              f.revision += 1;
+              f.preview = null;
+              f.pendingSuggestions.splice(idx, 1);
+              f.lastCopilotNote = `已采纳「${draftFieldLabels[sug.field]}」建议（r${f.revision}）。`;
+              renderAll();
+            };
+            const ignoreBtn = document.createElement("button");
+            ignoreBtn.type = "button";
+            ignoreBtn.className = "btn btn-sm";
+            ignoreBtn.textContent = "保留手工内容";
+            ignoreBtn.onclick = () => {
+              f.pendingSuggestions.splice(idx, 1);
+              f.lastCopilotNote = `已保留「${draftFieldLabels[sug.field]}」的手工内容。`;
+              renderAll();
+            };
+            actions.append(acceptBtn, ignoreBtn);
+            card.append(head, cur, prop, actions);
+            sugBox.append(card);
+          }
+        } else {
+          sugBox.classList.add("hidden");
+        }
+
+        const prevBox = $("intake-preview-box");
+        prevBox.replaceChildren();
+        if (f.preview) {
+          prevBox.classList.remove("hidden");
+          const card = document.createElement("div");
+          card.className = "gen-card";
+          const head = document.createElement("div");
+          head.className = "gen-card-head";
+          const title = document.createElement("strong");
+          title.textContent = `可信操作预览 · ${f.preview.opId}（W2 · 须人工确认）`;
+          const badge = document.createElement("span");
+          badge.className = "badge tone-warn";
+          badge.textContent = "确定性业务服务生成";
+          head.append(title, badge);
+          const guard = document.createElement("div");
+          guard.className = "preview-guard";
+          guard.textContent = "安全红线：AI 仅辅助填表，绝不执行确认写入。以下预览由确定性 create_story 服务生成，须由当前人工确认。";
+          const detail = document.createElement("div");
+          detail.className = "hint";
+          detail.style.marginBottom = "8px";
+          detail.textContent = `标题：${f.preview.title} · 产品/模块：${f.preview.product} / ${f.preview.module} · 草稿版本 r${f.preview.revision}`;
+          const resNote = document.createElement("div");
+          resNote.className = "hint";
+          resNote.style.marginBottom = "8px";
+          resNote.textContent = f.preview.resultText || "等待人工确认执行。";
+          const row = document.createElement("div");
+          row.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;";
+          const confirmBtn = document.createElement("button");
+          confirmBtn.type = "button";
+          confirmBtn.className = "btn btn-primary btn-sm";
+          confirmBtn.textContent = "我已核对预览，人工确认执行";
+          confirmBtn.onclick = () => {
+            f.preview.resultText = state.readOnly
+              ? "403 PERMISSION_DENIED：当前集中服务处于只读模式，未向禅道派发写入（可关闭顶部只读演练查看确认回执）。"
+              : "status: confirmed — 经人工确认完成写入与回读校验（合成演示回执）。";
+            renderIntakeForm();
+          };
+          const aiConfirmBtn = document.createElement("button");
+          aiConfirmBtn.type = "button";
+          aiConfirmBtn.className = "btn btn-sm";
+          aiConfirmBtn.textContent = "演练：AI 尝试自确认（必拦截）";
+          aiConfirmBtn.onclick = () => {
+            f.preview.resultText = "已拦截 403 PERMISSION_DENIED：CapabilityRuntime 无条件拒绝 channel='ai' 的 confirm_operation，写入数 = 0。";
+            renderIntakeForm();
+          };
+          row.append(confirmBtn, aiConfirmBtn);
+          card.append(head, guard, detail, resNote, row);
+          prevBox.append(card);
+        } else {
+          prevBox.classList.add("hidden");
+        }
+      }
+
+      function openFormalIntake(seedPatch) {
+        state.view = "human";
+        state.humanPanel = "intake";
+        $("view-human").classList.remove("hidden");
+        $("view-ai").classList.add("hidden");
+        for (const tab of document.querySelectorAll(".topbar .view-tab")) {
+          const active = tab.dataset.view === "human";
+          tab.classList.toggle("is-active", active);
+          tab.setAttribute("aria-selected", String(active));
+        }
+        if (seedPatch) {
+          applyControlledPatch({
+            formId: "create_story",
+            baseRevision: state.intakeForm.revision,
+            patches: seedPatch,
+          });
+        } else {
+          renderAll();
+        }
       }
 
       function filteredStories() {
@@ -1124,7 +1420,6 @@
             <td>${riskHtml}</td>
             <td style="white-space:nowrap;">
               <button type="button" class="btn btn-sm" data-open="${s.id}">详情</button>
-              <button type="button" class="btn btn-sm" data-ai-analyze="${s.id}">交给 AI</button>
             </td>
           `;
           tr.addEventListener("click", (e) => {
@@ -1147,7 +1442,6 @@
               <div>${riskHtml}</div>
               <div style="display:flex;gap:6px;">
                 <button type="button" class="btn btn-sm" data-open="${s.id}">详情</button>
-                <button type="button" class="btn btn-sm" data-ai-analyze="${s.id}">AI 分析</button>
               </div>
             </div>
           `;
@@ -1159,13 +1453,6 @@
 
         for (const btn of document.querySelectorAll("[data-open]")) {
           btn.onclick = () => openStoryModal(Number(btn.dataset.open));
-        }
-        for (const btn of document.querySelectorAll("[data-ai-analyze]")) {
-          btn.onclick = () => {
-            state.selectedStoryId = Number(btn.dataset.aiAnalyze);
-            state.aiScenario = "progress";
-            switchView("ai");
-          };
         }
       }
 
@@ -1190,29 +1477,135 @@
           $("drawer-go-settings").onclick = openAiSettings;
           return;
         }
-        body.innerHTML = `
-          <div class="trace-bar">
-            <span>共享上下文：</span>
-            <span class="badge tone-accent">#${s.id}</span>
-            <span class="badge">${state.role} · ${state.month}</span>
-          </div>
-          <div class="gen-card">
-            <div class="gen-card-head">
-              <strong>当前选中需求速览</strong>
-              <span class="badge">${s.progress}</span>
+        const onIntake = state.humanPanel === "intake";
+        body.innerHTML = onIntake
+          ? `
+            <div class="trace-bar">
+              <span>当前工作现场：</span>
+              <span class="badge tone-accent">正式提需求表单 · r${state.intakeForm.revision}</span>
+              <span class="badge">${state.role}</span>
             </div>
-            <div style="font-weight:600;margin-bottom:6px;">${s.title}</div>
-            <div class="hint">当前卡点：${s.risks.length ? s.risks.join(" / ") + " 已命中，建议核对下游阶段负责人。" : "按期推进中，无未豁免风险。"}</div>
-            <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
-              <button type="button" class="btn btn-ai btn-sm" id="drawer-open-progress">在 AI 工作台深入分析</button>
-              <button type="button" class="btn btn-sm" id="drawer-open-preview">生成指派预览</button>
+            <div class="gen-card">
+              <div class="gen-card-head">
+                <strong>原位填表助手（共享同一草稿）</strong>
+                <span class="badge tone-ai">受控字段变更契约</span>
+              </div>
+              <textarea class="input" id="drawer-intake-prompt" rows="3" placeholder="例如：运营导出审批清单时希望能按二级部门筛选，支持 CSV 导出，本期不含自定义列配置…"></textarea>
+              <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+                <button type="button" class="btn btn-ai btn-sm" id="drawer-fill-form">按描述辅助填表</button>
+                <button type="button" class="btn btn-sm" id="drawer-refine-verify">补全可测验收标准</button>
+                <button type="button" class="btn btn-sm" id="drawer-sim-stale">演练：拦截迟到响应</button>
+              </div>
+              <div class="hint" id="drawer-copilot-note" style="margin-top:8px;"></div>
             </div>
-          </div>
-          <div class="hint">所有 AI 调用经服务端 Model Gateway 使用本人 Token（<span id="drawer-token-hint"></span>），经 CapabilityRuntime 遵守当前职责权限，AI 不可自行确认写入。</div>
-        `;
+            <div class="hint">所有 AI 调用经服务端 Model Gateway 使用本人 Token（<span id="drawer-token-hint"></span>），仅返回受控字段建议，绝不静默覆盖手工输入，也不可代为确认写入。</div>
+          `
+          : `
+            <div class="trace-bar">
+              <span>当前工作现场：</span>
+              <span class="badge tone-accent">需求台账 · #${s.id}</span>
+              <span class="badge">${state.role} · ${state.month}</span>
+            </div>
+            <div class="gen-card">
+              <div class="gen-card-head">
+                <strong>选中需求原位速览</strong>
+                <span class="badge">${s.progress}</span>
+              </div>
+              <div style="font-weight:600;margin-bottom:6px;">${s.title}</div>
+              <div class="hint">当前卡点：${s.risks.length ? s.risks.join(" / ") + " 已命中，建议核对下游阶段负责人。" : "按期推进中，无未豁免风险。"}</div>
+              <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+                <button type="button" class="btn btn-sm" id="drawer-open-detail">查看详情</button>
+                <button type="button" class="btn btn-sm" id="drawer-filter-risks">原位筛出有风险需求</button>
+              </div>
+            </div>
+            <div class="gen-card">
+              <div class="gen-card-head">
+                <strong>自然语言发起业务工作</strong>
+                <span class="badge tone-ai">打开正式表单</span>
+              </div>
+              <input class="input" id="drawer-nl-launch" placeholder="例如：帮我提一个按二级部门导出审批清单的需求…" />
+              <div style="display:flex;gap:6px;margin-top:8px;">
+                <button type="button" class="btn btn-ai btn-sm" id="drawer-nl-submit">打开正式提需求表单并预填</button>
+              </div>
+            </div>
+            <div class="hint">所有 AI 调用经服务端 Model Gateway 使用本人 Token（<span id="drawer-token-hint"></span>），经 CapabilityRuntime 遵守当前职责权限，AI 不可自行确认写入。</div>
+          `;
         $("drawer-token-hint").textContent = state.aiConfig.tokenHint || "••••";
-        $("drawer-open-progress").onclick = () => { state.aiScenario = "progress"; switchView("ai"); };
-        $("drawer-open-preview").onclick = () => { state.aiScenario = "preview"; switchView("ai"); };
+        if (onIntake) {
+          $("drawer-copilot-note").textContent =
+            state.intakeForm.lastCopilotNote || "提示：先在左侧手工写一个标题，再点「按描述辅助填表」，即可验证非破坏性建议对比卡。";
+          $("drawer-fill-form").onclick = () => {
+            const promptText = $("drawer-intake-prompt").value.trim();
+            applyControlledPatch({
+              formId: "create_story",
+              baseRevision: state.intakeForm.revision,
+              patches: [
+                { field: "product", value: "基础协作平台 (#10)", rationale: "从产品目录匹配" },
+                { field: "module", value: "审批导出", rationale: "从业务模块匹配" },
+                { field: "category", value: "feature", rationale: "直接研发类需求（N02）" },
+                { field: "channel", value: "wecom", rationale: "企微反馈来源（N01）" },
+                {
+                  field: "title",
+                  value: promptText ? promptText.slice(0, 32) : "审批清单导出支持按二级部门筛选",
+                  rationale: "根据自然语言描述提炼需求标题",
+                },
+                {
+                  field: "scope",
+                  value: promptText || "在审批清单导出弹窗新增二级部门多选筛选条件，导出 CSV/XLSX 仅包含命中部门且遵守当前账号可见范围。",
+                  rationale: "明确本次实现范围（N03）",
+                },
+                {
+                  field: "notInScope",
+                  value: "本期不含自定义导出列排序与定时邮件推送。",
+                  rationale: "补充本期排除边界减少返工",
+                },
+                {
+                  field: "verify",
+                  value: "1. 选择二级部门后导出记录与页面筛选结果完全一致；2. 无权部门不出现在下拉选项中；3. 空结果给出明确提示。",
+                  rationale: "生成可测量验收标准",
+                },
+              ],
+            });
+          };
+          $("drawer-refine-verify").onclick = () => {
+            applyControlledPatch({
+              formId: "create_story",
+              baseRevision: state.intakeForm.revision,
+              patches: [
+                {
+                  field: "verify",
+                  value: "1. 按二级部门筛选导出数据与权限边界一致；2. 导出文件含部门名称、审批状态与提交时间；3. 10,000 行内导出响应 < 3 秒。",
+                  rationale: "补充性能与权限边界验收条目",
+                },
+              ],
+            });
+          };
+          $("drawer-sim-stale").onclick = () => {
+            applyControlledPatch({
+              formId: "create_story",
+              baseRevision: Math.max(0, state.intakeForm.revision - 1),
+              patches: [{ field: "title", value: "迟到的过期 AI 响应标题", rationale: "旧版本响应" }],
+            });
+          };
+        } else {
+          $("drawer-open-detail").onclick = () => openStoryModal(s.id);
+          $("drawer-filter-risks").onclick = () => {
+            $("filter-risk").value = "has";
+            renderLedger();
+          };
+          $("drawer-nl-submit").onclick = () => {
+            const raw = $("drawer-nl-launch").value.trim();
+            openFormalIntake([
+              { field: "product", value: "基础协作平台 (#10)", rationale: "从自然语言匹配产品" },
+              { field: "module", value: "审批导出", rationale: "从自然语言匹配模块" },
+              { field: "category", value: "feature", rationale: "默认研发类" },
+              { field: "channel", value: "wecom", rationale: "来源渠道" },
+              { field: "title", value: raw ? raw.slice(0, 32) : "审批清单支持按二级部门筛选导出", rationale: "提炼需求标题" },
+              { field: "scope", value: raw || "支持运营人员在审批清单导出时按二级部门筛选。", rationale: "生成实现范围" },
+              { field: "verify", value: "1. 按二级部门筛选后导出准确；2. 权限隔离无越权数据。", rationale: "生成可测验收标准" },
+            ]);
+          };
+        }
       }
 
       function renderAiStage() {
@@ -1292,52 +1685,33 @@
             b.onclick = () => { state.selectedStoryId = Number(b.dataset.gotoStory); switchView("human"); openStoryModal(state.selectedStoryId); };
           }
         } else if (state.aiScenario === "draft") {
-          const d = state.draft || {
-            title: "权限审计报表支持按项目组批量导出",
-            product: "基础协作平台 (#10)",
-            module: "权限管理",
-            category: "feature",
-            scope: "支持按项目组筛选并导出 CSV/XLSX，包含成员角色、授权时间与审批人。",
-          };
           stream.innerHTML = `
             <div class="trace-bar">
-              <span class="badge tone-ai">L3 模型结构化抽取（本人 Token）</span>
+              <span class="badge tone-ai">自然语言发起业务工作</span>
               <span>→</span>
-              <span class="badge">AgentWorkPlan（非可信操作计划）</span>
-              <span class="hint" style="margin-left:auto;">可编辑字段后交由业务服务校验</span>
+              <span class="badge">打开同一正式提需求表单（零双份草稿）</span>
             </div>
             <div class="gen-card">
               <div class="gen-card-head">
-                <strong>可编辑需求草稿卡片</strong>
-                <span class="badge">草稿 · 尚未调用写入</span>
+                <strong>跨视图统一表单入口</strong>
+                <span class="badge tone-success">单一共享草稿</span>
               </div>
-              <div class="field" style="margin-bottom:8px;">
-                <label>需求标题 <span class="badge">origin: user</span></label>
-                <input class="input" id="draft-title" value="${d.title}" />
-              </div>
-              <div class="form-grid" style="margin-bottom:8px;">
-                <div class="field"><label>产品与模块 <span class="badge">origin: derived</span></label><input class="input" id="draft-module" value="${d.product} / ${d.module}" /></div>
-                <div class="field"><label>优先级与类型 <span class="badge">origin: default</span></label><input class="input" value="P2 · 研发需求 (feature)" /></div>
-              </div>
-              <div class="field" style="margin-bottom:10px;">
-                <label>本次实现范围（规范必填 · 不编造事实性字段）</label>
-                <textarea class="input" id="draft-scope" rows="3">${d.scope}</textarea>
-              </div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <button type="button" class="btn btn-primary btn-sm" id="draft-to-preview">由可信服务生成写入预览</button>
-                <button type="button" class="btn btn-sm" id="draft-to-human">转入人工工作台继续编辑</button>
-              </div>
+              <p class="hint" style="margin:0 0 10px;">
+                遵循「AI 原位协作」原则：AI 协作工作台不再维护第二份独立草稿，点击下方按钮将直接打开人工业务工作台的正式「提出需求」表单，并将结构化建议原位注入空字段（绝不覆盖已有手工内容）。
+              </p>
+              <button type="button" class="btn btn-primary btn-sm" id="draft-open-formal">打开正式提需求表单并原位预填</button>
             </div>
           `;
-          $("draft-to-preview").onclick = () => {
-            state.draft = { ...d, title: $("draft-title").value, scope: $("draft-scope").value };
-            state.pendingPreviewCount = 1;
-            state.aiScenario = "preview";
-            renderAll();
-          };
-          $("draft-to-human").onclick = () => {
-            state.draft = { ...d, title: $("draft-title").value, scope: $("draft-scope").value };
-            switchView("human");
+          $("draft-open-formal").onclick = () => {
+            openFormalIntake([
+              { field: "product", value: "基础协作平台 (#10)", rationale: "从自然语言匹配产品" },
+              { field: "module", value: "权限管理", rationale: "从自然语言匹配模块" },
+              { field: "category", value: "feature", rationale: "研发类需求（N02）" },
+              { field: "channel", value: "wecom", rationale: "企微沟通（N01）" },
+              { field: "title", value: "权限审计报表支持按项目组批量导出", rationale: "提炼需求标题" },
+              { field: "scope", value: "支持按项目组筛选并导出 CSV/XLSX，包含成员角色、授权时间与审批人。", rationale: "补充实现范围" },
+              { field: "verify", value: "1. 按项目组导出记录准确；2. 仅导出当前账号可见项目组数据。", rationale: "补充可测验收标准" },
+            ]);
           };
         } else {
           state.pendingPreviewCount = 1;
@@ -1409,13 +1783,13 @@
             ${s.stages.map((st) => `<div class="step-box ${st.state}"><strong>${st.name}</strong><div class="hint">${st.who}</div></div>`).join("")}
           </div>
           <div style="display:flex;justify-content:flex-end;gap:8px;">
-            <button type="button" class="btn btn-ai" id="modal-to-ai">交给 AI 协作工作台分析</button>
+            <button type="button" class="btn btn-ai" id="modal-open-copilot">在右侧 AI 助手原位解读</button>
           </div>
         `;
-        $("modal-to-ai").onclick = () => {
+        $("modal-open-copilot").onclick = () => {
           $("story-modal").classList.add("hidden");
-          state.aiScenario = "progress";
-          switchView("ai");
+          state.aiDrawerOpen = true;
+          renderAll();
         };
         $("story-modal").classList.remove("hidden");
         renderTopContext();
@@ -1476,6 +1850,7 @@
       function renderAll() {
         renderTopContext();
         renderLedger();
+        renderIntakeForm();
         renderAiDrawer();
         if (state.view === "ai") renderAiStage();
       }
@@ -1525,7 +1900,66 @@
       $("close-ai-settings").onclick = () => $("ai-settings-modal").classList.add("hidden");
       $("close-story-modal").onclick = () => $("story-modal").classList.add("hidden");
       $("handoff-to-human").onclick = () => switchView("human");
-      $("btn-human-intake").onclick = () => { state.aiScenario = "draft"; switchView("ai"); };
+      $("btn-human-intake").onclick = () => openFormalIntake();
+      $("btn-close-intake").onclick = () => { state.humanPanel = "ledger"; renderAll(); };
+      $("btn-undo-ai").onclick = () => {
+        const f = state.intakeForm;
+        const prev = f.undoStack.pop();
+        if (!prev) return;
+        f.fields = { ...prev.fields };
+        f.origins = { ...prev.origins };
+        f.revision += 1;
+        f.preview = null;
+        f.lastCopilotNote = `已撤销上次 AI 修改（回退至 r${f.revision}）。`;
+        renderAll();
+      };
+      $("btn-intake-reset").onclick = () => {
+        const f = state.intakeForm;
+        for (const k of Object.keys(f.fields)) f.fields[k] = "";
+        f.origins = {};
+        f.userEdited.clear();
+        f.pendingSuggestions = [];
+        f.undoStack = [];
+        f.preview = null;
+        f.revision += 1;
+        f.lastCopilotNote = "已清空共享草稿。";
+        renderAll();
+      };
+      $("btn-intake-preview").onclick = () => {
+        const f = state.intakeForm;
+        if (!f.fields.title.trim() || !f.fields.scope.trim() || !f.fields.verify.trim()) {
+          $("intake-status-hint").textContent = "确定性校验未通过：需求标题、本次实现范围与验收标准均为必填项。";
+          return;
+        }
+        state.pendingPreviewCount = 1;
+        f.preview = {
+          opId: "op_01JXYZ9INCTX",
+          title: f.fields.title.trim(),
+          product: f.fields.product.trim() || "基础协作平台 (#10)",
+          module: f.fields.module.trim() || "默认模块",
+          revision: f.revision,
+          resultText: "",
+        };
+        $("intake-status-hint").textContent = "已生成确定性操作预览，请核对后由人工亲自确认。";
+        renderAll();
+      };
+      for (const el of document.querySelectorAll("[data-draft-field]")) {
+        const handler = (e) => {
+          const key = e.target.dataset.draftField;
+          const f = state.intakeForm;
+          f.fields[key] = e.target.value;
+          f.origins[key] = e.target.value.trim() ? "user" : "";
+          if (e.target.value.trim()) f.userEdited.add(key);
+          else f.userEdited.delete(key);
+          f.revision += 1;
+          f.preview = null;
+          renderIntakeForm();
+          renderTopContext();
+          renderAiDrawer();
+        };
+        el.addEventListener("input", handler);
+        el.addEventListener("change", handler);
+      }
 
       for (const sbtn of document.querySelectorAll(".session-item")) {
         sbtn.onclick = () => {

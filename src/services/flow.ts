@@ -52,6 +52,10 @@ import * as r04 from "../rules/r04-premature-assignment.ts";
 import * as r14 from "../rules/r14-stale-tasks.ts";
 import type { DirectoryService } from "./directory.ts";
 import type { OperationExecutor } from "./operation.ts";
+import {
+  foldStageRequirements,
+  resolveStoryStageApprovers,
+} from "./structured-notes.ts";
 
 type StoryRoles = NonNullable<RuleInput["roles"]>;
 type FlowTask = Omit<Task, symbol>;
@@ -144,6 +148,10 @@ export interface FlowStore {
       at: number;
     }): void;
   };
+  readonly cache?: {
+    get?(key: string, now?: number): string | undefined;
+    set?(key: string, value: string, ttlMs: number): void;
+  };
   readonly sourceLinks?: {
     listTo?(
       toType: string,
@@ -196,7 +204,12 @@ interface FlowOptions {
     TeamConfig,
     "roles" | "teams" | "modules" | "moduleDefaults" | "rules"
   > &
-    Partial<Pick<TeamConfig, "write" | "timezone" | "calendar" | "naming">>;
+    Partial<
+      Pick<
+        TeamConfig,
+        "write" | "timezone" | "calendar" | "naming" | "stageDefaults"
+      >
+    >;
 }
 
 const metadata = z.strictObject({
@@ -374,6 +387,7 @@ function developmentAccounts(config: FlowOptions["config"]): Set<string> {
 
 export class FlowService {
   private readonly provider: BusinessProvider;
+  private readonly authorizedStageOps = new Map<string, Set<string>>();
 
   constructor(private readonly options: FlowOptions) {
     if (options.provider) this.provider = options.provider;
@@ -871,6 +885,33 @@ export class FlowService {
         { manual: { kind: "story_spec", id: storyId } },
       );
     const story = await this.readStory(storyId);
+    let stageApprovers: readonly string[] | undefined;
+    if (stageRequirements && Object.keys(stageRequirements).length > 0) {
+      let storedRoles:
+        | {
+            storyId: number;
+            maintainer: string | null;
+            receiver: string | null;
+            updatedAt: number;
+          }
+        | undefined;
+      try {
+        storedRoles = this.options.store?.storyRoles.get(storyId);
+      } catch (error) {
+        if (!(error instanceof BztError && error.code === "NOT_FOUND"))
+          throw error;
+      }
+      stageApprovers = resolveStoryStageApprovers(config, story, storedRoles);
+      if (
+        stageApprovers.length > 0 &&
+        !stageApprovers.includes((await this.currentUser()).account)
+      ) {
+        throw new BztError(
+          "PERMISSION_DENIED",
+          "只有产品管理、设计管理、研发管理或当前需求维护人可以调整阶段要求。",
+        );
+      }
+    }
     const warnings: Warnings = [];
     const steps: OperationStep[] = [];
     if (version)
@@ -902,15 +943,98 @@ export class FlowService {
         message:
           "禅道需求正文微标签保持原样，确认后通过结构化评论留痕，并更新本地角色缓存。",
       });
-    return executor.prepare({
+    const prepared = await executor.prepare({
       kind: "set_story_meta",
       summary: `更新需求 #${storyId} 的元数据。`,
       steps,
       warnings,
     });
+    if (stageApprovers && prepared.opId) {
+      this.authorizedStageOps.set(prepared.opId, new Set(stageApprovers));
+      this.options.store?.cache?.set?.(
+        `stage-meta-approvers-v1:${prepared.opId}`,
+        JSON.stringify({ storyId, approvers: [...stageApprovers] }),
+        30 * 24 * 60 * 60_000,
+      );
+    }
+    return prepared;
   }
 
-  recordConfirmed(opId: string, result: OperationResult): void {
+  private readPersistedStageApprovers(
+    opId: string,
+    storyId: number,
+  ): readonly string[] | undefined {
+    try {
+      const cachedGrant = this.options.store?.cache?.get?.(
+        `stage-meta-approvers-v1:${opId}`,
+        0,
+      );
+      if (!cachedGrant) return undefined;
+      const parsedGrant = z
+        .strictObject({
+          storyId: z.number().int().positive(),
+          approvers: z.array(z.string()),
+        })
+        .safeParse(JSON.parse(cachedGrant));
+      return parsedGrant.success && parsedGrant.data.storyId === storyId
+        ? parsedGrant.data.approvers
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * 异步确认回写入口（供 Workbench 使用）：
+   * 优先复用持久化审批人（零额外上游回读）；仅当无持久化记录时补读目标需求。
+   */
+  async recordConfirmedWithStory(
+    opId: string,
+    result: OperationResult,
+  ): Promise<void> {
+    const resolvedStories = new Map<number, StoryDetail>();
+    const store = this.options.store;
+    if (store) {
+      try {
+        const record = store.operations.get(opId);
+        if (record.kind === "set_story_meta") {
+          const done = store.operationSteps
+            .list(opId)
+            .filter(
+              ({ state, action, zentaoId }) =>
+                state === "done" &&
+                action === "story.comment" &&
+                zentaoId !== null,
+            );
+          for (const row of done) {
+            if (
+              row.zentaoId !== null &&
+              !resolvedStories.has(row.zentaoId) &&
+              this.readPersistedStageApprovers(opId, row.zentaoId) === undefined
+            ) {
+              try {
+                resolvedStories.set(
+                  row.zentaoId,
+                  await this.readStory(row.zentaoId),
+                );
+              } catch {
+                // 回读失败时回退到 recordConfirmed 既有角色与模块校验。
+              }
+            }
+          }
+        }
+      } catch {
+        // 交由 recordConfirmed 统一处理异常。
+      }
+    }
+    this.recordConfirmed(opId, result, resolvedStories);
+  }
+
+  recordConfirmed(
+    opId: string,
+    result: OperationResult,
+    resolvedStories?: ReadonlyMap<number, StoryDetail>,
+  ): void {
     /* CR-009 §4.2: recordConfirmed 只在具备完整补充存储时生效。 */
     if (result.opId !== opId)
       throw new BztError("INVALID_INPUT", "操作回执编号不一致。");
@@ -988,10 +1112,65 @@ export class FlowService {
       ) {
         const comment = step.fields.comment?.value;
         const meta = readNote("meta", comment, metadata);
+        const roleApprovers = [
+          ...(this.options.config.roles.PM ?? []),
+          ...(this.options.config.roles.DM ?? []),
+          ...(this.options.config.roles.RM ?? []),
+        ];
+        const moduleMaintainers = [
+          ...Object.values(this.options.config.modules).map(
+            (m) => m.designLead,
+          ),
+          ...Object.values(this.options.config.moduleDefaults).map(
+            (m) => m.designLead,
+          ),
+        ].filter((lead): lead is string => Boolean(lead));
+        const preparedApprovers = this.authorizedStageOps.get(opId);
+        const persistedApprovers = this.readPersistedStageApprovers(
+          opId,
+          storyId,
+        );
+        let storedRoleRecord:
+          | {
+              storyId: number;
+              maintainer: string | null;
+              receiver: string | null;
+              updatedAt: number;
+            }
+          | undefined;
+        try {
+          storedRoleRecord = store.storyRoles.get(storyId);
+        } catch (error) {
+          if (!(error instanceof BztError && error.code === "NOT_FOUND"))
+            throw error;
+        }
+        const liveStory = resolvedStories?.get(storyId);
+        const liveApprovers = liveStory
+          ? resolveStoryStageApprovers(
+              this.options.config,
+              liveStory,
+              storedRoleRecord,
+            )
+          : undefined;
+        const actorAuthorized =
+          liveApprovers !== undefined
+            ? liveApprovers.length === 0 || liveApprovers.includes(record.actor)
+            : persistedApprovers !== undefined
+              ? persistedApprovers.length === 0 ||
+                persistedApprovers.includes(record.actor)
+              : preparedApprovers !== undefined
+                ? preparedApprovers.size === 0 ||
+                  preparedApprovers.has(record.actor)
+                : roleApprovers.length === 0 ||
+                  roleApprovers.includes(record.actor) ||
+                  moduleMaintainers.includes(record.actor) ||
+                  storedRoleRecord?.maintainer === record.actor;
+        this.authorizedStageOps.delete(opId);
         for (const [stage, requirement] of Object.entries(
           meta?.stageRequirements ?? {},
         )) {
           if (
+            !actorAuthorized ||
             !requirement ||
             (stageRequirements.get(storyId, stage)?.decidedAt ?? -Infinity) >=
               at
@@ -1197,12 +1376,45 @@ export class FlowService {
         ...task,
         evidence: { prefixes: config.naming?.taskPrefix },
       }));
+      let storedRoles:
+        | {
+            storyId: number;
+            maintainer: string | null;
+            receiver: string | null;
+            updatedAt: number;
+          }
+        | undefined;
+      if (story) {
+        try {
+          storedRoles = store?.storyRoles.get(story.id);
+        } catch (error) {
+          if (!(error instanceof BztError && error.code === "NOT_FOUND"))
+            throw error;
+        }
+      }
       const requirements = story
         ? store?.stageRequirements?.listByStory(story.id)
         : undefined;
-      const required = requirements
-        ? Object.fromEntries(
-            requirements.map(({ stage, required }) => [stage, required]),
+      const defaultStageMap: Readonly<Record<string, { required: boolean }>> =
+        story?.category === "design"
+          ? (config.stageDefaults?.design ?? {
+              design: { required: true },
+              review: { required: true },
+              handoff: { required: true },
+            })
+          : (config.stageDefaults?.feature ?? {
+              dev: { required: true },
+              interface: { required: false },
+              test: { required: true },
+              acceptance: { required: true },
+              delivery: { required: true },
+            });
+      const required = story
+        ? foldStageRequirements(
+            defaultStageMap,
+            requirements ?? [],
+            story.actions,
+            resolveStoryStageApprovers(config, story, storedRoles),
           )
         : undefined;
       const hits = r14.evaluate(

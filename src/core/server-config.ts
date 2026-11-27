@@ -32,6 +32,25 @@ function parseStrictOrigin(raw: string): string | undefined {
   return parsed.origin;
 }
 
+const aiGatewayRuleSchema = z.strictObject({
+  origin: text
+    .refine((value) => parseStrictOrigin(value) !== undefined, {
+      message: "模型网关 origin 必须是不含路径、查询或凭据的合法源地址。",
+    })
+    .transform((value) => parseStrictOrigin(value) ?? value),
+  pathPrefix: text.optional(),
+  allowInsecure: z.boolean().default(false),
+  allowPrivateNetwork: z.boolean().default(false),
+});
+
+const serverAiConfigSchema = z.strictObject({
+  enabled: z.boolean().default(false),
+  masterKeyFile: text.optional(),
+  allowedGateways: z.array(aiGatewayRuleSchema).default([]),
+  timeoutMs: positiveInt.max(120_000).default(30_000),
+  maxTokens: positiveInt.max(16_384).default(2048),
+});
+
 const serverInstanceSchema = z.strictObject({
   name: text,
   baseUrl: text
@@ -41,6 +60,11 @@ const serverInstanceSchema = z.strictObject({
     .transform((value) => normalizeZentaoBaseUrl(value)?.href ?? value),
   teamConfigPath: text,
   enabled: z.boolean().optional(),
+  ai: z
+    .strictObject({
+      allowedGateways: z.array(aiGatewayRuleSchema).optional(),
+    })
+    .optional(),
 });
 
 export type ServerInstanceConfig = z.output<typeof serverInstanceSchema>;
@@ -85,6 +109,7 @@ export const serverConfigSchema = z
         enabled: z.boolean().default(false),
       })
       .prefault({}),
+    ai: serverAiConfigSchema.prefault({}),
     instances: z
       .record(instanceIdKey, serverInstanceSchema)
       .refine((value) => Object.keys(value).length > 0, {

@@ -67,6 +67,7 @@ import {
   cachedWaiverEntries,
   foldRuleWaivers,
   foldStageRequirements,
+  stageRequirementApprovers,
 } from "./structured-notes.ts";
 
 /** CR-009 §4.2：跟踪服务所需的最小读模型；LocalStore 与内存端口实现都满足。 */
@@ -1290,6 +1291,7 @@ async function evidenceConfig(
       defaults,
       cachedRequirements,
       story.actions,
+      stageRequirementApprovers(config.roles, maintainer),
     ),
     waivers: foldRuleWaivers(
       "story",

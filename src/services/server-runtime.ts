@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
@@ -23,6 +23,29 @@ import { instanceWebRouteDto } from "../core/dto/org.ts";
 import { BztError } from "../core/errors.ts";
 import { createPartitionedReadPool } from "../core/http-policy.ts";
 import { loadServerConfig, type ServerConfig } from "../core/server-config.ts";
+import {
+  modelGatewayPolicySchema,
+  personalModelConfigInputSchema,
+  type ModelGatewayPolicy,
+} from "./ai/contracts.ts";
+import {
+  copilotTurnRequestSchema,
+  type CopilotTurnRequest,
+} from "./ai/copilot-contracts.ts";
+import { runCopilotTurn } from "./ai/copilot-service.ts";
+import {
+  assertSupportedProtocol,
+  createModelGateway,
+  matchesPathPrefix,
+  normalizePathPrefix,
+  validateGatewayUrl,
+  type ModelTransport,
+} from "./ai/model-gateway.ts";
+import {
+  createPersonalModelStore,
+  type PersonalModelStore,
+} from "./ai/personal-model-store.ts";
+import { createCapabilityRuntime } from "./capability-runtime.ts";
 
 export { loadServerConfig, type Clock, type ConfigEnv, type ServerConfig };
 
@@ -67,6 +90,8 @@ export interface ServerRuntimeOptions {
   readonly clock: Clock;
   readonly env?: ConfigEnv;
   readonly logSink?: (line: string) => void;
+  /** 可选注入模型传输层（离线端到端测试用）；默认使用受控 HTTP 传输层。 */
+  readonly aiTransport?: ModelTransport | undefined;
 }
 
 interface UserContext {
@@ -98,6 +123,7 @@ interface ServerSession {
   busy: number;
   readonly previews: Map<string, PreviewGrant>;
   readonly writeGuards: Map<string, () => Promise<void>>;
+  readonly aiAborts: Set<AbortController>;
   linkProjector?: Promise<ReturnType<typeof portalLinkProjector>>;
   resolvedLinkProjector?: ReturnType<typeof portalLinkProjector>;
 }
@@ -158,6 +184,85 @@ function acquireDataDirLock(dataDir: string): DatabaseSync {
   }
 }
 
+function parseMasterKeyText(raw: string): Buffer | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  if (/^[0-9a-f]{64}$/iu.test(trimmed)) return Buffer.from(trimmed, "hex");
+  const decoded = Buffer.from(trimmed, "base64");
+  return decoded.length === 32 ? decoded : undefined;
+}
+
+/**
+ * CR-009 D-203：独立主密钥加载（masterKeyFile 或 BZT_AI_MASTER_KEY 环境变量）。
+ * 与业务配置、SQLite 状态库分离；缺失或非法时仅禁用 AI，人工业务工作台完全不受影响。
+ */
+function resolveAiMasterKey(
+  config: ServerConfig,
+  env: ConfigEnv | undefined,
+): Buffer | undefined {
+  if (!config.ai.enabled) return undefined;
+  if (config.ai.masterKeyFile) {
+    try {
+      return parseMasterKeyText(readFileSync(config.ai.masterKeyFile, "utf8"));
+    } catch {
+      return undefined;
+    }
+  }
+  const fromEnv = env?.BZT_AI_MASTER_KEY;
+  return typeof fromEnv === "string" ? parseMasterKeyText(fromEnv) : undefined;
+}
+
+/** 服务端管理员白名单为信任根，实例级白名单只能取交集收窄，绝不扩权。 */
+function intersectPathPrefix(
+  parentPrefix: string | undefined,
+  childPrefix: string | undefined,
+): string | undefined {
+  const g = normalizePathPrefix(parentPrefix);
+  const i = normalizePathPrefix(childPrefix);
+  if (matchesPathPrefix(i, g)) return i === "/" ? undefined : i;
+  if (matchesPathPrefix(g, i)) return g === "/" ? undefined : g;
+  return "";
+}
+
+function resolveInstanceAiPolicy(
+  config: ServerConfig,
+  instanceId: string,
+): ModelGatewayPolicy {
+  const rootRules = config.ai.allowedGateways;
+  const instanceRules = config.instances[instanceId]?.ai?.allowedGateways;
+  const effective =
+    instanceRules === undefined
+      ? rootRules
+      : instanceRules.flatMap((rule) => {
+          const matched = rootRules
+            .filter((candidate) => candidate.origin === rule.origin)
+            .flatMap((parent) => {
+              const effectivePrefix = intersectPathPrefix(
+                parent.pathPrefix,
+                rule.pathPrefix,
+              );
+              if (effectivePrefix === "") return [];
+              return [
+                {
+                  origin: rule.origin,
+                  ...(effectivePrefix === undefined
+                    ? {}
+                    : { pathPrefix: effectivePrefix }),
+                  allowInsecure: parent.allowInsecure && rule.allowInsecure,
+                  allowPrivateNetwork:
+                    parent.allowPrivateNetwork && rule.allowPrivateNetwork,
+                },
+              ];
+            });
+          return matched;
+        });
+  return modelGatewayPolicySchema.parse({
+    allowedGateways: effective,
+    timeoutMs: config.ai.timeoutMs,
+    maxTokens: config.ai.maxTokens,
+  });
+}
+
 export function createServerRuntime(options: ServerRuntimeOptions) {
   const { config, clock, logSink } = options;
   const baseEnv: ConfigEnv = {
@@ -165,7 +270,15 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
     // ADR-23 / S-D05：Server 1.0 默认关闭企微群推。
     ...(config.notify.enabled ? {} : { BZT_WECOM_WEBHOOK: undefined }),
     ZENTAO_PASSWORD: undefined,
+    BZT_AI_MASTER_KEY: undefined,
   };
+  const aiMasterKey = resolveAiMasterKey(config, options.env);
+  const aiStore: PersonalModelStore | undefined = aiMasterKey
+    ? createPersonalModelStore({
+        masterKey: aiMasterKey,
+        dataDir: config.dataDir,
+      })
+    : undefined;
   const lockDb = acquireDataDirLock(config.dataDir);
   const readPool = createPartitionedReadPool({
     perInstanceLimit: config.http.perInstanceConcurrency,
@@ -240,12 +353,27 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
     revokeZentaoReadClient(session.client);
     session.previews.clear();
     session.writeGuards.clear();
+    for (const controller of session.aiAborts) controller.abort();
+    session.aiAborts.clear();
     if (sessions.get(session.sessionId) === session) {
       sessions.delete(session.sessionId);
     }
     if (session.busy === 0) {
       releaseUserContext(session.userContext);
     }
+  }
+
+  function isSessionStillValid(session: ServerSession): boolean {
+    if (session.revoked) return false;
+    const now = clock();
+    if (
+      now - session.createdAt >= absoluteTimeoutMs ||
+      now - session.lastUsedAt >= idleTimeoutMs
+    ) {
+      revokeSession(session);
+      return false;
+    }
+    return true;
   }
 
   function pruneExpiredSessions(): void {
@@ -382,6 +510,26 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
         : {}),
       ...(roles.some((role) => role.actions.includes("create_story"))
         ? { intakeCatalog: wb.intakeCatalog() }
+        : {}),
+      ...(config.ai.enabled
+        ? {
+            ai: {
+              enabled: true,
+              available: aiStore !== undefined,
+              ...(aiStore
+                ? (() => {
+                    const masked = aiStore.getMasked({
+                      instanceHash: session.instanceHash,
+                      account: session.account,
+                    });
+                    return {
+                      configured: masked.configured,
+                      verified: masked.verified,
+                    };
+                  })()
+                : { configured: false, verified: false }),
+            },
+          }
         : {}),
     };
   }
@@ -573,6 +721,7 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
         busy: 0,
         previews: new Map(),
         writeGuards: new Map(),
+        aiAborts: new Set(),
       };
       bound.session = session;
       sessions.set(sessionId, session);
@@ -915,6 +1064,356 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
           throw new BztError("AUTH_FAILED", "本次会话已结束。");
         return result;
       } finally {
+        session.busy -= 1;
+        if (session.busy === 0 && session.revoked) {
+          releaseUserContext(session.userContext);
+        }
+      }
+    },
+
+    /** CR-009 MG-01：读取当前认证主体的个人大模型网关脱敏配置（绝不返回明文 Token）。 */
+    getAiConfig(sessionId: string) {
+      const session = getActiveSession(sessionId, false);
+      const policy = resolveInstanceAiPolicy(config, session.instanceId);
+      if (!config.ai.enabled || !aiStore) {
+        return {
+          enabled: config.ai.enabled,
+          available: false,
+          allowedGateways: policy.allowedGateways.map(
+            ({ origin, pathPrefix }) => ({
+              origin,
+              ...(pathPrefix === undefined ? {} : { pathPrefix }),
+            }),
+          ),
+          masked: {
+            configured: false,
+            verified: false,
+          },
+        };
+      }
+      return {
+        enabled: true,
+        available: true,
+        allowedGateways: policy.allowedGateways.map(
+          ({ origin, pathPrefix }) => ({
+            origin,
+            ...(pathPrefix === undefined ? {} : { pathPrefix }),
+          }),
+        ),
+        masked: aiStore.getMasked({
+          instanceHash: session.instanceHash,
+          account: session.account,
+        }),
+      };
+    },
+
+    /** CR-009 MG-01 / MG-02：保存（或轮换）本人企业大模型网关配置，受管理员白名单与 AES-256-GCM 保护。 */
+    saveAiConfig(
+      sessionId: string,
+      rawInput: {
+        readonly baseUrl: string;
+        readonly protocol:
+          "openai-compatible" | "anthropic-compatible" | "enterprise-custom";
+        readonly modelId: string;
+        readonly token?: string | undefined;
+      },
+    ) {
+      const session = getActiveSession(sessionId, true);
+      if (!config.ai.enabled || !aiStore)
+        throw new BztError(
+          "CONFIG_MISSING",
+          "当前服务未启用内置 AI 或缺少独立加密主密钥（人工工作台不受影响）。",
+        );
+      const policy = resolveInstanceAiPolicy(config, session.instanceId);
+      const protocol = assertSupportedProtocol(rawInput.protocol);
+      const normalizedUrl = validateGatewayUrl(rawInput.baseUrl, policy);
+      const principal = {
+        instanceHash: session.instanceHash,
+        account: session.account,
+      };
+      const token =
+        rawInput.token?.trim() ||
+        (() => {
+          const existing = aiStore.getMasked(principal);
+          if (!existing.configured)
+            throw new BztError(
+              "INVALID_INPUT",
+              "首次配置必须提供个人模型 Token。",
+            );
+          // P1-2：目的地或协议变更时严禁沿用旧密钥，防止旧 Token 被迁往新地址探活。
+          if (
+            existing.baseUrl !== normalizedUrl.href ||
+            existing.protocol !== protocol
+          ) {
+            throw new BztError(
+              "INVALID_INPUT",
+              "更换网关地址或协议时必须重新输入个人模型 Token。",
+              { fields: ["token"] },
+            );
+          }
+          return aiStore.resolveSecret(principal);
+        })();
+      const validated = personalModelConfigInputSchema.parse({
+        baseUrl: normalizedUrl.href,
+        protocol,
+        modelId: rawInput.modelId,
+        token,
+      });
+      aiStore.save(principal, validated);
+      return { ok: true, masked: aiStore.getMasked(principal) };
+    },
+
+    /** CR-009 MG-01：最小非业务连通性探活，仅校验当前主体的个人配置并绑定会话有效性与连接取消信号。 */
+    async testAiConfig(sessionId: string, requestSignal?: AbortSignal) {
+      const session = getActiveSession(sessionId, true);
+      if (!config.ai.enabled || !aiStore)
+        throw new BztError(
+          "CONFIG_MISSING",
+          "当前服务未启用内置 AI 或缺少独立加密主密钥。",
+        );
+      const policy = resolveInstanceAiPolicy(config, session.instanceId);
+      const gateway = createModelGateway({
+        policy,
+        credentialStore: aiStore,
+        transport: options.aiTransport,
+        clock,
+        logSink,
+      });
+      const abort = new AbortController();
+      const onRequestAbort = () => abort.abort();
+      if (requestSignal?.aborted) abort.abort();
+      else
+        requestSignal?.addEventListener("abort", onRequestAbort, {
+          once: true,
+        });
+      session.aiAborts.add(abort);
+      session.busy += 1;
+      try {
+        return await gateway.testConnection(
+          {
+            instanceHash: session.instanceHash,
+            account: session.account,
+          },
+          abort.signal,
+          () => !abort.signal.aborted && isSessionStillValid(session),
+        );
+      } finally {
+        requestSignal?.removeEventListener("abort", onRequestAbort);
+        session.aiAborts.delete(abort);
+        session.busy -= 1;
+        if (session.busy === 0 && session.revoked) {
+          releaseUserContext(session.userContext);
+        }
+      }
+    },
+
+    /** CR-009 MG-01：彻底删除本人模型网关配置与加密凭据。 */
+    deleteAiConfig(sessionId: string) {
+      const session = getActiveSession(sessionId, true);
+      if (!config.ai.enabled || !aiStore)
+        throw new BztError(
+          "CONFIG_MISSING",
+          "当前服务未启用内置 AI 或缺少独立加密主密钥。",
+        );
+      const principal = {
+        instanceHash: session.instanceHash,
+        account: session.account,
+      };
+      aiStore.delete(principal);
+      return { ok: true, masked: aiStore.getMasked(principal) };
+    },
+
+    /**
+     * CR-009 §11.2 / ADR-28：服务端原位协作 AI 回合。
+     * - 校验实时团队配置与用户当前选定职责（非 roles[0]）；
+     * - 绑定 channel="ai" 的 CapabilityRuntime，无条件拒绝 confirm_operation；
+     * - 全部 AI 路径均要求个人模型网关 configured && verified；
+     * - 统一复核会话有效期、团队配置版本、职责授权与个人凭据版本，并把登出取消信号接入传输层。
+     */
+    async invokeCopilot(
+      sessionId: string,
+      rawRequest: unknown,
+      requestSignal?: AbortSignal,
+    ) {
+      const session = getActiveSession(sessionId, true);
+      if (!config.ai.enabled || !aiStore)
+        throw new BztError(
+          "CONFIG_MISSING",
+          "当前服务未启用内置 AI 或缺少独立加密主密钥（人工业务工作台可正常使用）。",
+        );
+      const parsed = copilotTurnRequestSchema.safeParse(rawRequest);
+      if (!parsed.success)
+        throw new BztError("INVALID_INPUT", "AI 助手请求参数不合法。");
+      const request: CopilotTurnRequest = parsed.data;
+
+      const abort = new AbortController();
+      const onRequestAbort = () => abort.abort();
+      if (requestSignal?.aborted) abort.abort();
+      else
+        requestSignal?.addEventListener("abort", onRequestAbort, {
+          once: true,
+        });
+      session.aiAborts.add(abort);
+      session.busy += 1;
+      try {
+        if (abort.signal.aborted)
+          throw new BztError("ZENTAO_UNAVAILABLE", "请求已取消。");
+        const team = await loadInstanceTeamConfig(session.instanceId);
+        if (abort.signal.aborted)
+          throw new BztError("ZENTAO_UNAVAILABLE", "请求已取消。");
+        if (!isSessionStillValid(session))
+          throw new BztError("AUTH_FAILED", "本次会话已结束。");
+        const roles = portalRoles(team.config.roles, session.account);
+        const page = roles.find((entry) => entry.id === request.role);
+        if (!page)
+          throw new BztError("PERMISSION_DENIED", "当前职责无权执行该操作。");
+
+        const principal = {
+          instanceHash: session.instanceHash,
+          account: session.account,
+        };
+        const initialMasked = aiStore.getMasked(principal);
+        if (!initialMasked.configured)
+          throw new BztError(
+            "CONFIG_MISSING",
+            "请先在「个人 AI 设置」中配置您本人的企业大模型网关与 Token。",
+          );
+        if (!initialMasked.verified)
+          throw new BztError(
+            "AUTH_FAILED",
+            "个人大模型网关尚未通过连接测试，请先完成验证后再使用 AI 助手。",
+          );
+        const initialRevision =
+          aiStore.resolveSecretWithRevision(principal).revision;
+        const initialTeamVersion = team.version;
+
+        const assertAiTurnStillAuthorized = async () => {
+          if (abort.signal.aborted)
+            throw new BztError("ZENTAO_UNAVAILABLE", "请求已取消。");
+          if (!isSessionStillValid(session))
+            throw new BztError("AUTH_FAILED", "本次会话已结束。");
+          const latestTeam = await loadInstanceTeamConfig(session.instanceId);
+          // 异步读取配置返回后立即同步复核会话有效期与取消状态，封堵在途登出/断连窗口（P1-4）。
+          if (abort.signal.aborted)
+            throw new BztError("ZENTAO_UNAVAILABLE", "请求已取消。");
+          if (!isSessionStillValid(session))
+            throw new BztError("AUTH_FAILED", "本次会话已结束。");
+          if (
+            latestTeam.version !== initialTeamVersion ||
+            !portalRoles(latestTeam.config.roles, session.account).some(
+              ({ id }) => id === page.id,
+            )
+          ) {
+            throw new BztError(
+              "PERMISSION_DENIED",
+              "团队配置或当前职责已变更，已中止本次 AI 操作。",
+            );
+          }
+          const currentMasked = aiStore.getMasked(principal);
+          if (
+            !currentMasked.configured ||
+            !currentMasked.verified ||
+            aiStore.resolveSecretWithRevision(principal).revision !==
+              initialRevision
+          ) {
+            throw new BztError(
+              "AUTH_FAILED",
+              "个人模型配置在请求期间已变更或失效，已中止本次响应。",
+            );
+          }
+        };
+
+        const policy = resolveInstanceAiPolicy(config, session.instanceId);
+        const gateway = createModelGateway({
+          policy,
+          credentialStore: aiStore,
+          transport: options.aiTransport,
+          clock,
+          logSink,
+        });
+
+        const wb = createServerWorkbench({
+          client: session.client,
+          viewer: session.viewer,
+          config: team.config,
+          stateDir: config.dataDir,
+          clock,
+          baseUrl: session.baseUrl,
+          store: session.userContext.store,
+          env: { ...baseEnv, ZENTAO_BASE_URL: session.baseUrl },
+          logSink,
+          writeCoordinator,
+        });
+
+        const capabilityRuntime = createCapabilityRuntime({
+          principal: {
+            instanceId: session.instanceId,
+            instanceHash: session.instanceHash,
+            account: session.account,
+            sessionId: session.sessionId,
+            roles: roles.map(({ id }) => id),
+            configVersion: team.version,
+            readOnly: config.readOnly,
+          },
+          channel: "ai",
+          isRevoked: () => !isSessionStillValid(session),
+          readRoles: async () => {
+            const latest = await loadInstanceTeamConfig(session.instanceId);
+            return portalRoles(latest.config.roles, session.account);
+          },
+          execute: async (tool, input, activeRole, activeMonth) => {
+            if (tool === "confirm_operation")
+              throw new BztError(
+                "PERMISSION_DENIED",
+                "AI 助手不能代为确认或执行写入，请交由用户人工确认预览。",
+              );
+            // 工具派发前统一复核会话、团队配置版本、职责与个人凭据版本。
+            await assertAiTurnStillAuthorized();
+            const currentMonth = formatLocalDate(
+              clock(),
+              team.config.timezone,
+            ).slice(0, 7);
+            const portalTool = page.actions.find((action) => action === tool);
+            if (!portalTool)
+              throw new BztError(
+                "PERMISSION_DENIED",
+                "当前职责无权执行该操作。",
+              );
+            return dispatchPortalTool(
+              wb,
+              portalTool,
+              input,
+              activeRole,
+              true,
+              activeMonth ?? request.month ?? currentMonth,
+            );
+          },
+        });
+
+        const currentMonth = formatLocalDate(
+          clock(),
+          team.config.timezone,
+        ).slice(0, 7);
+
+        const response = await runCopilotTurn({
+          principal,
+          sessionId: session.sessionId,
+          role: page.id,
+          readOnly: config.readOnly,
+          month: request.month ?? currentMonth,
+          runtime: capabilityRuntime,
+          gateway,
+          isRevoked: () => !isSessionStillValid(session),
+          abortSignal: abort.signal,
+          request,
+        });
+
+        // 响应交付前最终复核会话、团队版本、职责与个人凭据版本。
+        await assertAiTurnStillAuthorized();
+        return response;
+      } finally {
+        requestSignal?.removeEventListener("abort", onRequestAbort);
+        session.aiAborts.delete(abort);
         session.busy -= 1;
         if (session.busy === 0 && session.revoked) {
           releaseUserContext(session.userContext);

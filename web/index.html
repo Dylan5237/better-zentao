@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="/daily-pages.css" />
     <link rel="stylesheet" href="/management-pages.css" />
     <link rel="stylesheet" href="/skeleton.css" />
+    <link rel="stylesheet" href="/ai-copilot.css" />
     <script type="module" src="/app.js"></script>
   </head>
   <body>
@@ -179,6 +180,38 @@
           aria-label="当前账号的角色视角"
         ></nav>
         <div class="bzt-topbar-actions">
+          <div
+            id="ai-view-switch"
+            class="ai-view-switch"
+            role="group"
+            aria-label="工作台主视图切换"
+            hidden
+          >
+            <button
+              type="button"
+              class="ai-view-tab is-active"
+              data-ai-view="human"
+              aria-pressed="true"
+            >
+              人工工作台
+            </button>
+            <button
+              type="button"
+              class="ai-view-tab"
+              data-ai-view="ai"
+              aria-pressed="false"
+            >
+              AI 协作
+            </button>
+          </div>
+          <button
+            type="button"
+            id="ai-assistant-toggle"
+            class="btn-secondary btn-sm"
+            hidden
+          >
+            AI 助手
+          </button>
           <div id="report-period" class="report-period" hidden>
             <label for="report-month">时间范围</label>
             <input type="month" id="report-month" class="bzt-input" />
@@ -285,7 +318,29 @@
         <main id="work-area" class="bzt-main" tabindex="-1">
           <p id="session-status" class="notice" role="status" hidden></p>
           <div id="workspace"></div>
+          <div id="ai-workspace-container" hidden></div>
         </main>
+        <aside
+          id="ai-copilot-drawer"
+          class="ai-copilot-drawer"
+          aria-label="原位 AI 助手"
+          hidden
+        >
+          <div class="ai-copilot-head">
+            <div>
+              <strong>AI 助手</strong>
+              <span id="ai-copilot-status" class="bzt-badge"></span>
+            </div>
+            <button
+              type="button"
+              id="ai-copilot-close"
+              class="btn-secondary btn-sm"
+            >
+              收起
+            </button>
+          </div>
+          <div id="ai-copilot-body" class="ai-copilot-body"></div>
+        </aside>
       </div>
       <dialog
         id="account-dialog"
@@ -303,6 +358,14 @@
         </div>
         <div class="modal-body">
           <p id="session-account"></p>
+          <button
+            id="ai-settings-button"
+            class="btn-secondary"
+            type="button"
+            hidden
+          >
+            个人 AI 设置
+          </button>
           <button id="role-settings-button" class="btn-secondary" type="button">
             我的职责
           </button>
@@ -310,6 +373,23 @@
             退出
           </button>
         </div>
+      </dialog>
+      <dialog
+        id="ai-settings-dialog"
+        class="portal-dialog write-modal"
+        aria-label="个人 AI 网关设置"
+      >
+        <div class="modal-head modal-header">
+          <strong>个人企业大模型网关设置</strong
+          ><button
+            class="btn-secondary btn-sm"
+            id="ai-settings-close"
+            type="button"
+          >
+            关闭
+          </button>
+        </div>
+        <div id="ai-settings-body" class="modal-body"></div>
       </dialog>
     </div>
   </body>

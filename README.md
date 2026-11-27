@@ -27,7 +27,7 @@ better-zentao 在保留禅道作为业务数据事实源的基础上，把需求
 
 Web 工作台提供按职责组织的工作台、提需求、需求流转、拆解与排期、发布与风险页面。顶部时间范围可按自然月切换，首页提供禅道原生、融合增强、全封装等视图模式。集中端的职责由管理员统一维护，个人模式允许本机用户配置自己的职责。
 
-**当前交付范围**：Server 1.0 已实现多用户集中服务端及离线验证，目标 Linux 宿主机上的 Docker / HTTPS 实跑与真实禅道上线验收仍待完成。AI 自然语言交互当前通过外部 MCP Agent 提供；工作台内置 AI 对话助手尚未实现。
+**当前交付范围**：Server 1.0 已实现多用户集中服务端及离线验证；2.0 Release Candidate（分支 `feat/bzt-2.0-rc`，见 [CR-009 2.0 架构与原位协作](docs/changes/CR-009-platform-2.0-baseline.md)）在保持 1.0 人工工作台完全兼容的前提下，新增默认关闭（`ai.enabled: false`）的**原位 AI 协作助手（In-context Copilot）**与个人企业大模型网关加密凭据隔离。真实企业大模型网关实连与业务数据出网授权仍待项目所有者在受控私网环境验证。
 
 ## 快速开始
 
@@ -136,7 +136,7 @@ corepack pnpm test
 | [工具契约](docs/07-工具契约.md) · [配置说明](docs/08-配置说明.md) | 工具输入输出、个人及团队配置 |
 | [测试与验收](docs/09-测试与验收.md) · [实施计划](docs/10-实施计划.md) | 测试门禁与实施路径 |
 | [需求演进指南](docs/11-需求演进指南.md) · [架构决策](docs/12-决策与待确认.md) · [术语与追溯](docs/13-术语与追溯.md) | 演进、ADR 和需求追溯 |
-| [服务端部署指南](docs/server-deployment.md) · [Server 1.0 需求卡](docs/changes/CR-008-server-multi-user.md) | 集中部署、运维、升级与回滚 |
+| [服务端部署指南](docs/server-deployment.md) · [Server 1.0 需求卡](docs/changes/CR-008-server-multi-user.md) · [2.0 平台与原位协作需求卡](docs/changes/CR-009-platform-2.0-baseline.md) | 集中部署、运维升级与 2.0 架构演进 |
 | [AGENTS.md](AGENTS.md) · [Agent Skill](skills/better-zentao/SKILL.md) | 编码 Agent 守则及使用者 Agent 业务指导 |
 
 业务规范与工程文档的优先级和变更规则以 [AGENTS.md](AGENTS.md) 为准。新需求遵循 CR / ADR 流程，避免不同入口产生不同业务口径。

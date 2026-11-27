@@ -1,5 +1,6 @@
 import { icon } from "./meridian-icons.js";
 import { createMeridianShell } from "./meridian-shell.js";
+import { mountInContextCopilot } from "./ai-copilot.js";
 import { beginSkeleton, skeletonBlock } from "./skeleton.js";
 import { querySkeleton, roleOptionsSkeleton } from "./portal-skeleton.js";
 import { sectionsFor as prototypeSections } from "./review-page.js";
@@ -613,6 +614,44 @@ export function createPortalSession(send = fetch) {
           body: {},
         });
     },
+    aiConfig({ signal } = {}) {
+      return requestJson(send, "/api/ai/config", {
+        account: identity?.account,
+        signal,
+      });
+    },
+    saveAiConfig(body, { signal } = {}) {
+      return requestJson(send, "/api/ai/config", {
+        account: identity?.account,
+        csrfToken: identity?.csrfToken,
+        body,
+        signal,
+      });
+    },
+    testAiConfig({ signal } = {}) {
+      return requestJson(send, "/api/ai/config/test", {
+        account: identity?.account,
+        csrfToken: identity?.csrfToken,
+        body: {},
+        signal,
+      });
+    },
+    deleteAiConfig({ signal } = {}) {
+      return requestJson(send, "/api/ai/config/delete", {
+        account: identity?.account,
+        csrfToken: identity?.csrfToken,
+        body: {},
+        signal,
+      });
+    },
+    invokeCopilot(body, { signal } = {}) {
+      return requestJson(send, "/api/ai/copilot", {
+        account: identity?.account,
+        csrfToken: identity?.csrfToken,
+        body,
+        signal,
+      });
+    },
     selectRole(id) {
       const next = identity?.roles.find((entry) => entry.id === id);
       if (!next) return false;
@@ -628,6 +667,11 @@ export function createPortalSession(send = fetch) {
       const roleAtOpen = role;
       const current = () =>
         Boolean(roleAtOpen && version === versionAtOpen && !signal?.aborted);
+      const liveCsrf = () =>
+        identity?.account === accountAtOpen &&
+        (identity?.instanceId ?? "") === instanceAtOpen
+          ? identity?.csrfToken
+          : csrfAtOpen;
       function check() {
         if (!current()) throw new StalePortalRequest();
       }
@@ -663,9 +707,10 @@ export function createPortalSession(send = fetch) {
             });
           }
           try {
+            // P1-3：同账号换会话（preserveForm 保留活跃表单）时动态读取最新 CSRF Token，避免旧令牌 403。
             const result = await requestJson(send, "/api/call", {
               account: accountAtOpen,
-              csrfToken: csrfAtOpen,
+              csrfToken: liveCsrf(),
               signal,
               body: {
                 role: roleAtOpen.id,
@@ -686,7 +731,7 @@ export function createPortalSession(send = fetch) {
           check();
           const result = await requestJson(send, "/api/updates", {
             account: accountAtOpen,
-            csrfToken: csrfAtOpen,
+            csrfToken: liveCsrf(),
             signal,
             body: {
               role: roleAtOpen.id,
@@ -1047,6 +1092,35 @@ function mountPortal(
     toolsFor: navigationFor,
     contextFor: viewContext,
   });
+  const copilot = mountInContextCopilot({
+    byId,
+    session,
+    getCurrentSection: () => currentSection,
+    getSelectedMonth: () => selectedMonth ?? currentMonth(),
+    getActiveStoryId: () => {
+      const id =
+        typeof activeStory === "number" ? activeStory : activeStory?.id;
+      return Number.isInteger(id) && id > 0 ? id : undefined;
+    },
+    openSection,
+    onApplyFilters: (filters) => {
+      if (!filters || typeof filters !== "object") return;
+      // 复用正式需求台账的状态入口（tab / progress / keyword / category），本页与跨页均生效。
+      openSection("stories", {
+        tab: "all-stories",
+        ...(typeof filters.progress === "string"
+          ? { progress: filters.progress }
+          : {}),
+        ...(typeof filters.keyword === "string"
+          ? { keyword: filters.keyword }
+          : {}),
+        ...(typeof filters.category === "string"
+          ? { category: filters.category }
+          : {}),
+      });
+    },
+    toast: shell.toast,
+  });
 
   function openPendingLaunch() {
     if (
@@ -1063,6 +1137,7 @@ function mountPortal(
 
   function discardPage() {
     shell.clear();
+    copilot.clearForm();
     closeOverlay();
     page?.abort();
     currentView = undefined;
@@ -1097,6 +1172,7 @@ function mountPortal(
         else await showLogin("请重新登录禅道。");
       } else if (change === "roles") {
         showRoleOptions(session.identity, session.role);
+        copilot.syncIdentity(session.identity);
       }
     } catch {
       // 等待下一次会话信号或工具调用验证状态，避免中断正在填写的表单。
@@ -1117,6 +1193,7 @@ function mountPortal(
     loginStatus.textContent = identity ? "" : message;
     sessionStatus.textContent = identity ? message : "";
     sessionStatus.hidden = !sessionStatus.textContent;
+    copilot.syncIdentity(identity);
     nav.replaceChildren();
     resetBadges();
     clearInterval(activityTimer);
@@ -1497,6 +1574,7 @@ function mountPortal(
     if (!active) return;
     overlay = undefined;
     activeStory = undefined;
+    copilot.unbindOverlayForm();
     active.controller.abort();
     active.dialog.close();
     active.dialog.remove();
@@ -1717,6 +1795,8 @@ function mountPortal(
       },
       renderRead,
       tools: navigationFor(role),
+      bindForm: (bridge) => copilot.bindForm(bridge),
+      unbindForm: () => copilot.clearForm(),
       renderWrite: (container, tool, initial, options) =>
         renderWrite(
           container,
@@ -1725,7 +1805,15 @@ function mountPortal(
           role.id,
           session.identity.account,
           initial,
-          { ...options, instanceId: session.identity.instanceId, signal },
+          {
+            ...options,
+            instanceId: session.identity.instanceId,
+            signal,
+            onDraftBridge: (bridge) => {
+              options?.onDraftBridge?.(bridge);
+              copilot.bindForm(bridge, { inModal: Boolean(options?.inModal) });
+            },
+          },
         ),
     };
   }

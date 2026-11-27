@@ -3,6 +3,8 @@ import { previewSkeleton, receiptSkeleton } from "./daily-skeleton.js";
 import { beginSkeleton } from "./skeleton.js";
 
 const reviewDelayMs = 3000;
+const contextBindingPattern = /^[0-9a-f]{32}$/u;
+let nextFormInstanceSeq = 0;
 const monthPattern = /^\d{4}-(?:0[1-9]|1[0-2])$/u;
 const separator = /[\s,，、;；]+/u;
 const origins = { user: "用户填写", default: "默认值", derived: "规则推导" };
@@ -507,9 +509,14 @@ function buildForm(make, tool, role, initial, options) {
 
   function switchIntakeMode(mode) {
     if (mode === "batchImport" && !options.showBatch) return;
+    const prevBatch = batch;
+    const prevMode = intakeMode;
     batch = mode === "batchImport";
     if (!batch && choices.some(([value]) => value === mode)) intakeMode = mode;
     options.showBatch?.(batch);
+    if (prevBatch !== batch || prevMode !== intakeMode) {
+      bumpDraftRevision?.();
+    }
   }
 
   if (isIntake && !simple) {
@@ -573,6 +580,8 @@ function buildForm(make, tool, role, initial, options) {
         const [product, module] = findFields();
         product.control.value = choice ? String(choice.product.id) : "";
         module.control.value = choice ? String(choice.module.id) : "";
+        markManualEdit?.(`${prefix}product`);
+        markManualEdit?.(`${prefix}module`);
       }
       updateForm();
     });
@@ -627,6 +636,7 @@ function buildForm(make, tool, role, initial, options) {
           () => control.value,
           (value) => {
             control.value = value;
+            markManualEdit?.(spec.name);
           },
           true,
         ),
@@ -701,6 +711,7 @@ function buildForm(make, tool, role, initial, options) {
       } else {
         manualOverrides.delete(spec.name);
         control.value = "";
+        markManualEdit?.(spec.name);
       }
     });
     settings.push(() => {
@@ -979,6 +990,7 @@ function buildForm(make, tool, role, initial, options) {
     }
     apply(input);
     updateForm();
+    bumpDraftRevision?.();
     return true;
   }
 
@@ -986,6 +998,11 @@ function buildForm(make, tool, role, initial, options) {
     form.reset?.();
     manualCatalog.clear();
     manualOverrides.clear();
+    userEditedFields?.clear?.();
+    aiFilledFields?.clear?.();
+    if (aiUndoStack) aiUndoStack.length = 0;
+    for (const entry of fields) setAiMarker?.(entry, false);
+    draftRevision += 1;
     intakeMode = defaultIntakeMode;
     if (isIntake && !simple) locate("category").control.value = "";
     if (simple) {
@@ -993,6 +1010,7 @@ function buildForm(make, tool, role, initial, options) {
       details.open = false;
     }
     updateForm();
+    emitDraftChange();
   }
 
   function prepareForm() {
@@ -1021,6 +1039,281 @@ function buildForm(make, tool, role, initial, options) {
     entry.wrapper.scrollIntoView?.({ block: "nearest" });
     entry.control.focus?.();
   }
+
+  // CR-009 ADR-28：人工与 AI 共享的受控表单草稿状态（唯一实例 ID、目标对象绑定、版本号、手工编辑集合与精细化撤销栈）。
+  const formInstanceId = `${tool}:${++nextFormInstanceSeq}`;
+  let draftRevision = 1;
+  const userEditedFields = new Set();
+  const aiFilledFields = new Set();
+  const aiUndoStack = [];
+  const draftSubscribers = new Set();
+
+  function emitDraftChange(changedField = null) {
+    const snap = getDraftSnapshot();
+    options.onDraftChange?.(snap, changedField);
+    for (const listener of draftSubscribers) {
+      listener(snap, changedField);
+    }
+  }
+
+  function bumpDraftRevision(changedField = null) {
+    draftRevision += 1;
+    emitDraftChange(changedField);
+  }
+
+  function readTargetObjectId() {
+    if (
+      typeof options.targetObjectId === "number" &&
+      Number.isInteger(options.targetObjectId) &&
+      options.targetObjectId > 0
+    ) {
+      return options.targetObjectId;
+    }
+    const storyIdCtrl = locate("storyId")?.control;
+    if (storyIdCtrl && !storyIdCtrl.disabled) {
+      const n = Number.parseInt(String(storyIdCtrl.value ?? "").trim(), 10);
+      if (Number.isInteger(n) && n > 0) return n;
+    }
+    const storyIdsCtrl = locate("storyIds")?.control;
+    if (storyIdsCtrl && !storyIdsCtrl.disabled) {
+      const parts = String(storyIdsCtrl.value ?? "")
+        .split(/[\s,，]+/u)
+        .filter(Boolean);
+      if (parts.length === 1) {
+        const n = Number.parseInt(parts[0], 10);
+        if (Number.isInteger(n) && n > 0) return n;
+      }
+    }
+    return undefined;
+  }
+
+  function readRawFields() {
+    const out = {};
+    for (const { spec, control } of fields) {
+      if (control.disabled) continue;
+      out[spec.name] =
+        spec.kind === "checkbox"
+          ? Boolean(control.checked)
+          : String(control.value ?? "");
+    }
+    return out;
+  }
+
+  function readControlValue(entry) {
+    return entry.spec.kind === "checkbox"
+      ? Boolean(entry.control.checked)
+      : String(entry.control.value ?? "");
+  }
+
+  function setAiMarker(entry, active) {
+    entry.wrapper.classList?.toggle?.("is-ai-filled", active);
+    const existing = entry.wrapper.querySelector?.(".ai-field-badge");
+    if (active && !existing) {
+      const label = entry.wrapper.querySelector?.("span");
+      if (label) label.append(make("span", "AI 辅助填充", "ai-field-badge"));
+    } else if (!active && existing) {
+      existing.remove();
+    }
+  }
+
+  function applyFieldRawValue(entry, rawValue) {
+    if (entry.spec.kind === "checkbox") {
+      entry.control.checked = rawValue === true;
+    } else {
+      entry.control.value = rawValue == null ? "" : String(rawValue);
+    }
+    if (entry.spec.advanced && rawValue) details.open = true;
+  }
+
+  function getDraftSnapshot() {
+    const targetObjectId = readTargetObjectId();
+    return {
+      formId: formInstanceId,
+      tool,
+      ...(targetObjectId === undefined ? {} : { targetObjectId }),
+      revision: draftRevision,
+      fields: readRawFields(),
+      userEditedFields: [...userEditedFields],
+    };
+  }
+
+  function markManualEdit(fieldName) {
+    const entry = locate(fieldName);
+    if (!entry) return;
+    // P1-7：用户主动编辑或主动清空字段均保留手工编辑标记，防止 AI 再次静默填回。
+    userEditedFields.add(fieldName);
+    aiFilledFields.delete(fieldName);
+    setAiMarker(entry, false);
+    bumpDraftRevision(fieldName);
+  }
+
+  for (const { spec, control } of fields) {
+    const onUserEdit = () => markManualEdit(spec.name);
+    control.addEventListener("input", onUserEdit);
+    control.addEventListener("change", onUserEdit);
+  }
+
+  function applyAiPatch(proposal) {
+    const currentTargetId = readTargetObjectId();
+    const targetBound = [
+      "assign_story",
+      "reschedule_story",
+      "handoff_story",
+    ].includes(tool);
+    const validBinding =
+      typeof proposal?.contextBinding === "string" &&
+      contextBindingPattern.test(proposal.contextBinding);
+    if (
+      locked ||
+      !proposal ||
+      proposal.formId !== formInstanceId ||
+      proposal.tool !== tool ||
+      proposal.baseRevision !== draftRevision ||
+      (proposal.contextBinding !== undefined && !validBinding) ||
+      (targetBound &&
+        (!validBinding ||
+          proposal.targetObjectId === undefined ||
+          proposal.targetObjectId !== currentTargetId)) ||
+      (proposal.targetObjectId !== undefined &&
+        proposal.targetObjectId !== currentTargetId)
+    ) {
+      return {
+        stale: true,
+        applied: 0,
+        conflicts: [],
+        revision: draftRevision,
+      };
+    }
+    const mutatedEntries = [];
+    let applied = 0;
+    const conflicts = [];
+    for (const patch of proposal.patches ?? []) {
+      const entry = locate(patch.field);
+      if (!entry || entry.control.disabled) continue;
+      const beforeValue = readControlValue(entry);
+      const isCheckbox = entry.spec.kind === "checkbox";
+      const currentVal = isCheckbox
+        ? Boolean(beforeValue)
+        : String(beforeValue).trim();
+      const isEmpty = isCheckbox ? !currentVal : currentVal === "";
+      const sameValue = isCheckbox
+        ? currentVal === Boolean(patch.value)
+        : String(currentVal) === String(patch.value);
+      if (
+        patch.mode === "fill_empty" &&
+        isEmpty &&
+        !userEditedFields.has(patch.field)
+      ) {
+        const beforeWasAi = aiFilledFields.has(patch.field);
+        if (patch.field === "product" || patch.field === "module")
+          manualCatalog.delete("");
+        applyFieldRawValue(entry, patch.value);
+        const aiValue = readControlValue(entry);
+        aiFilledFields.add(patch.field);
+        setAiMarker(entry, true);
+        mutatedEntries.push({
+          field: patch.field,
+          beforeValue,
+          beforeWasAi,
+          aiValue,
+        });
+        applied += 1;
+      } else if (!sameValue) {
+        conflicts.push({
+          field: patch.field,
+          label: entry.spec.label,
+          currentValue: isCheckbox
+            ? currentVal
+              ? "是"
+              : "否"
+            : String(currentVal),
+          proposedValue: isCheckbox
+            ? patch.value === true
+              ? "是"
+              : "否"
+            : String(patch.value),
+          rawProposedValue: isCheckbox ? patch.value === true : patch.value,
+          rationale: patch.rationale || "AI 建议优化该字段",
+        });
+      }
+    }
+    if (applied > 0) {
+      // P1-7：撤销栈仅记录本次 AI 实际修改的字段快照，绝不回滚后续人工编辑字段。
+      aiUndoStack.push({ entries: mutatedEntries });
+      draftRevision += 1;
+      sync();
+      form.dispatchEvent?.(new Event("change"));
+      emitDraftChange();
+    }
+    return { stale: false, applied, conflicts, revision: draftRevision };
+  }
+
+  function acceptAiSuggestion(fieldName, value) {
+    if (locked) return false;
+    const entry = locate(fieldName);
+    if (!entry || entry.control.disabled) return false;
+    const beforeValue = readControlValue(entry);
+    const beforeWasAi = aiFilledFields.has(fieldName);
+    if (fieldName === "product" || fieldName === "module")
+      manualCatalog.delete("");
+    applyFieldRawValue(entry, value);
+    const aiValue = readControlValue(entry);
+    aiFilledFields.add(fieldName);
+    setAiMarker(entry, true);
+    aiUndoStack.push({
+      entries: [{ field: fieldName, beforeValue, beforeWasAi, aiValue }],
+    });
+    draftRevision += 1;
+    sync();
+    form.dispatchEvent?.(new Event("change"));
+    // P1-7：传入具体 fieldName，只失效被采纳的该条冲突，保留其余待采纳建议。
+    emitDraftChange(fieldName);
+    return true;
+  }
+
+  function undoLastAiPatch() {
+    if (locked || aiUndoStack.length === 0) return false;
+    const frame = aiUndoStack.pop();
+    let restored = 0;
+    for (const item of frame.entries) {
+      const entry = locate(item.field);
+      if (!entry || entry.control.disabled) continue;
+      // P1-7：若该字段后续已被人工再编辑（不再持有 AI 写入值或已失去 AI 标记），跳过恢复以保护人工输入。
+      if (
+        !aiFilledFields.has(item.field) ||
+        readControlValue(entry) !== item.aiValue
+      ) {
+        continue;
+      }
+      applyFieldRawValue(entry, item.beforeValue);
+      if (item.beforeWasAi) {
+        aiFilledFields.add(item.field);
+        setAiMarker(entry, true);
+      } else {
+        aiFilledFields.delete(item.field);
+        setAiMarker(entry, false);
+      }
+      restored += 1;
+    }
+    draftRevision += 1;
+    sync();
+    form.dispatchEvent?.(new Event("change"));
+    emitDraftChange();
+    return restored > 0;
+  }
+
+  const draftBridge = {
+    getDraftSnapshot,
+    applyAiPatch,
+    acceptAiSuggestion,
+    undoLastAiPatch,
+    hasAiUndo: () => aiUndoStack.length > 0,
+    subscribe(listener) {
+      draftSubscribers.add(listener);
+      return () => draftSubscribers.delete(listener);
+    },
+  };
+
   form.addEventListener("input", clearInvalid);
   return {
     form,
@@ -1031,6 +1324,7 @@ function buildForm(make, tool, role, initial, options) {
     prepareForm,
     clearInvalid,
     markInvalid,
+    draftBridge,
     selectIntakeMode(mode) {
       if (locked || simple) return;
       switchIntakeMode(mode);
@@ -1420,11 +1714,13 @@ export function renderWrite(
     prepareForm,
     clearInvalid,
     markInvalid,
+    draftBridge,
     selectIntakeMode,
   } =
     tool === "import_stories"
       ? buildBatchForm(make, options)
       : buildForm(make, tool, role, initial, { ...options, account });
+  if (draftBridge) options.onDraftBridge?.(draftBridge);
   const inline = make("section", "", "daily-write-inline");
   inline.hidden = true;
   const dialog = make("dialog", "", "write-modal daily-write-dialog");
@@ -1984,5 +2280,5 @@ export function renderWrite(
   } catch (error) {
     showError(error, "无法读取当前标签页的操作编号。");
   }
-  return { prefill, selectIntakeMode };
+  return { prefill, selectIntakeMode, draftBridge };
 }

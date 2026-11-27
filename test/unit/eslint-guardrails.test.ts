@@ -35,7 +35,7 @@ function createFixtureChecks() {
   const eslint = new ESLint({
     cwd,
     overrideConfig: {
-      files: ["src/**/*.ts"],
+      files: ["src/**/*.ts", "scripts/**/*.ts"],
       languageOptions: {
         parserOptions: { projectService: false, programs: [program] },
       },
@@ -134,6 +134,48 @@ describe("WP-00 实际 ESLint 配置自检", () => {
       "src/services/check.ts",
       'export type { ProbeWriteOptions } from "../api/internal/probe-transport.ts";',
       "import/no-restricted-paths",
+    ],
+    [
+      "普通服务直接导入 AI 内部 HTTP 传输",
+      "src/services/check.ts",
+      'import "./ai/internal/http-transport.ts";',
+      "import/no-restricted-paths",
+    ],
+    [
+      "服务端适配器直接导入 AI 内部 HTTP 传输",
+      "src/adapters/server/check.ts",
+      'import "../../services/ai/internal/http-transport.ts";',
+      "import/no-restricted-paths",
+    ],
+    [
+      "API 层直接导入 AI 内部 HTTP 传输",
+      "src/api/check.ts",
+      'import "../services/ai/internal/http-transport.ts";',
+      "import/no-restricted-paths",
+    ],
+    [
+      "独立脚本直接导入 AI 内部 HTTP 传输",
+      "scripts/check.ts",
+      'import "../src/services/ai/internal/http-transport.ts";',
+      "import/no-restricted-paths",
+    ],
+    [
+      "AI 服务层（非 internal）直接 fetch",
+      "src/services/ai/check.ts",
+      'export const ping = () => fetch("https://offline.test");',
+      "no-restricted-globals",
+    ],
+    [
+      "AI 内部传输创建 WebSocket",
+      "src/services/ai/internal/check.ts",
+      'export const ws = () => new WebSocket("wss://offline.test");',
+      "no-restricted-globals",
+    ],
+    [
+      "AI 内部传输导入 child_process",
+      "src/services/ai/internal/check.ts",
+      'import "node:child_process";',
+      "no-restricted-imports",
     ],
     [
       "API 门面再导出原始传输",
@@ -605,6 +647,11 @@ export function render(clock: Clock) {
     [
       "API 内部允许内置 fetch",
       "src/api/internal/check.ts",
+      "export function send(url: URL) { return fetch(url); }",
+    ],
+    [
+      "AI 内部受控传输允许内置 fetch",
+      "src/services/ai/internal/check.ts",
       "export function send(url: URL) { return fetch(url); }",
     ],
     [
