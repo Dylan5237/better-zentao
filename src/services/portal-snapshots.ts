@@ -10,6 +10,9 @@ const report = z.looseObject({
   ok: z.literal(true),
   completeness: z.enum(["complete", "partial"]),
 });
+const gapList = z.object({
+  gaps: z.array(z.object({ reason: z.string() })).optional(),
+});
 const row = z.object({ savedAt: z.int(), report });
 type Snapshot = z.infer<typeof row>;
 const probeRow = z.object({
@@ -42,9 +45,20 @@ function response(entry: Snapshot, fromCache: boolean, retained = false) {
   };
 }
 
+function hasPermissionGap(result: unknown): boolean {
+  const parsed = gapList.safeParse(result);
+  if (!parsed.success || !parsed.data.gaps) return false;
+  return parsed.data.gaps.some(
+    ({ reason }) =>
+      reason.includes("PERMISSION_DENIED") ||
+      reason.includes("没有该迭代的查看权限"),
+  );
+}
+
 export interface PortalSnapshotOptions {
   readonly ttlMs?: number;
   readonly bypassTools?: ReadonlySet<string>;
+  readonly disableReportCache?: boolean;
   readonly failClosedOnPartial?: boolean;
 }
 
@@ -57,10 +71,12 @@ export function createPortalSnapshots(
 ) {
   const effectiveTtlMs = options.ttlMs ?? ttlMs;
   const bypassTools = options.bypassTools;
+  const disableReportCache = options.disableReportCache === true;
   const failClosedOnPartial = options.failClosedOnPartial === true;
   const inFlight = new Map<string, Promise<unknown>>();
   let probe: Promise<z.infer<typeof probeRow>> | undefined;
   let generation = 0;
+  let aclGeneration = 0;
 
   function load<T>(key: string, schema: z.ZodType<T>): T | undefined {
     try {
@@ -102,13 +118,27 @@ export function createPortalSnapshots(
     fetchReport: () => Promise<unknown>,
     configRevision = "",
   ) {
-    if (bypassTools?.has(tool)) {
+    if (disableReportCache || bypassTools?.has(tool)) {
       if (mode === "cached") return { ok: false };
+      const aclStamp = aclGeneration;
       try {
         const result = await fetchReport();
         const parsed = report.safeParse(result);
         if (parsed.success && parsed.data.completeness === "partial") {
           invalidate();
+          if (disableReportCache && hasPermissionGap(result)) {
+            aclGeneration++;
+            throw new BztError(
+              "PERMISSION_DENIED",
+              "当前账号无权查看所请求的禅道数据。",
+            );
+          }
+        }
+        if (disableReportCache && aclGeneration !== aclStamp) {
+          throw new BztError(
+            "PERMISSION_DENIED",
+            "上游权限已变更，请重新读取。",
+          );
         }
         return result;
       } catch (error) {
@@ -118,7 +148,8 @@ export function createPortalSnapshots(
             error.code === "PERMISSION_DENIED" ||
             error.code === "NOT_FOUND")
         ) {
-          // 授权优先于缓存：直读对象被明确拒绝或不可见时，立即失效该用户已缓存的聚合报表。
+          // 授权优先于缓存：直读对象或报表被明确拒绝或不可见时，立即失效缓存并推进权限代次。
+          aclGeneration++;
           invalidate();
         }
         throw error;

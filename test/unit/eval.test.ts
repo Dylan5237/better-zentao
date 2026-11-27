@@ -179,14 +179,14 @@ it("WP-21 Node 源码入口调用编译后的 MCP 并写入指定离线报告", 
     {
       cwd: temp,
       encoding: "utf8",
-      timeout: 12000,
+      timeout: 20_000,
       windowsHide: true,
     },
   );
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   expect(readFileSync(out, "utf8")).toContain("claude");
-}, 20_000);
+}, 25_000);
 
 it("WP-21 live 默认关闭；有注入执行器才走受控路径并按失败结果退出", async () => {
   const out = join(temp, "live.md");

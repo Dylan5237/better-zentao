@@ -188,7 +188,7 @@ it("SRV-ISO-03 同账号第二会话提交写入后，迟到报表不恢复旧�
   expectReport(await writer.call(report), story.title);
 });
 
-it("SRV-ISO-03 报表到短 TTL 后重新读取，直接详情在 TTL 内也向上游验证", async () => {
+it("SRV-ISO-03 集中端报表与详情均向上游实时验证，不返回未校验旧报表", async () => {
   const client = browser(
     await fixture.start({ cache: { reportTtlSeconds: 2 } }),
   );
@@ -203,13 +203,15 @@ it("SRV-ISO-03 报表到短 TTL 后重新读取，直接详情在 TTL 内也向�
   story.title = "fixture-upstream-changed-title";
   story.spec = `<h3>本次实现范围</h3><p>${story.title}</p>`;
   fixture.advance(1000);
+  const cached = await client.call({ ...report, readMode: "cached" });
+  expect(JSON.stringify(cached.body)).not.toContain(initialTitle);
   const reportReads = upstream.requests.filter(
     ({ path }) => path === reportPath,
   ).length;
-  expectReport(await client.call(report), initialTitle);
+  expectReport(await client.call(report), story.title);
   expect(
-    upstream.requests.filter(({ path }) => path === reportPath),
-  ).toHaveLength(reportReads);
+    upstream.requests.filter(({ path }) => path === reportPath).length,
+  ).toBeGreaterThan(reportReads);
   const detailReads = upstream.requests.filter(
     ({ path }) => path === storyPath,
   ).length;
@@ -219,12 +221,6 @@ it("SRV-ISO-03 报表到短 TTL 后重新读取，直接详情在 TTL 内也向�
   expect(
     upstream.requests.filter(({ path }) => path === storyPath),
   ).toHaveLength(detailReads + 1);
-
-  fixture.advance(1001);
-  expectReport(await client.call(report), story.title);
-  expect(
-    upstream.requests.filter(({ path }) => path === reportPath).length,
-  ).toBeGreaterThan(reportReads);
 });
 
 it("SRV-ISO-03 缓存已预热时上游 403 也淘汰旧报表，并阻止直接详情回退", async () => {
@@ -254,6 +250,78 @@ it("SRV-ISO-03 缓存已预热时上游 403 也淘汰旧报表，并阻止直接
   expectPermissionDenied(deniedDetail);
   expect(JSON.stringify(deniedDetail.body)).not.toContain(initialTitle);
   expect((await client.send("/api/session")).status).toBe(200);
+});
+
+it.each(["cached", "default"])(
+  "SRV-ISO-03 上游 ACL 撤销后直查 query_stories（%s）不返回旧报表",
+  async (readMode) => {
+    const client = browser(await fixture.start());
+    await login(client);
+    const upstream = fixture.upstream();
+    const { initialTitle } = upstream.instances.instanceA;
+    expectReport(await client.call(report), initialTitle);
+
+    upstream.fail("instanceA", "alice", reportPath, 403);
+    const result = await client.call({ ...report, readMode });
+
+    expect.soft(JSON.stringify(result.body)).not.toContain(initialTitle);
+    if (readMode === "default") expectPermissionDenied(result);
+  },
+);
+
+it.each(["cached", "default"])(
+  "SRV-LIFE-02 上游 Token 撤销后直查 query_stories（%s）不返回旧报表",
+  async (readMode) => {
+    const client = browser(await fixture.start());
+    await login(client);
+    const upstream = fixture.upstream();
+    const { initialTitle } = upstream.instances.instanceA;
+    expectReport(await client.call(report), initialTitle);
+
+    upstream.fail("instanceA", "alice", reportPath, 401);
+    const result = await client.call({ ...report, readMode });
+
+    expect.soft(JSON.stringify(result.body)).not.toContain(initialTitle);
+    if (readMode === "default") {
+      expect.soft(result.status).toBe(401);
+      expect.soft(result.body).toHaveProperty("code", "AUTH_FAILED");
+      const session = await client.send("/api/session");
+      expect(session.status).toBe(401);
+      expect(session.body).toHaveProperty("code", "AUTH_FAILED");
+    }
+  },
+);
+
+it("SRV-ISO-03 query_stories 在途时上游撤销 ACL，迟到报表不返回也不留给缓存读取", async () => {
+  const client = browser(await fixture.start());
+  await login(client);
+  const upstream = fixture.upstream();
+  const { initialTitle } = upstream.instances.instanceA;
+  const slow = upstream.pauseNextDetail();
+  const pending = client.call(report);
+  try {
+    await Promise.race([
+      slow.started,
+      pending.then(() => {
+        throw new Error("在途报表提前结束，未进入假禅道暂停点。");
+      }),
+    ]);
+    upstream.fail("instanceA", "alice", reportPath, 403);
+    const before = upstream.requests.length;
+    // 改用显式产品筛选，让另一条报表请求实际观察到同一上游端点的拒绝。
+    await client.call({ ...report, input: { product: "29", limit: 1 } });
+    expect(upstream.requests.slice(before)).toContainEqual(
+      expect.objectContaining({ account: "alice", path: reportPath }),
+    );
+  } finally {
+    slow.release();
+    await pending;
+  }
+
+  const lateReport = await pending;
+  const cached = await client.call({ ...report, readMode: "cached" });
+  expect.soft(JSON.stringify(lateReport.body)).not.toContain(initialTitle);
+  expect(JSON.stringify(cached.body)).not.toContain(initialTitle);
 });
 
 it("SRV-OP-01 未执行预览绑定会话，已派发回执只对原主体跨重启可读", async () => {

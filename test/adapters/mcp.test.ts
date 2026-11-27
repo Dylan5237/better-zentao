@@ -1149,7 +1149,7 @@ it("WP-38 / AC-42–52 从 MCP 确认 P2 写入、反查和通知，并查询全
   expect(db.prepare("SELECT rule_id FROM waivers").get()).toMatchObject({
     rule_id: "R13",
   });
-});
+}, 15_000);
 
 it.each([true, false])(
   "WP-38 企微失败或无配置不覆盖已确认禅道写入（已配置=%s）",

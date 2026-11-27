@@ -215,6 +215,7 @@ export function createServerRuntime(options: ServerRuntimeOptions) {
       {
         ttlMs: reportTtlMs,
         bypassTools: bypassCacheTools,
+        disableReportCache: true,
         failClosedOnPartial: true,
       },
     );
