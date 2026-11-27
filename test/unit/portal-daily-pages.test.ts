@@ -265,8 +265,51 @@ describe("CR-002 WEB-03 原型需求工作流", () => {
     ).toBeTruthy();
     expect(call).toHaveBeenCalledWith(
       "query_stories",
-      expect.objectContaining({ type: "story", role: "raised", who: "design" }),
+      expect.objectContaining({
+        type: "story",
+        role: "raised",
+        who: "design",
+        limit: 100,
+      }),
     );
+  });
+
+  it("P1-1 FB 提需求页超过 20 条记录时不静默缩减，全部可达", async () => {
+    const manyStories = Array.from({ length: 25 }, (_, i) => ({
+      ...story,
+      id: 200 + i,
+      title: `反馈需求 ${i + 1}`,
+    }));
+    const call = vi.fn<Call>().mockImplementation(async (_tool, input) => {
+      if (input.type === "requirement")
+        return result({ items: [], countsByProgress: {} });
+      return result({
+        items: manyStories,
+        countsByProgress: { 未就绪: 25 },
+        total: 25,
+        hasMore: false,
+      });
+    });
+    const ctx = context(call, ["query_stories", "create_story"]);
+    ctx.role.id = "FB";
+    const root = new ElementStub("main");
+    await renderIntake(root, ctx);
+    expect(call).toHaveBeenCalledWith("query_stories", {
+      type: "requirement",
+      unlinked: true,
+      role: "raised",
+      who: "design",
+      limit: 100,
+    });
+    expect(call).toHaveBeenCalledWith("query_stories", {
+      type: "story",
+      status: ["all"],
+      role: "raised",
+      who: "design",
+      limit: 100,
+    });
+    expect(root.textContent).toContain("反馈需求 1");
+    expect(root.textContent).toContain("反馈需求 25");
   });
 
   it("按 v11 展示九步标准流转图并跳转实际业务入口", async () => {
@@ -363,27 +406,123 @@ describe("CR-002 WEB-03 原型需求工作流", () => {
       expect(allTools.query_stories.input.safeParse(input).success).toBe(true);
   });
 
-  it("从快捷入口直接打开全部研发需求及阶段筛选", async () => {
-    const call = vi
-      .fn<Call>()
-      .mockResolvedValue(
-        result({ items: [story], countsByProgress: { 未就绪: 1 } }),
-      );
+  it("从快捷入口直接打开全部研发需求及阶段筛选，并支持分页翻页", async () => {
+    const call = vi.fn<Call>().mockResolvedValue(
+      result({
+        items: [story],
+        countsByProgress: { 未就绪: 25 },
+        page: 1,
+        pageSize: 20,
+        total: 25,
+        hasMore: true,
+      }),
+    );
     const root = new ElementStub("main");
     await renderStories(root, context(call, ["query_stories"]), {
       tab: "all-stories",
     });
     expect(call).toHaveBeenCalledExactlyOnceWith("query_stories", {
       status: ["all"],
-      limit: 100,
+      page: 1,
+      limit: 20,
     });
     expect(root.find((node) => node.tagName === "table")).toBeTruthy();
     expect(
-      button(root, "全部需求台账 (1)").attributes.get("aria-pressed"),
+      button(root, "全部需求台账 (25)").attributes.get("aria-pressed"),
     ).toBe("true");
     expect(
       root.find((node) => node.tagName === "select").parent?.parent?.hidden,
     ).toBe(false);
+    await button(root, "下一页").emit("click");
+    expect(call).toHaveBeenLastCalledWith("query_stories", {
+      status: ["all"],
+      page: 2,
+      limit: 20,
+    });
+
+    // P1-2：关键词检索透传后端 query_stories.keyword 并重置到第 1 页（跨页命中）
+    const searchInput = root.find(
+      (node) =>
+        node.tagName === "input" &&
+        node.attributes.get("aria-label") === "检索当前台账结果",
+    );
+    call.mockResolvedValueOnce(
+      result({
+        items: [{ ...story, id: 99, title: "第2页目标需求" }],
+        countsByProgress: { 未就绪: 1 },
+        page: 1,
+        pageSize: 20,
+        total: 1,
+        hasMore: false,
+      }),
+    );
+    searchInput.value = "#99";
+    await searchInput.emit("input");
+    expect(call).toHaveBeenLastCalledWith("query_stories", {
+      status: ["all"],
+      keyword: "#99",
+      page: 1,
+      limit: 20,
+    });
+    expect(root.textContent).toContain("第2页目标需求");
+
+    // 无结果空态与清空恢复
+    call.mockResolvedValueOnce(
+      result({
+        items: [],
+        countsByProgress: {},
+        page: 1,
+        pageSize: 20,
+        total: 0,
+        hasMore: false,
+      }),
+    );
+    searchInput.value = "不存在的关键词";
+    await searchInput.emit("input");
+    expect(call).toHaveBeenLastCalledWith("query_stories", {
+      status: ["all"],
+      keyword: "不存在的关键词",
+      page: 1,
+      limit: 20,
+    });
+
+    const clearBtn = root.find((node) => node.className === "ledger-clear-btn");
+    call.mockResolvedValueOnce(
+      result({
+        items: [story],
+        countsByProgress: { 未就绪: 25 },
+        page: 1,
+        pageSize: 20,
+        total: 25,
+        hasMore: true,
+      }),
+    );
+    await clearBtn.emit("click");
+    expect(call).toHaveBeenLastCalledWith("query_stories", {
+      status: ["all"],
+      page: 1,
+      limit: 20,
+    });
+  });
+
+  it("设计人员（DS）打开提需求页时仅查询指派给自己的待关联用户需求", async () => {
+    const call = vi
+      .fn<Call>()
+      .mockResolvedValue(result({ items: [], countsByProgress: {} }));
+    const ctx = context(call, ["query_stories", "create_story"]);
+    ctx.role.id = "DS";
+    const root = new ElementStub("main");
+    await renderIntake(root, ctx);
+    expect(call).toHaveBeenCalledExactlyOnceWith(
+      "query_stories",
+      expect.objectContaining({
+        type: "requirement",
+        unlinked: true,
+        role: "assigned",
+        page: 1,
+        limit: 20,
+      }),
+    );
   });
 
   it("详情抽屉展示服务端进度、实现范围和可复制的真实卡片", async () => {

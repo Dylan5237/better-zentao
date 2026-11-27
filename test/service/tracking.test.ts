@@ -810,6 +810,138 @@ it("query_stories 可组合产品、模块、计划、关键字、人员、角�
     ).toEqual([]);
 });
 
+it("query_stories 支持 page 与 limit 分页，并返回 total 和 hasMore", async () => {
+  const rows = [31, 32, 33].map((id) => ({
+    ...story,
+    id,
+    title: `需求 ${id}`,
+  }));
+  const { service } = setup({ stories: rows });
+  const page1 = queryStoriesOutputSchema.parse(
+    await service.queryStories({ product: "29", page: 1, limit: 2 }),
+  );
+  expect(page1.data.items.map((item) => item.id)).toEqual([31, 32]);
+  expect(page1.data).toMatchObject({
+    page: 1,
+    pageSize: 2,
+    total: 3,
+    hasMore: true,
+  });
+  expect(page1.truncated).toBe(true);
+
+  const page2 = queryStoriesOutputSchema.parse(
+    await service.queryStories({ product: "29", page: 2, limit: 2 }),
+  );
+  expect(page2.data.items.map((item) => item.id)).toEqual([33]);
+  expect(page2.data).toMatchObject({
+    page: 2,
+    pageSize: 2,
+    total: 3,
+    hasMore: false,
+  });
+  expect(page2.truncated).toBeUndefined();
+
+  // P1-2：keyword 跨页匹配编号、模块或反馈方，重置后第 1 页即可命中原第 2 页记录
+  const byId = queryStoriesOutputSchema.parse(
+    await service.queryStories({
+      product: "29",
+      keyword: "#33",
+      page: 1,
+      limit: 2,
+    }),
+  );
+  expect(byId.data.items.map((item) => item.id)).toEqual([33]);
+  expect(byId.data).toMatchObject({ page: 1, total: 1, hasMore: false });
+});
+
+it("DS 用户需求权限边界：query_stories 与 get_story_progress(requirementId) 仅限指派给本人，不误伤 storyId", async () => {
+  const mineReq = {
+    ...story,
+    id: 501,
+    type: "requirement" as const,
+    title: "指派给本人的用户需求",
+    assignedTo: "dev",
+    executions: [],
+    linkStories: "31",
+  };
+  const otherReq = {
+    ...story,
+    id: 502,
+    type: "requirement" as const,
+    title: "指派给他人的用户需求",
+    assignedTo: "bob",
+    executions: [],
+    linkStories: "31",
+  };
+  const { service } = setup({
+    stories: [story],
+    requirements: [mineReq, otherReq],
+  });
+  const list = queryStoriesOutputSchema.parse(
+    await service.queryStories({
+      product: "29",
+      type: "requirement",
+      role: "assigned",
+      who: "dev",
+    }),
+  );
+  expect(list.data.items.map((item) => item.id)).toEqual([501]);
+
+  const ownDetail = await service.getStoryProgress(
+    { requirementId: 501 },
+    { requirementAssignedToMe: true },
+  );
+  expect(ownDetail.data).toMatchObject({ story: { id: 31 } });
+
+  await expect(
+    service.getStoryProgress(
+      { requirementId: 502 },
+      { requirementAssignedToMe: true },
+    ),
+  ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+  // 不误限制研发需求 storyId 的正常查询
+  const storyDetail = await service.getStoryProgress(
+    { storyId: 31 },
+    { requirementAssignedToMe: true },
+  );
+  expect(storyDetail.data).toMatchObject({ story: { id: 31 } });
+});
+
+it("DS 按 requirementId 查询在详情读取失败时即使存在历史 sourceLinks 也必须 fail-closed 拒绝", async () => {
+  const localStore = openLocalStore({
+    dbPath: ":memory:",
+    baseUrl,
+    account: "dev",
+    clock,
+  });
+  localStore.sourceLinks.upsert({
+    origin: "local",
+    verifiedAt: null,
+    fromType: "requirement",
+    fromId: "502",
+    toType: "story",
+    toId: "31",
+    relation: "links",
+  });
+  const { service } = setup({
+    stories: [story],
+    requirements: [],
+    localStore,
+    detailStatus: { 502: 503 },
+  });
+  await expect(
+    service.getStoryProgress(
+      { requirementId: 502 },
+      { requirementAssignedToMe: true },
+    ),
+  ).rejects.toMatchObject({ code: "ZENTAO_UNAVAILABLE" });
+  // 非 DS 角色仍保留原有历史 sourceLinks 兜底口径
+  const fallback = await service.getStoryProgress({ requirementId: 502 });
+  expect(fallback.data).toMatchObject({ story: { id: 31 } });
+  localStore.close();
+});
+
 it("N5/N6 较长文档保留可用内容，缺范围提示 R05，卡片不预计过去日期", async () => {
   const designRef = "章节：2.1。".repeat(400);
   const verify = "可以搜索。".repeat(75);

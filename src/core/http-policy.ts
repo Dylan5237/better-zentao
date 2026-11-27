@@ -34,7 +34,7 @@ export function createPartitionedReadPool(options: PartitionedReadPoolOptions) {
       perInstanceLimit: concurrencySetting,
       perUserLimit: concurrencySetting,
       authReserve: concurrencySetting,
-      maxQueueSize: concurrencySetting.default(64),
+      maxQueueSize: concurrencySetting.default(256),
     })
     .safeParse(options);
   if (!setting.success)

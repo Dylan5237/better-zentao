@@ -495,7 +495,15 @@ export async function renderIntake(container, ctx, initial = {}) {
   if (mode === "batchImport" && options.showBatch)
     writer?.selectIntakeMode?.(mode);
   let request = 0;
-  const pendingInput = { type: "requirement", unlinked: true, limit: 100 };
+  let currentPage = 1;
+  const pageSize = 20;
+  const isDs = ctx.role.id === "DS";
+  const pendingInput = {
+    type: "requirement",
+    unlinked: true,
+    ...(isDs ? { role: "assigned" } : {}),
+    limit: pageSize,
+  };
   async function load() {
     if (!ctx.current() || !side.isConnected || !can(ctx, "query_stories"))
       return;
@@ -521,7 +529,12 @@ export async function renderIntake(container, ctx, initial = {}) {
       const results = fb
         ? await Promise.allSettled([
             ctx
-              .call("query_stories", { ...pendingInput, ...raised })
+              .call("query_stories", {
+                type: "requirement",
+                unlinked: true,
+                ...raised,
+                limit: 100,
+              })
               .then(accepted),
             ctx
               .call("query_stories", {
@@ -535,10 +548,24 @@ export async function renderIntake(container, ctx, initial = {}) {
         : [
             {
               status: "fulfilled",
-              value: accepted(await ctx.call("query_stories", pendingInput)),
+              value: accepted(
+                await ctx.call("query_stories", {
+                  ...pendingInput,
+                  page: currentPage,
+                }),
+              ),
             },
           ];
       if (!current()) return;
+      if (!fb && results[0]?.status === "fulfilled") {
+        const first = results[0].value;
+        const totalItems = first.data.total ?? total(first);
+        const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+        if (currentPage > totalPages && !first.data.items.length) {
+          currentPage = totalPages;
+          return load();
+        }
+      }
       list.replaceChildren();
       let resultCount = 0;
       let partial = false;
@@ -567,7 +594,34 @@ export async function renderIntake(container, ctx, initial = {}) {
             prefill,
           });
         }
-        if (!fb) evidence(list, result);
+        if (!fb) {
+          const totalItems = result.data.total ?? total(result);
+          const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+          if (totalPages > 1 || currentPage > 1) {
+            const pager = put(list, "div", undefined, "daily-pager");
+            const prev = button(pager, "上一页", () => {
+              if (currentPage <= 1) return;
+              currentPage -= 1;
+              void load();
+            });
+            prev.disabled = currentPage <= 1;
+            put(
+              pager,
+              "span",
+              result.completeness === "partial"
+                ? `第 ${currentPage} / ${totalPages} 页（已读取 ${totalItems} 条，数据不完整）`
+                : `第 ${currentPage} / ${totalPages} 页（共 ${totalItems} 条）`,
+              "daily-pager-info",
+            );
+            const next = button(pager, "下一页", () => {
+              if (currentPage >= totalPages) return;
+              currentPage += 1;
+              void load();
+            });
+            next.disabled = currentPage >= totalPages;
+          }
+          evidence(list, result);
+        }
       }
       if (!partial) {
         count.replaceChildren();
@@ -1168,8 +1222,11 @@ export async function renderStories(container, ctx, initial = {}) {
   const known = new Set([...progressOptions, ...(filter ? [filter] : [])]);
   for (const name of known) put(select, "option", name).value = name;
   select.value = filter;
+  let ledgerPage = 1;
+  const ledgerPageSize = 20;
   select.addEventListener("change", () => {
     filter = select.value;
+    ledgerPage = 1;
     saveState();
     return load();
   });
@@ -1185,51 +1242,41 @@ export async function renderStories(container, ctx, initial = {}) {
     undefined,
     "table-wrap vp-table-scroll",
   );
+  const ledgerPager = put(ledgerPanel, "div", undefined, "daily-pager");
+  ledgerPager.hidden = true;
   const workflow = put(body, "div", undefined, "daily-flow");
   flowChart(workflow, ctx);
   let ledgerResult;
   let finishPending;
 
   function setKeyword() {
-    keyword = search.value.trim().toLowerCase();
+    const nextKeyword = search.value.trim();
     clear.hidden = !search.value;
-    if (ledgerResult) showLedger();
+    if (nextKeyword === keyword) return;
+    keyword = nextKeyword;
+    ledgerPage = 1;
+    if (active === "all-stories") void load();
   }
   search.addEventListener("input", setKeyword);
 
   function showLedger() {
     const { items } = ledgerResult.data;
-    const checked = keyword.trim().toLowerCase();
-    const filtered = checked
-      ? items.filter((item) =>
-          [
-            String(item.id),
-            `#${item.id}`,
-            item.title,
-            item.module?.path,
-            item.feedbackBy,
-          ].some((value) => value?.toLowerCase().includes(checked)),
-        )
-      : items;
     tableWrap.replaceChildren();
     ledger(
       tableWrap,
       ctx,
-      filtered,
+      items,
       ledgerResult.completeness !== "partial" && !ledgerResult.truncated,
       keyword || filter
         ? () => {
             search.value = "";
             keyword = "";
             clear.hidden = true;
-            if (filter) {
-              filter = "";
-              select.value = "";
-              saveState();
-              void load();
-            } else {
-              showLedger();
-            }
+            filter = "";
+            select.value = "";
+            ledgerPage = 1;
+            saveState();
+            void load();
           }
         : undefined,
     );
@@ -1301,12 +1348,24 @@ export async function renderStories(container, ctx, initial = {}) {
         await ctx.call("query_stories", {
           status: ["all"],
           ...(board
-            ? { category: "design" }
-            : filter && { progress: [filter] }),
-          limit: 100,
+            ? { category: "design", limit: 100 }
+            : {
+                ...(filter && { progress: [filter] }),
+                ...(keyword && { keyword }),
+                page: ledgerPage,
+                limit: ledgerPageSize,
+              }),
         }),
       );
       if (!current()) return;
+      if (!board) {
+        const totalItems = result.data.total ?? total(result);
+        const totalPages = Math.max(1, Math.ceil(totalItems / ledgerPageSize));
+        if (ledgerPage > totalPages && !result.data.items.length) {
+          ledgerPage = totalPages;
+          return load();
+        }
+      }
       status.replaceChildren();
       statusOf(status, result);
       const { items, countsByProgress } = result.data;
@@ -1322,7 +1381,7 @@ export async function renderStories(container, ctx, initial = {}) {
           result.completeness !== "partial" && !result.truncated,
         );
       } else {
-        if (!filter) {
+        if (!filter && !keyword) {
           const allCount =
             result.completeness === "partial" ? undefined : total(result);
           choose.controls.get("all-stories").textContent =
@@ -1339,6 +1398,34 @@ export async function renderStories(container, ctx, initial = {}) {
         }
         ledgerResult = result;
         showLedger();
+        ledgerPager.replaceChildren();
+        const totalItems = result.data.total ?? total(result);
+        const totalPages = Math.max(1, Math.ceil(totalItems / ledgerPageSize));
+        if (totalPages > 1 || ledgerPage > 1) {
+          ledgerPager.hidden = false;
+          const prev = button(ledgerPager, "上一页", () => {
+            if (ledgerPage <= 1) return;
+            ledgerPage -= 1;
+            void load();
+          });
+          prev.disabled = ledgerPage <= 1;
+          put(
+            ledgerPager,
+            "span",
+            result.completeness === "partial"
+              ? `第 ${ledgerPage} / ${totalPages} 页（已读取 ${totalItems} 条，数据不完整）`
+              : `第 ${ledgerPage} / ${totalPages} 页（共 ${totalItems} 条）`,
+            "daily-pager-info",
+          );
+          const next = button(ledgerPager, "下一页", () => {
+            if (ledgerPage >= totalPages) return;
+            ledgerPage += 1;
+            void load();
+          });
+          next.disabled = ledgerPage >= totalPages;
+        } else {
+          ledgerPager.hidden = true;
+        }
         evidence(status, result);
       }
     } catch (error) {

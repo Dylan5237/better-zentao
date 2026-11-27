@@ -58,6 +58,27 @@ import { readGapReason } from "./read-gap.ts";
 import type { LocalStore } from "../core/store/index.ts";
 import { htmlFragments } from "../domain/html-fragments.ts";
 import { planOverlapDays } from "../domain/month.ts";
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (!items.length) return [];
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const current = nextIndex++;
+        const item = items[current];
+        if (item !== undefined) results[current] = await fn(item);
+      }
+    }),
+  );
+  return results;
+}
 import { designProgress, featureProgress } from "../domain/progress.ts";
 import { resolveStoryRoles } from "../domain/roles.ts";
 import { detectStage, summarizeStages, type Stage } from "../domain/stage.ts";
@@ -2205,29 +2226,38 @@ export class TrackingService {
       unlinked,
     } = input;
     const month = portalMonth ?? monthOf(input.month, state.today);
+    const page = input.page ?? 1;
     const limit = Math.min(100, input.limit ?? 20);
+    const offset = (page - 1) * limit;
     const filters: Record<string, unknown> = {
       ...input,
       type,
       status,
       month,
+      page,
       limit,
     };
     const finish = (items: StoryItem[]): QueryStoriesOutput => {
       const counts = new Map<string, number>();
       for (const { progress } of items)
         counts.set(progress.value, (counts.get(progress.value) ?? 0) + 1);
+      const pageItems = items.slice(offset, offset + limit);
+      const hasMore = items.length > offset + limit;
       const output = state.finish(
         {
-          items: items.slice(0, limit),
+          items: pageItems,
           countsByProgress: Object.fromEntries(counts),
+          page,
+          pageSize: limit,
+          total: items.length,
+          hasMore,
         },
         filters,
         "阶段依据关联工作记录；月份按计划与执行日期，反馈查询也纳入诉求登记日期；登记日期范围按业务时区。",
       );
       return {
         ...output,
-        ...(items.length > limit ? { truncated: true } : {}),
+        ...(hasMore ? { truncated: true } : {}),
       };
     };
     const [scope, me] = await Promise.all([
@@ -2260,12 +2290,16 @@ export class TrackingService {
           row.module == null ||
           row.module === scope.module.id) &&
         (!scope.plan || row.plan == null || row.plan.includes(scope.plan.id)) &&
+        (!(role === "assigned" && account && row.assignedTo !== undefined) ||
+          row.assignedTo === account) &&
         (status.includes("all") ||
           status.includes(row.status) ||
           (status.includes("unclosed") && row.status !== "closed")),
     );
-    const matched = await Promise.all(
-      candidates.map(async (row): Promise<StoryItem | undefined> => {
+    const matched = await mapWithConcurrency(
+      candidates,
+      4,
+      async (row): Promise<StoryItem | undefined> => {
         let story: StoryRow;
         let storyDetail: StoryDetail | undefined;
         if (type === "requirement") {
@@ -2316,17 +2350,26 @@ export class TrackingService {
           story = storyDetail ?? row;
         }
         if (scope.module && story.module !== scope.module.id) return undefined;
+        const people = await state.roles(story);
+        const { roles, intakes } = people;
+        const feedbackText = displayFeedback(
+          intakes[0]?.feedbackByText ??
+            story.feedbackBy ??
+            roles.feedback.original,
+        );
         if (
           keyword &&
           ![
+            String(story.id),
+            `#${story.id}`,
             story.title,
             story.keywords,
+            story.moduleTitle,
+            feedbackText,
             "spec" in story ? story.spec : undefined,
           ].some((value) => includesText(value, keyword))
         )
           return undefined;
-        const people = await state.roles(story);
-        const { roles, intakes } = people;
         const openedDates = [
           story.openedDate,
           ...intakes.map(({ createdAt }) => createdAt),
@@ -2431,14 +2474,14 @@ export class TrackingService {
         return !progress?.length || progress.includes(item.progress.value)
           ? item
           : undefined;
-      }),
+      },
     );
     return finish(matched.filter((item) => item !== undefined));
   }
 
   async getStoryProgress(
     raw: unknown,
-    { raisedByMe = false } = {},
+    { raisedByMe = false, requirementAssignedToMe = false } = {},
   ): Promise<GetStoryProgressOutput> {
     const input = parseInput(getStoryProgressInputSchema, raw);
     const { client, store } = this.options;
@@ -2472,7 +2515,7 @@ export class TrackingService {
       );
     }
     if (requirementId) {
-      const [detail, links] = await Promise.all([
+      const [detail, links, me] = await Promise.all([
         state.read(`requirement:${requirementId}`, async () => {
           const row = await getRequirementDetail(client, requirementId);
           if (row.story.id !== requirementId || row.story.deleted)
@@ -2485,7 +2528,17 @@ export class TrackingService {
         state.read(`sourceLinks:requirement:${requirementId}`, () =>
           store.sourceLinks.listFrom("requirement", String(requirementId)),
         ),
+        requirementAssignedToMe ? state.me() : undefined,
       ]);
+      if (requirementAssignedToMe) {
+        if (!me?.account || !detail)
+          throw new BztError(
+            "ZENTAO_UNAVAILABLE",
+            "无法确认该用户需求的指派归属，已拒绝返回关联结果。",
+          );
+        if (detail.story.assignedTo !== me.account)
+          throw new BztError("NOT_FOUND", "没有找到指派给本人的用户需求。");
+      }
       ids = numericIds([
         ...(detail?.story.linkStories ?? []),
         ...(detail?.relations ?? [])
