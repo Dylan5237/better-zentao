@@ -20,7 +20,7 @@ interface WriteClientState {
 
 const readClients = new WeakMap<
   ZentaoReadClient,
-  { read: ReadClientState; write: WriteClientState }
+  { read: ReadClientState; write: WriteClientState; revoke: () => void }
 >();
 
 export function registerReadClient(
@@ -32,7 +32,7 @@ export function registerReadClient(
   if (!baseUrl || !isIanaTimezone(timezone)) {
     throw new BztError("INVALID_INPUT", "禅道读取地址或时区不合法。");
   }
-  const { read, write, getProbeSender } = createZentaoHttp({
+  const { read, write, getProbeSender, revoke } = createZentaoHttp({
     ...config,
     baseUrl: baseUrl.href,
   });
@@ -45,7 +45,12 @@ export function registerReadClient(
       getProbeSender,
     },
     write: { http: { write } },
+    revoke,
   });
+}
+
+export function revokeReadClient(client: ZentaoReadClient): void {
+  readClients.get(client)?.revoke();
 }
 
 export function getReadClient(client: ZentaoReadClient): ReadClientState;

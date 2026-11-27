@@ -469,7 +469,7 @@ export default [
     },
   },
   {
-    files: ["src/adapters/web/server.ts"],
+    files: ["src/adapters/web/server.ts", "src/adapters/server/http.ts"],
     rules: {
       "no-restricted-imports": [
         "error",

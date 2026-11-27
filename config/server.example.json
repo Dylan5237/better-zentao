@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "host": "127.0.0.1",
+  "port": 17330,
+  "externalOrigin": "https://bzt.internal.example",
+  "allowInsecureHttp": false,
+  "trustedProxies": ["127.0.0.1", "::1", "::ffff:127.0.0.1"],
+  "dataDir": "/var/lib/bzt",
+  "readOnly": true,
+  "session": {
+    "idleTimeoutMinutes": 480,
+    "absoluteTimeoutMinutes": 1440,
+    "maxSessions": 500,
+    "maxSessionsPerUser": 5
+  },
+  "cache": {
+    "reportTtlSeconds": 60
+  },
+  "http": {
+    "perInstanceConcurrency": 16,
+    "perUserConcurrency": 4,
+    "authReserve": 2
+  },
+  "notify": {
+    "enabled": false
+  },
+  "instances": {
+    "primary": {
+      "name": "主禅道实例（示例）",
+      "baseUrl": "https://zentao.internal.example",
+      "teamConfigPath": "/etc/bzt/team.primary.json",
+      "enabled": true
+    }
+  }
+}

@@ -99,9 +99,9 @@ const rolePages = {
   },
 } as const;
 
-type PortalRole = keyof typeof rolePages;
-type PageTool = (typeof rolePages)[PortalRole]["actions"][number];
-type PortalTool = PageTool | "confirm_operation" | "get_operation";
+export type PortalRole = keyof typeof rolePages;
+export type PageTool = (typeof rolePages)[PortalRole]["actions"][number];
+export type PortalTool = PageTool | "confirm_operation" | "get_operation";
 const snapshotTools = new Set<string>([
   ...personal,
   "get_team_work",
@@ -146,7 +146,7 @@ function denied(): never {
   throw new BztError("PERMISSION_DENIED", "当前职责无权执行该操作。");
 }
 
-async function dispatch(
+export async function dispatchPortalTool(
   w: Workbench,
   tool: PortalTool,
   raw: unknown,
@@ -483,7 +483,7 @@ export async function loginPortal(
 
     const call = runPortalAction(
       (tool, input, role, fresh, month) =>
-        dispatch(w, tool, input, role, fresh, month),
+        dispatchPortalTool(w, tool, input, role, fresh, month),
       loginAccount,
       readRoles,
       previews,

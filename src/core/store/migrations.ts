@@ -163,10 +163,20 @@ const P2_TABLES_SQL = `
   CREATE INDEX reschedules_story_at ON reschedules (story_id, at);
 `;
 
+const OWNER_META_SQL = `
+  CREATE TABLE store_meta (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    instance_hash TEXT NOT NULL,
+    account TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  ) STRICT;
+`;
+
 /** 迁移按 version 升序追加；已发布的迁移不得改名或改写。 */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "001-p1-tables", sql: P1_TABLES_SQL },
   { version: 2, name: "002-p2-tables", sql: P2_TABLES_SQL },
+  { version: 3, name: "003-store-owner-meta", sql: OWNER_META_SQL },
 ];
 
 const appliedRow = z.object({

@@ -24,11 +24,14 @@ import { normalizeZentaoBaseUrl } from "../core/base-url.ts";
 import { formatLocalDate } from "../core/calendar.ts";
 import type { ConfigEnv, TeamConfig } from "../core/config.ts";
 import { BztError } from "../core/errors.ts";
+import type { LocalStore } from "../core/store/index.ts";
 import {
   instanceHashOf,
   openLocalStore,
   sanitizeAccount,
 } from "../core/store/index.ts";
+import type { ZentaoReadClient } from "../api/client.ts";
+import type { TargetWriteCoordinator } from "./write-coordinator.ts";
 import { DecomposeService } from "./decompose.ts";
 import { ManagementService } from "./management.ts";
 import { NotifyService } from "./notify.ts";
@@ -96,6 +99,50 @@ async function assemble(
       "state.db",
     ),
   });
+  return assembleFromParts({
+    client,
+    viewer,
+    config,
+    stateDir: config.stateDir,
+    clock,
+    baseUrl,
+    store,
+    env,
+    logSink,
+  });
+}
+
+export interface ServerWorkbenchOptions {
+  readonly client: ZentaoReadClient;
+  readonly viewer: Awaited<ReturnType<typeof getCurrentUser>> | undefined;
+  readonly config: TeamConfig;
+  readonly stateDir: string;
+  readonly clock: () => number;
+  readonly baseUrl: string;
+  readonly store: LocalStore;
+  readonly env: ConfigEnv;
+  readonly logSink?: (line: string) => void;
+  readonly writeCoordinator?: TargetWriteCoordinator;
+  readonly assertBeforeDispatch?: () => void;
+}
+
+export function createServerWorkbench(options: ServerWorkbenchOptions) {
+  return assembleFromParts(options);
+}
+
+function assembleFromParts({
+  client,
+  viewer,
+  config,
+  stateDir,
+  clock,
+  baseUrl,
+  store,
+  env,
+  logSink,
+  writeCoordinator,
+  assertBeforeDispatch,
+}: ServerWorkbenchOptions) {
   const common = { client, config, clock, baseUrl, store };
   const directory = new DirectoryService({
     ...common,
@@ -126,6 +173,8 @@ async function assemble(
       }),
       channel: "mcp",
       instanceVersion,
+      writeCoordinator,
+      assertBeforeDispatch,
     });
   const history = createExecutor();
 
@@ -302,7 +351,7 @@ async function assemble(
     tracking,
     risk,
     schedule,
-    reportDir: resolve(config.stateDir, "reports"),
+    reportDir: resolve(stateDir, "reports"),
     close: () => store.close(),
     async createStory(input: unknown) {
       return new IntakeService(await forWrite()).createStory(input);
@@ -327,7 +376,20 @@ async function assemble(
     },
     async confirmOperation(input: ConfirmOperation) {
       const options = await forWrite();
+      let replay = false;
+      try {
+        const existing = store.operations.get(input.opId);
+        replay =
+          existing.executedAt !== null &&
+          (!input.resume ||
+            store.operationSteps
+              .list(input.opId)
+              .every(({ state }) => state === "done" || state === "skipped"));
+      } catch {
+        // 未知 opId 交由执行器统一校验并报错。
+      }
       const result = await options.executor.confirm(input);
+      if (replay) return result;
       new IntakeService(options).recordConfirmed(result.opId, result);
       new FlowService({
         ...options,

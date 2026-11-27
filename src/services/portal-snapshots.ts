@@ -10,6 +10,9 @@ const report = z.looseObject({
   ok: z.literal(true),
   completeness: z.enum(["complete", "partial"]),
 });
+const gapList = z.object({
+  gaps: z.array(z.object({ reason: z.string() })).optional(),
+});
 const row = z.object({ savedAt: z.int(), report });
 type Snapshot = z.infer<typeof row>;
 const probeRow = z.object({
@@ -42,14 +45,48 @@ function response(entry: Snapshot, fromCache: boolean, retained = false) {
   };
 }
 
+function accessGapCode(
+  result: unknown,
+): "PERMISSION_DENIED" | "NOT_FOUND" | undefined {
+  const parsed = gapList.safeParse(result);
+  if (!parsed.success || !parsed.data.gaps) return undefined;
+  if (
+    parsed.data.gaps.some(
+      ({ reason }) =>
+        reason.includes("PERMISSION_DENIED") ||
+        reason.includes("没有该迭代的查看权限"),
+    )
+  ) {
+    return "PERMISSION_DENIED";
+  }
+  if (parsed.data.gaps.some(({ reason }) => reason.includes("NOT_FOUND"))) {
+    return "NOT_FOUND";
+  }
+  return undefined;
+}
+
+export interface PortalSnapshotOptions {
+  readonly ttlMs?: number;
+  readonly bypassTools?: ReadonlySet<string>;
+  readonly disableReportCache?: boolean;
+  readonly failClosedOnPartial?: boolean;
+}
+
 export function createPortalSnapshots(
-  cache: Pick<CacheRepository, "get" | "set" | "pruneExpired" | "trimPrefix">,
+  cache: Pick<CacheRepository, "get" | "set" | "pruneExpired" | "trimPrefix"> &
+    Partial<Pick<CacheRepository, "delete">>,
   clock: () => number,
   sampleActivity: () => Promise<unknown>,
+  options: PortalSnapshotOptions = {},
 ) {
+  const effectiveTtlMs = options.ttlMs ?? ttlMs;
+  const bypassTools = options.bypassTools;
+  const disableReportCache = options.disableReportCache === true;
+  const failClosedOnPartial = options.failClosedOnPartial === true;
   const inFlight = new Map<string, Promise<unknown>>();
   let probe: Promise<z.infer<typeof probeRow>> | undefined;
   let generation = 0;
+  let aclGeneration = 0;
 
   function load<T>(key: string, schema: z.ZodType<T>): T | undefined {
     try {
@@ -64,9 +101,17 @@ export function createPortalSnapshots(
     try {
       const json = JSON.stringify(value);
       if (Buffer.byteLength(json) <= 2 * 1024 * 1024)
-        cache.set(key, json, ttlMs);
+        cache.set(key, json, effectiveTtlMs);
     } catch {
       // 本地缓存不可用时，仍可直接显示已取得的数据。
+    }
+  }
+
+  function evict(key: string) {
+    try {
+      cache.delete?.(key);
+    } catch {
+      // 淘汰失败不覆盖主错误。
     }
   }
   try {
@@ -83,8 +128,58 @@ export function createPortalSnapshots(
     fetchReport: () => Promise<unknown>,
     configRevision = "",
   ) {
+    if (disableReportCache || bypassTools?.has(tool)) {
+      if (mode === "cached") return { ok: false };
+      const aclStamp = aclGeneration;
+      try {
+        const result = await fetchReport();
+        const parsed = report.safeParse(result);
+        if (parsed.success && parsed.data.completeness === "partial") {
+          invalidate();
+          if (disableReportCache) {
+            const gapCode = accessGapCode(result);
+            if (gapCode === "PERMISSION_DENIED") {
+              aclGeneration++;
+              throw new BztError(
+                "PERMISSION_DENIED",
+                "当前账号无权查看所请求的禅道数据。",
+              );
+            }
+            if (gapCode === "NOT_FOUND") {
+              aclGeneration++;
+              throw new BztError(
+                "NOT_FOUND",
+                "所请求的对象不存在或当前账号无权查看。",
+              );
+            }
+          }
+        }
+        if (disableReportCache && aclGeneration !== aclStamp) {
+          throw new BztError(
+            "PERMISSION_DENIED",
+            "上游权限已变更，请重新读取。",
+          );
+        }
+        return result;
+      } catch (error) {
+        if (
+          error instanceof BztError &&
+          (error.code === "AUTH_FAILED" ||
+            error.code === "PERMISSION_DENIED" ||
+            error.code === "NOT_FOUND")
+        ) {
+          // 授权优先于缓存：直读对象或报表被明确拒绝或不可见时，立即失效缓存并推进权限代次。
+          aclGeneration++;
+          invalidate();
+        }
+        throw error;
+      }
+    }
     const key = prefix + hash([configRevision, role, tool, input]);
-    const old = load(key, row);
+    const loaded = load(key, row);
+    const old =
+      loaded && clock() - loaded.savedAt < effectiveTtlMs ? loaded : undefined;
+    if (loaded && !old) evict(key);
     if (old && mode !== "sync") return response(old, true);
     if (mode === "cached") return { ok: false };
     const pending = inFlight.get(key);
@@ -94,12 +189,18 @@ export function createPortalSnapshots(
       try {
         const result = await fetchReport();
         const parsed = report.safeParse(result);
-        if (
-          !parsed.success ||
-          (old?.report.completeness === "complete" &&
-            parsed.data.completeness === "partial")
-        ) {
+        if (!parsed.success) {
           return old ? response(old, true, true) : result;
+        }
+        if (
+          old?.report.completeness === "complete" &&
+          parsed.data.completeness === "partial"
+        ) {
+          if (failClosedOnPartial) {
+            evict(key);
+            return result;
+          }
+          return response(old, true, true);
         }
         const entry = { report: parsed.data, savedAt: clock() };
         if (generation === stamp) {
@@ -113,16 +214,18 @@ export function createPortalSnapshots(
         return response(entry, false);
       } catch (error) {
         if (
-          old &&
-          (!(error instanceof BztError) ||
-            ![
-              "AUTH_FAILED",
-              "PERMISSION_DENIED",
-              "INVALID_INPUT",
-              "NOT_FOUND",
-            ].includes(error.code))
-        )
-          return response(old, true, true);
+          error instanceof BztError &&
+          [
+            "AUTH_FAILED",
+            "PERMISSION_DENIED",
+            "INVALID_INPUT",
+            "NOT_FOUND",
+          ].includes(error.code)
+        ) {
+          evict(key);
+          throw error;
+        }
+        if (old) return response(old, true, true);
         throw error;
       }
     })();
@@ -138,6 +241,7 @@ export function createPortalSnapshots(
     role: string,
     acknowledge?: string,
     section = "workbench",
+    sampleOverride?: () => Promise<unknown>,
   ) {
     const key = "portal-activity-v1";
     const baselineKey = "portal-activity-base-v1:" + role + ":" + section;
@@ -146,7 +250,8 @@ export function createPortalSnapshots(
       probe ??= (async () => {
         const checkedAt = clock();
         try {
-          const current = { checkedAt, revision: hash(await sampleActivity()) };
+          const sampler = sampleOverride ?? sampleActivity;
+          const current = { checkedAt, revision: hash(await sampler()) };
           save(key, current);
           return current;
         } catch {
@@ -172,17 +277,24 @@ export function createPortalSnapshots(
     };
   }
 
+  function invalidate() {
+    generation++;
+    inFlight.clear();
+    try {
+      cache.trimPrefix(prefix, 0);
+    } catch {
+      // 缓存清理失败不能掩盖已经完成的禅道操作。
+    }
+  }
+
+  function aclVersion() {
+    return aclGeneration;
+  }
+
   return {
     read,
     check,
-    invalidate() {
-      generation++;
-      inFlight.clear();
-      try {
-        cache.trimPrefix(prefix, 0);
-      } catch {
-        // 缓存清理失败不能掩盖已经完成的禅道操作。
-      }
-    },
+    invalidate,
+    aclVersion,
   };
 }

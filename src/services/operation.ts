@@ -29,6 +29,10 @@ import type {
 } from "../core/store/index.ts";
 import { instanceHashOf } from "../core/store/index.ts";
 import { queryAll } from "../core/store/sqlite-support.ts";
+import type {
+  TargetWriteCoordinator,
+  WriteTarget,
+} from "./write-coordinator.ts";
 
 export type { OperationPlan } from "../contracts/operation.ts";
 
@@ -109,6 +113,10 @@ interface ExecutorOptions {
   clock: Clock;
   channel?: "mcp" | "cli" | undefined;
   instanceVersion?: string | undefined;
+  /** CR-008 §4.4：跨账号同目标写入协调器，可选注入。 */
+  writeCoordinator?: TargetWriteCoordinator | undefined;
+  /** CR-008 Gate C：派发写请求前的最终会话/授权校验钩子。 */
+  assertBeforeDispatch?: (() => void) | undefined;
 }
 
 const fingerprintSchema = targetSnapshot.omit({ spec: true }).extend({
@@ -293,13 +301,18 @@ function receiptStatus(
   return "not_executed";
 }
 
+/**
+ * CR-008 §4.4（F-09）：仅「发送前认证失败」是明确的明确拒绝；
+ * 派发后或发送阶段不明的 AUTH_FAILED 保留 unknown 检查点，禁止盲目重试。
+ */
 function rejectWrite(error: unknown): boolean {
-  return (
-    error instanceof BztError &&
-    (error.code === "ZENTAO_BUSINESS_ERROR" ||
-      error.code === "PERMISSION_DENIED" ||
-      error.code === "AUTH_FAILED")
-  );
+  if (!(error instanceof BztError)) return false;
+  if (
+    error.code === "ZENTAO_BUSINESS_ERROR" ||
+    error.code === "PERMISSION_DENIED"
+  )
+    return true;
+  return error.code === "AUTH_FAILED" && error.details?.phase === "pre_send";
 }
 
 export class OperationExecutor {
@@ -338,23 +351,25 @@ export class OperationExecutor {
     const opId = operationId(now);
     const expiresAt =
       now + this.options.config.write.planExpiresMinutes * 60_000;
-    this.store.operations.insert({
-      opId,
-      kind: plan.kind,
-      actor: this.store.location.account,
-      level,
-      inputHash: hash(JSON.stringify(plan)),
-      planJson: JSON.stringify({
-        instanceHash: this.store.location.instanceHash,
-        plan,
-        targets,
-      }),
-      status: "not_executed",
-      createdAt: now,
-      expiresAt,
-      executedAt: null,
-    });
-    try {
+    // CR-008 §4.4（F-08）：operations 与 operation_steps 单事务原子落盘，
+    // 崩溃时不会留下残缺半条计划。
+    this.store.transaction(() => {
+      this.store.operations.insert({
+        opId,
+        kind: plan.kind,
+        actor: this.store.location.account,
+        level,
+        inputHash: hash(JSON.stringify(plan)),
+        planJson: JSON.stringify({
+          instanceHash: this.store.location.instanceHash,
+          plan,
+          targets,
+        }),
+        status: "not_executed",
+        createdAt: now,
+        expiresAt,
+        executedAt: null,
+      });
       for (const [index, step] of plan.steps.entries()) {
         this.store.operationSteps.insert({
           opId,
@@ -369,10 +384,7 @@ export class OperationExecutor {
           error: null,
         });
       }
-    } catch (error) {
-      this.store.operations.delete(opId);
-      throw error;
-    }
+    });
     if (this.store.location.dbPath === ":memory:") {
       const history = memoryHistory.get(this.store) ?? [];
       history.unshift(opId);
@@ -569,7 +581,9 @@ export class OperationExecutor {
   }
 
   private busy(): BztError {
-    return new BztError("INVALID_INPUT", "本地操作正在执行，请稍后查询回执。");
+    return new BztError("INVALID_INPUT", "本地操作正在执行，请稍后查询回执。", {
+      conflict: true,
+    });
   }
 
   private checkExpiry(record: OperationRecord): void {
@@ -656,27 +670,58 @@ export class OperationExecutor {
           row.zentaoId === null &&
           repeatable.has(row.action)),
     );
-    await this.checkTargets(opId, targets, current, eligible, plan);
-    this.checkExpiry(record);
-    this.store.operations.updateStatus(opId, {
-      status: record.status,
-      executedAt: record.executedAt ?? this.options.clock(),
-    });
-    for (const row of eligible) {
-      const step = plan.steps[row.seq - 1];
-      if (!step) continue;
-      if (
-        step.fromStep !== undefined &&
-        this.store.operationSteps.get(opId, step.fromStep).state === "skipped"
-      ) {
-        this.store.operationSteps.update(opId, row.seq, { state: "skipped" });
-        continue;
+    // CR-008 §4.4：同一实例同目标「预检 → 写入 → 回读」串行化，
+    // 防止账号 A 与 B 同时通过预检后互相覆盖（F-08）。
+    const dispatch = async () => {
+      await this.checkTargets(opId, targets, current, eligible, plan);
+      this.checkExpiry(record);
+      this.options.assertBeforeDispatch?.();
+      this.store.operations.updateStatus(opId, {
+        status: record.status,
+        executedAt: record.executedAt ?? this.options.clock(),
+      });
+      for (const row of eligible) {
+        this.options.assertBeforeDispatch?.();
+        const step = plan.steps[row.seq - 1];
+        if (!step) continue;
+        if (
+          step.fromStep !== undefined &&
+          this.store.operationSteps.get(opId, step.fromStep).state === "skipped"
+        ) {
+          this.store.operationSteps.update(opId, row.seq, { state: "skipped" });
+          continue;
+        }
+        const request = this.resolveRequest(opId, row.seq, step);
+        if (!request) continue;
+        if (!(await this.runStep(request))) break;
       }
-      const request = this.resolveRequest(opId, row.seq, step);
-      if (!request) continue;
-      if (!(await this.runStep(request))) break;
-    }
+    };
+    const coordinator = this.options.writeCoordinator;
+    if (coordinator) {
+      const instanceHash = this.store.location.instanceHash;
+      const writeTargets = this.planWriteTargets(plan, eligible, rows);
+      await coordinator.withTargets(instanceHash, writeTargets, dispatch);
+    } else await dispatch();
     return this.finish(record, plan);
+  }
+
+  /** 提取本次可能派发写请求的既有目标键（创建步骤无 ID，不参与锁定）。 */
+  private planWriteTargets(
+    plan: OperationPlan,
+    eligible: OperationStepRecord[],
+    rows: OperationStepRecord[],
+  ): WriteTarget[] {
+    const targets = new Map<string, WriteTarget>();
+    const resolved = new Set<number>(eligible.map(({ seq }) => seq));
+    for (const row of rows) {
+      if (!resolved.has(row.seq)) continue;
+      const step = plan.steps[row.seq - 1];
+      if (!step || step.action === "read" || step.id === undefined) continue;
+      const id = step.id;
+      const key = `${step.type}:${id}`;
+      targets.set(key, { type: step.type, id });
+    }
+    return [...targets.values()];
   }
 
   private async checkTargets(

@@ -45,5 +45,15 @@ export function createZentaoAuth(login: () => Promise<string>) {
     if (current === rejected) current = undefined;
   }
 
-  return { getSession, invalidate };
+  /** ADR-22 Token-only：注入静态 Token，失败后由 invalidate 失效。 */
+  function seedSession(token: string): void {
+    if (current) return;
+    current = { token };
+  }
+
+  function clearSession(): void {
+    current = undefined;
+  }
+
+  return { getSession, invalidate, seedSession, clearSession };
 }

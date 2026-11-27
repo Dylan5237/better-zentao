@@ -6,6 +6,7 @@ import {
   readRetryDelaysMs,
   withInstanceWriteLock,
   withReadSlot,
+  type PartitionedReadPool,
 } from "../../core/http-policy.ts";
 import {
   httpLogIds,
@@ -29,7 +30,8 @@ const loginCredentials = z.object({
 export interface ZentaoHttpOptions {
   readonly baseUrl: string;
   readonly account: string;
-  readonly password: string;
+  /** 密码登录模式必填；Token-only 模式（传入 token）省略。 */
+  readonly password?: string;
   readonly clock: Clock;
   readonly env?: Readonly<{
     ZENTAO_TIMEOUT_MS?: string;
@@ -38,6 +40,138 @@ export interface ZentaoHttpOptions {
   readonly fetch?: typeof fetch;
   readonly sleep?: (ms: number) => Promise<void>;
   readonly logSink?: (line: string) => void;
+  /**
+   * ADR-22 Token-only 模式：持有静态 Token 而非密码。
+   * 401 时不自动重登，直接失效 Token 并上抛 AUTH_FAILED。
+   */
+  readonly token?: string;
+  /** Token-only 模式下遇上游 401 时触发，供服务端立即撤销会话。 */
+  readonly onAuthFailed?: () => void;
+  /** 发送前最终撤销检查（在取得写锁与异步等待之后、实际 fetch 之前调用）。 */
+  readonly isRevoked?: () => boolean;
+  /** 可选分区读取并发池（Server 1.0）。 */
+  readonly readPool?: PartitionedReadPool;
+  /** 分区并发池所需的实例哈希键。 */
+  readonly instanceHash?: string;
+}
+
+/** ADR-22：一次性换取禅道 Token，不保留密码。 */
+export async function exchangeZentaoToken(options: {
+  readonly baseUrl: string;
+  readonly account: string;
+  readonly password: string;
+  readonly clock: Clock;
+  readonly env?: Readonly<{
+    ZENTAO_TIMEOUT_MS?: string;
+    BZT_LOG_LEVEL?: string;
+  }>;
+  readonly logSink?: (line: string) => void;
+  readonly readPool?: PartitionedReadPool;
+  readonly instanceHash?: string;
+  readonly fetch?: typeof fetch;
+}): Promise<{ readonly token: string }> {
+  const credentials = loginCredentials.safeParse(options);
+  if (!credentials.success)
+    throw new BztError("INVALID_INPUT", "禅道账号和密码不能为空白。");
+  const normalized = normalizeZentaoBaseUrl(options.baseUrl);
+  if (!normalized) throw new BztError("INVALID_INPUT", "禅道基础地址不合法。");
+  const url = new URL(tokenPath.slice(1), normalized.href).href;
+  const timeoutMs = resolveZentaoTimeout(options.env);
+  const started = options.clock();
+  const perform = async () => {
+    const controller = new AbortController();
+    const expired = Promise.withResolvers<"timeout">();
+    const timer = setTimeout(() => {
+      expired.resolve("timeout");
+      controller.abort();
+    }, timeoutMs);
+    const exchange = async (): Promise<
+      | { kind: "ok"; status: number; text: string }
+      | { kind: "http-error"; status: number }
+      | { kind: "network" }
+    > => {
+      try {
+        const response = await (options.fetch ?? fetch)(url, {
+          method: "POST",
+          // SSRF 防线：凭据绝不随重定向转发（docs/06 §2.2）。
+          redirect: "error",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(credentials.data),
+          signal: controller.signal,
+        });
+        if (!response.ok || controller.signal.aborted) {
+          void response.body?.cancel().catch(() => {});
+          return { kind: "http-error", status: response.status };
+        }
+        return {
+          kind: "ok",
+          status: response.status,
+          text: await response.text(),
+        };
+      } catch {
+        return { kind: "network" };
+      }
+    };
+    const outcome = await Promise.race([exchange(), expired.promise]).finally(
+      () => clearTimeout(timer),
+    );
+    const status =
+      outcome === "timeout" || outcome.kind === "network" ? 0 : outcome.status;
+    try {
+      writeHttpLog(
+        {
+          method: "POST",
+          pathTemplate: tokenPath,
+          status,
+          durationMs: Math.max(0, options.clock() - started),
+        },
+        options.logSink,
+        options.env,
+      );
+    } catch {
+      // 日志输出失败不掩盖认证响应。
+    }
+    if (outcome === "timeout") {
+      throw new BztError("ZENTAO_TIMEOUT", "禅道认证请求超时。");
+    }
+    if (outcome.kind === "network") {
+      throw new BztError("ZENTAO_UNAVAILABLE", "无法连接禅道。");
+    }
+    if (outcome.kind === "http-error") {
+      if (outcome.status >= 400 && outcome.status < 500) throw authFailed();
+      throw new BztError("ZENTAO_UNAVAILABLE", "无法连接禅道。", {
+        status: outcome.status,
+      });
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(outcome.text);
+    } catch {
+      throw authFailed();
+    }
+    const parsed = z
+      .object({ token: z.string().refine((value) => value.trim() !== "") })
+      .safeParse(payload);
+    if (!parsed.success) throw authFailed();
+    // 校验 Fetch 实际发送的头值，无效 Token 不能进入后续业务请求。
+    if (
+      new Headers({ Token: parsed.data.token }).get("Token") !==
+      parsed.data.token
+    )
+      throw authFailed();
+    return { token: parsed.data.token };
+  };
+  if (options.readPool && options.instanceHash) {
+    return options.readPool.withReadSlot(
+      {
+        instanceHash: options.instanceHash,
+        account: credentials.data.account,
+        priority: "auth",
+      },
+      perform,
+    );
+  }
+  return perform();
 }
 
 export interface ReadRequest extends HttpLogIds {
@@ -82,6 +216,20 @@ const unknownWrite = Object.freeze({
   message: "禅道写入结果无法确认，请回读或反查，禁止重新创建。",
 } as const);
 type WriteReceipt<T> = { status: "accepted"; data: T } | typeof unknownWrite;
+
+/** CR-008 §4.4：发送前（getSession 阶段）认证失败，写入未派发。 */
+function preSendAuthFailure(cause: BztError): BztError {
+  return new BztError("AUTH_FAILED", cause.message, { phase: "pre_send" });
+}
+
+/** CR-008 §4.4：派发后收到 401，写入可能已进入禅道业务处理。 */
+function postSendAuthFailure(): BztError {
+  return new BztError(
+    "AUTH_FAILED",
+    "禅道认证失败，无法确认该写入是否已执行。",
+    { phase: "post_send" },
+  );
+}
 
 function requestUrl(baseUrl: string, request: ReadRequest): string {
   const { pathTemplate, params = {}, query = {} } = request;
@@ -248,13 +396,27 @@ export async function decodeReadResponse<T>(
 }
 
 export function createZentaoHttp(options: ZentaoHttpOptions) {
-  const credentials = loginCredentials.safeParse(options);
-  if (!credentials.success)
+  const tokenOnly = options.token !== undefined;
+  const credentials = tokenOnly
+    ? undefined
+    : loginCredentials.safeParse(options);
+  if (!tokenOnly && !credentials?.success)
     throw new BztError("INVALID_INPUT", "禅道账号和密码不能为空白。");
+  if (tokenOnly && !nonBlankCredential.safeParse(options.token).success)
+    throw new BztError("INVALID_INPUT", "禅道 Token 不能为空白。");
   const normalized = normalizeZentaoBaseUrl(options.baseUrl);
   if (!normalized) throw new BztError("INVALID_INPUT", "禅道基础地址不合法。");
   const baseUrl = normalized.href;
-  const { env, clock, logSink } = options;
+  const {
+    env,
+    clock,
+    logSink,
+    account,
+    readPool,
+    instanceHash,
+    onAuthFailed,
+    isRevoked,
+  } = options;
   const timeoutMs = resolveZentaoTimeout(env);
   const fetcher = options.fetch ?? fetch;
   const sleep =
@@ -335,13 +497,22 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     return result;
   }
 
-  const loginRequest: PreparedRequest = {
-    method: "POST",
-    pathTemplate: tokenPath,
-    url: new URL(tokenPath.slice(1), baseUrl).href,
-    body: JSON.stringify(credentials.data),
-  };
+  const loginRequest: PreparedRequest | undefined = credentials?.success
+    ? {
+        method: "POST",
+        pathTemplate: tokenPath,
+        url: new URL(tokenPath.slice(1), baseUrl).href,
+        body: JSON.stringify(credentials.data),
+      }
+    : undefined;
   const auth = createZentaoAuth(async () => {
+    if (tokenOnly) {
+      // ADR-22：Token 失效后不自动重登，直接拒绝。
+      throw new BztError("AUTH_FAILED", "禅道 Token 已失效，请重新认证。", {
+        phase: "pre_send",
+      });
+    }
+    if (!loginRequest) throw authFailed();
     const result = await withReadSlot(() => send(loginRequest));
     if (result.kind === "success") return result.text;
     if (
@@ -352,6 +523,10 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       throw authFailed();
     throw requestError(result);
   });
+  if (tokenOnly) {
+    // 预注入静态 Token；401 时由 invalidate 清除，不再重登。
+    auth.seedSession(options.token);
+  }
 
   async function getProbeSender(
     request: Pick<PreparedRequest, "method" | "pathTemplate" | "objectId">,
@@ -403,9 +578,23 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
     let replayed = false;
     let retries = 0;
     for (;;) {
+      if (isRevoked?.()) throw authFailed();
       const session = await auth.getSession();
       capture?.observeSession(session.token);
-      const result = await withReadSlot(() => send(prepared, session.token));
+      const runRead = () => {
+        if (isRevoked?.()) throw authFailed();
+        return send(prepared, session.token);
+      };
+      const result =
+        readPool && instanceHash
+          ? await readPool.withReadSlot(
+              {
+                instanceHash,
+                account,
+              },
+              runRead,
+            )
+          : await withReadSlot(runRead);
       if (result.kind === "success") {
         const body = decodeJson(
           result.text,
@@ -418,7 +607,8 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       }
       if (result.kind === "http-error" && result.status === 401) {
         auth.invalidate(session);
-        if (replayed) throw authFailed();
+        if (tokenOnly) onAuthFailed?.();
+        if (tokenOnly || replayed) throw authFailed();
         replayed = true;
         continue;
       }
@@ -442,7 +632,20 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
       body: encodeBody(request.body),
     };
     return withInstanceWriteLock(baseUrl, async () => {
-      const session = await auth.getSession();
+      if (isRevoked?.()) throw preSendAuthFailure(authFailed());
+      let session;
+      try {
+        session = await auth.getSession();
+      } catch (error) {
+        // 发送前认证失败（含 Token 失效重登被拒）是明确的 pre_send 拒绝。
+        if (error instanceof BztError && error.code === "AUTH_FAILED")
+          throw preSendAuthFailure(error);
+        throw error;
+      }
+      if (isRevoked?.()) {
+        auth.invalidate(session);
+        throw preSendAuthFailure(authFailed());
+      }
       const result = await send(prepared, session.token);
       if (result.kind === "success") {
         try {
@@ -470,12 +673,20 @@ export function createZentaoHttp(options: ZentaoHttpOptions) {
         !isTransient(result)
       ) {
         // docs/06 §2.2 无法证明 401 的写请求未进入业务处理。
-        if (result.status === 401) auth.invalidate(session);
+        if (result.status === 401) {
+          auth.invalidate(session);
+          if (tokenOnly) onAuthFailed?.();
+          throw postSendAuthFailure();
+        }
         throw requestError(result);
       }
       return unknownWrite;
     });
   }
 
-  return { read, write, getProbeSender };
+  function revoke(): void {
+    auth.clearSession();
+  }
+
+  return { read, write, getProbeSender, revoke };
 }

@@ -27,6 +27,7 @@ const unsafeAccountChars = /[^A-Za-z0-9._-]+/gu;
 const accountEdges = /^[._-]+|[._-]+$/gu;
 const reservedAccount = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/iu;
 const memoryPath = ":memory:";
+const digestHexLength = 16;
 
 /**
  * 05 §6：目录按实例 + 账号隔离。
@@ -62,6 +63,33 @@ export function sanitizeAccount(account: string): string {
     .digest("hex")
     .slice(0, 12);
   return `${safe}-${digest}`;
+}
+
+/**
+ * CR-008 §4.4：集中多用户部署的规范账号目录键。
+ * 始终附带原始账号完整 UTF-8 字节的 SHA-256 截断哈希后缀，
+ * 大小写不敏感文件系统（Windows/macOS）上 `Alice` 与 `alice` 不会落入同一路径；
+ * 前缀统一小写并避开 Windows 保留设备名，保证目录名在任何 FS 语义下可用。
+ */
+export function canonicalAccountDir(account: string): string {
+  const trimmed = account.trim();
+  if (!trimmed)
+    throw new BztError("INVALID_INPUT", "禅道账号不能为空。", {
+      fields: ["account"],
+    });
+  const sanitized = trimmed
+    .replace(unsafeAccountChars, "_")
+    .replace(accountEdges, "");
+  // 保留名（如 NUL.txt）中的点会让目录名仍以 "nul." 开头，替换为连字符规避。
+  const prefix = (sanitized || "account")
+    .slice(0, 48)
+    .toLowerCase()
+    .replace(/\./gu, "-");
+  const digest = createHash("sha256")
+    .update(account, "utf8")
+    .digest("hex")
+    .slice(0, digestHexLength);
+  return `${prefix}-${digest}`;
 }
 
 export function resolveStoreLocation(

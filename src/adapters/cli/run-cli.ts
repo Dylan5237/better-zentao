@@ -10,6 +10,7 @@ import { installAgent } from "../../services/install-agent.ts";
 import { runProbeCapture } from "../../services/probe-capture.ts";
 import { runProbeWrite } from "../../services/probe-write.ts";
 import { startMcpServer } from "../mcp/server.ts";
+import { runServeCommand } from "../server/command.ts";
 import { runWebCommand } from "../web/command.ts";
 
 interface CliRuntime {
@@ -19,6 +20,7 @@ interface CliRuntime {
   readonly homeDir?: string;
   readonly clock: () => number;
   readonly nodeVersion: string;
+  readonly onShutdown?: (cleanup: () => Promise<void> | void) => void;
 }
 
 const help = `用法
@@ -33,6 +35,7 @@ const help = `用法
       也接受 --agent <codex|claude|gemini>，--project 仅用于 Claude Code
   bzt config-ui [--config 路径] [--out HTML路径]    生成配置编辑页
   bzt web [--config 团队配置路径] [--port 端口]    启动单人本地门户
+  bzt serve --server-config 路径    启动集中部署多用户服务
   bzt snapshot [capture|export|import] [选项]    采集或交换月初快照
   bzt digest [--config 路径] [--force] [--dry-run]    生成每日摘要
   bzt schedule-task <install|status|uninstall> <digest|snapshot> [--config 路径] [--dry-run]
@@ -51,6 +54,7 @@ export async function runCli(
   const [first, ...rest] = args;
   if (!rest.includes("--help") && !rest.includes("-h")) {
     if (first === "web") return runWebCommand(rest, runtime);
+    if (first === "serve") return runServeCommand(rest, runtime);
     if (first === "digest") return runDigestCommand(rest, runtime);
     if (first === "schedule-task") return runScheduleTaskCommand(rest, runtime);
     if (first === "snapshot") {
@@ -61,7 +65,9 @@ export async function runCli(
       return result.exitCode;
     }
   } else if (
-    ["digest", "schedule-task", "snapshot", "web"].includes(first ?? "")
+    ["digest", "schedule-task", "snapshot", "web", "serve"].includes(
+      first ?? "",
+    )
   ) {
     runtime.stdout(help);
     return 0;

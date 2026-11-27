@@ -6,7 +6,7 @@ export default defineConfig(({ mode }) => ({
       mode === "smoke"
         ? ["test/smoke/**/*.test.ts"]
         : ["test/{unit,contract,service,adapters}/**/*.test.ts"],
-    ...(mode === "smoke" ? { testTimeout: 120_000 } : {}),
+    testTimeout: mode === "smoke" ? 120_000 : 15_000,
     coverage: {
       include: ["src/**/*.ts", "scripts/**/*.ts"],
       thresholds: {

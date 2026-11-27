@@ -109,9 +109,10 @@ async function checkLiveDoctor(
       });
     }
 
+    const password = connection.password ?? "";
     const safeVersion =
       versionPattern.exec(instance.version)?.[0] === instance.version &&
-      !instance.version.includes(connection.password);
+      (!password || !instance.version.includes(password));
     live = {
       version: safeVersion ? instance.version : redacted,
       URAndSR: instance.URAndSR,
@@ -122,11 +123,7 @@ async function checkLiveDoctor(
       ...(drifted.length ? { capabilitiesNeedingReverification: drifted } : {}),
     };
     endpoint = "team-config";
-    const findings = await checkLiveConfiguration(
-      client,
-      config,
-      connection.password,
-    );
+    const findings = await checkLiveConfiguration(client, config, password);
     const ok =
       !findings.missingProducts.length &&
       !findings.invalidModules.length &&
