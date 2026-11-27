@@ -281,6 +281,14 @@ export function runPortalAction(
       data.who = account;
     }
     if (
+      name === "query_stories" &&
+      role === "DS" &&
+      data.type === "requirement"
+    ) {
+      data.role = "assigned";
+      data.who = account;
+    }
+    if (
       name === "decompose_stories" &&
       role !== "RM" &&
       data.template !== "design"

@@ -1461,7 +1461,12 @@ function mountPortal(
       [
         "intake",
         "query_stories",
-        { type: "requirement", unlinked: true, limit: 1 },
+        {
+          type: "requirement",
+          unlinked: true,
+          ...(ctx.role.id === "DS" ? { role: "assigned" } : {}),
+          limit: 1,
+        },
       ],
       [
         "stories",

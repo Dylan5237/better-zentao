@@ -42,7 +42,13 @@ const unlinked = [
   "unlinked",
   "待关联用户需求",
   "query_stories",
-  { type: "requirement", unlinked: true, limit: 100 },
+  { type: "requirement", unlinked: true, limit: 20 },
+];
+const unlinkedAssigned = [
+  "unlinked",
+  "指派给我的待关联用户需求",
+  "query_stories",
+  { type: "requirement", unlinked: true, role: "assigned", limit: 20 },
 ];
 const profiles = {
   FB: {
@@ -60,7 +66,7 @@ const profiles = {
   DS: {
     group: "design",
     headline: "范围写清楚，移交验收不遗漏",
-    reads: [unlinked, work("maintained")],
+    reads: [unlinkedAssigned, work("maintained")],
     render: renderDesign,
   },
   RM: {
@@ -1582,20 +1588,26 @@ function homeQueries(ctx, profile, selectedTeam) {
       ]);
     }
     if (native) {
+      const dsOnly = id === "DS" ? { role: "assigned" } : {};
       reads.push([
         "requirements",
-        "用户需求池",
+        id === "DS" ? "指派给我的用户需求" : "用户需求池",
         "query_stories",
         {
           type: "requirement",
           status: ["all"],
-          limit: 100,
+          limit: 20,
+          ...dsOnly,
         },
       ]);
-      reads[reads.indexOf(unlinked)] = [
-        ...unlinked.slice(0, 3),
-        { ...unlinked[3], status: ["all"] },
-      ];
+      const baseUnlinked = id === "DS" ? unlinkedAssigned : unlinked;
+      const unlinkedIndex = reads.indexOf(baseUnlinked);
+      if (unlinkedIndex >= 0) {
+        reads[unlinkedIndex] = [
+          ...baseUnlinked.slice(0, 3),
+          { ...baseUnlinked[3], status: ["all"] },
+        ];
+      }
     } else if (allowed(ctx, "scan_workflow_risks")) {
       reads.push([
         "risks",

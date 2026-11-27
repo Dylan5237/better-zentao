@@ -495,7 +495,15 @@ export async function renderIntake(container, ctx, initial = {}) {
   if (mode === "batchImport" && options.showBatch)
     writer?.selectIntakeMode?.(mode);
   let request = 0;
-  const pendingInput = { type: "requirement", unlinked: true, limit: 100 };
+  let currentPage = 1;
+  const pageSize = 20;
+  const isDs = ctx.role.id === "DS";
+  const pendingInput = {
+    type: "requirement",
+    unlinked: true,
+    ...(isDs ? { role: "assigned" } : {}),
+    limit: pageSize,
+  };
   async function load() {
     if (!ctx.current() || !side.isConnected || !can(ctx, "query_stories"))
       return;
@@ -521,21 +529,31 @@ export async function renderIntake(container, ctx, initial = {}) {
       const results = fb
         ? await Promise.allSettled([
             ctx
-              .call("query_stories", { ...pendingInput, ...raised })
+              .call("query_stories", {
+                ...pendingInput,
+                ...raised,
+                page: currentPage,
+              })
               .then(accepted),
             ctx
               .call("query_stories", {
                 ...raised,
                 type: "story",
                 status: ["all"],
-                limit: 100,
+                page: currentPage,
+                limit: pageSize,
               })
               .then(accepted),
           ])
         : [
             {
               status: "fulfilled",
-              value: accepted(await ctx.call("query_stories", pendingInput)),
+              value: accepted(
+                await ctx.call("query_stories", {
+                  ...pendingInput,
+                  page: currentPage,
+                }),
+              ),
             },
           ];
       if (!current()) return;
@@ -567,7 +585,32 @@ export async function renderIntake(container, ctx, initial = {}) {
             prefill,
           });
         }
-        if (!fb) evidence(list, result);
+        if (!fb) {
+          const totalItems = result.data.total ?? total(result);
+          const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+          if (totalPages > 1 || currentPage > 1) {
+            const pager = put(list, "div", undefined, "daily-pager");
+            const prev = button(pager, "上一页", () => {
+              if (currentPage <= 1) return;
+              currentPage -= 1;
+              void load();
+            });
+            prev.disabled = currentPage <= 1;
+            put(
+              pager,
+              "span",
+              `第 ${currentPage} / ${totalPages} 页（共 ${totalItems} 条）`,
+              "daily-pager-info",
+            );
+            const next = button(pager, "下一页", () => {
+              if (currentPage >= totalPages) return;
+              currentPage += 1;
+              void load();
+            });
+            next.disabled = currentPage >= totalPages;
+          }
+          evidence(list, result);
+        }
       }
       if (!partial) {
         count.replaceChildren();
@@ -1168,8 +1211,11 @@ export async function renderStories(container, ctx, initial = {}) {
   const known = new Set([...progressOptions, ...(filter ? [filter] : [])]);
   for (const name of known) put(select, "option", name).value = name;
   select.value = filter;
+  let ledgerPage = 1;
+  const ledgerPageSize = 20;
   select.addEventListener("change", () => {
     filter = select.value;
+    ledgerPage = 1;
     saveState();
     return load();
   });
@@ -1185,6 +1231,8 @@ export async function renderStories(container, ctx, initial = {}) {
     undefined,
     "table-wrap vp-table-scroll",
   );
+  const ledgerPager = put(ledgerPanel, "div", undefined, "daily-pager");
+  ledgerPager.hidden = true;
   const workflow = put(body, "div", undefined, "daily-flow");
   flowChart(workflow, ctx);
   let ledgerResult;
@@ -1301,9 +1349,12 @@ export async function renderStories(container, ctx, initial = {}) {
         await ctx.call("query_stories", {
           status: ["all"],
           ...(board
-            ? { category: "design" }
-            : filter && { progress: [filter] }),
-          limit: 100,
+            ? { category: "design", limit: 100 }
+            : {
+                ...(filter && { progress: [filter] }),
+                page: ledgerPage,
+                limit: ledgerPageSize,
+              }),
         }),
       );
       if (!current()) return;
@@ -1339,6 +1390,32 @@ export async function renderStories(container, ctx, initial = {}) {
         }
         ledgerResult = result;
         showLedger();
+        ledgerPager.replaceChildren();
+        const totalItems = result.data.total ?? total(result);
+        const totalPages = Math.max(1, Math.ceil(totalItems / ledgerPageSize));
+        if (totalPages > 1 || ledgerPage > 1) {
+          ledgerPager.hidden = false;
+          const prev = button(ledgerPager, "上一页", () => {
+            if (ledgerPage <= 1) return;
+            ledgerPage -= 1;
+            void load();
+          });
+          prev.disabled = ledgerPage <= 1;
+          put(
+            ledgerPager,
+            "span",
+            `第 ${ledgerPage} / ${totalPages} 页（共 ${totalItems} 条）`,
+            "daily-pager-info",
+          );
+          const next = button(ledgerPager, "下一页", () => {
+            if (ledgerPage >= totalPages) return;
+            ledgerPage += 1;
+            void load();
+          });
+          next.disabled = ledgerPage >= totalPages;
+        } else {
+          ledgerPager.hidden = true;
+        }
         evidence(status, result);
       }
     } catch (error) {

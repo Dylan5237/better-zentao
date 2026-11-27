@@ -59,6 +59,7 @@ export const queryStoriesInputSchema = z
     type: z.enum(["story", "requirement"]).optional(),
     unlinked: z.boolean().optional(),
     keyword: text.optional(),
+    page: z.int().positive().optional(),
     limit: z.int().positive().optional(),
   })
   .strict()
@@ -75,6 +76,10 @@ export const queryStoriesOutputSchema = queryResultSchema(
   z.strictObject({
     items: z.array(storyItemSchema),
     countsByProgress: z.record(z.string(), z.int().nonnegative()),
+    page: z.int().positive().optional(),
+    pageSize: z.int().positive().optional(),
+    total: z.int().nonnegative().optional(),
+    hasMore: z.boolean().optional(),
   }),
 );
 export type StoryItem = z.infer<typeof storyItemSchema>;

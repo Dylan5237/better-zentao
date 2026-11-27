@@ -363,27 +363,59 @@ describe("CR-002 WEB-03 原型需求工作流", () => {
       expect(allTools.query_stories.input.safeParse(input).success).toBe(true);
   });
 
-  it("从快捷入口直接打开全部研发需求及阶段筛选", async () => {
-    const call = vi
-      .fn<Call>()
-      .mockResolvedValue(
-        result({ items: [story], countsByProgress: { 未就绪: 1 } }),
-      );
+  it("从快捷入口直接打开全部研发需求及阶段筛选，并支持分页翻页", async () => {
+    const call = vi.fn<Call>().mockResolvedValue(
+      result({
+        items: [story],
+        countsByProgress: { 未就绪: 25 },
+        page: 1,
+        pageSize: 20,
+        total: 25,
+        hasMore: true,
+      }),
+    );
     const root = new ElementStub("main");
     await renderStories(root, context(call, ["query_stories"]), {
       tab: "all-stories",
     });
     expect(call).toHaveBeenCalledExactlyOnceWith("query_stories", {
       status: ["all"],
-      limit: 100,
+      page: 1,
+      limit: 20,
     });
     expect(root.find((node) => node.tagName === "table")).toBeTruthy();
     expect(
-      button(root, "全部需求台账 (1)").attributes.get("aria-pressed"),
+      button(root, "全部需求台账 (25)").attributes.get("aria-pressed"),
     ).toBe("true");
     expect(
       root.find((node) => node.tagName === "select").parent?.parent?.hidden,
     ).toBe(false);
+    await button(root, "下一页").emit("click");
+    expect(call).toHaveBeenLastCalledWith("query_stories", {
+      status: ["all"],
+      page: 2,
+      limit: 20,
+    });
+  });
+
+  it("设计人员（DS）打开提需求页时仅查询指派给自己的待关联用户需求", async () => {
+    const call = vi
+      .fn<Call>()
+      .mockResolvedValue(result({ items: [], countsByProgress: {} }));
+    const ctx = context(call, ["query_stories", "create_story"]);
+    ctx.role.id = "DS";
+    const root = new ElementStub("main");
+    await renderIntake(root, ctx);
+    expect(call).toHaveBeenCalledExactlyOnceWith(
+      "query_stories",
+      expect.objectContaining({
+        type: "requirement",
+        unlinked: true,
+        role: "assigned",
+        page: 1,
+        limit: 20,
+      }),
+    );
   });
 
   it("详情抽屉展示服务端进度、实现范围和可复制的真实卡片", async () => {

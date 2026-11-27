@@ -810,6 +810,38 @@ it("query_stories 可组合产品、模块、计划、关键字、人员、角�
     ).toEqual([]);
 });
 
+it("query_stories 支持 page 与 limit 分页，并返回 total 和 hasMore", async () => {
+  const rows = [31, 32, 33].map((id) => ({
+    ...story,
+    id,
+    title: `需求 ${id}`,
+  }));
+  const { service } = setup({ stories: rows });
+  const page1 = queryStoriesOutputSchema.parse(
+    await service.queryStories({ product: "29", page: 1, limit: 2 }),
+  );
+  expect(page1.data.items.map((item) => item.id)).toEqual([31, 32]);
+  expect(page1.data).toMatchObject({
+    page: 1,
+    pageSize: 2,
+    total: 3,
+    hasMore: true,
+  });
+  expect(page1.truncated).toBe(true);
+
+  const page2 = queryStoriesOutputSchema.parse(
+    await service.queryStories({ product: "29", page: 2, limit: 2 }),
+  );
+  expect(page2.data.items.map((item) => item.id)).toEqual([33]);
+  expect(page2.data).toMatchObject({
+    page: 2,
+    pageSize: 2,
+    total: 3,
+    hasMore: false,
+  });
+  expect(page2.truncated).toBeUndefined();
+});
+
 it("N5/N6 较长文档保留可用内容，缺范围提示 R05，卡片不预计过去日期", async () => {
   const designRef = "章节：2.1。".repeat(400);
   const verify = "可以搜索。".repeat(75);

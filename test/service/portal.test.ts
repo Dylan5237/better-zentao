@@ -53,6 +53,39 @@ describe("CR-002 WEB-01 至 WEB-04", () => {
       "2026-11",
     );
   });
+  it("设计人员（DS）查询用户需求时服务端强制限定指派给本人", async () => {
+    const execute = vi.fn(async () => {
+      throw new Error("scope verified");
+    });
+    const run = runPortalAction(execute, "alice", async () =>
+      portalRoles({ DS: ["alice"] }, "alice"),
+    );
+    await expect(
+      run("DS", "query_stories", {
+        type: "requirement",
+        unlinked: true,
+        who: "bob",
+      }),
+    ).rejects.toThrow("scope verified");
+    expect(execute).toHaveBeenLastCalledWith(
+      "query_stories",
+      {
+        type: "requirement",
+        unlinked: true,
+        role: "assigned",
+        who: "alice",
+      },
+      "DS",
+    );
+    await expect(
+      run("DS", "query_stories", { type: "story", status: ["all"] }),
+    ).rejects.toThrow("scope verified");
+    expect(execute).toHaveBeenLastCalledWith(
+      "query_stories",
+      { type: "story", status: ["all"] },
+      "DS",
+    );
+  });
   it("个人排期强制限定本人、拒绝临时指派，设计主管可读队列和版本", async () => {
     const execute = vi.fn(async () => {
       throw new Error("scope verified");
