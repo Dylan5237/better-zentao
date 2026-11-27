@@ -1,0 +1,16 @@
+{
+  "host": "192.0.2.10",
+  "sshUser": "root",
+  "hostKeyMd5": "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00",
+  "appRoot": "/opt/better-zentao",
+  "serviceName": "better-zentao.service",
+  "nginxSiteName": "better-zentao",
+  "backendPort": 17330,
+  "httpsPort": 17443,
+  "httpsUrl": "https://192.0.2.10:17443",
+  "wrapperPath": "C:\\Users\\<user>\\.codex\\skills\\linux-server-ops\\scripts\\invoke-with-local-credentials.ps1",
+  "allowedKeys": "FUXI_SSH_PASSWORD,FUXI_USERNAME,FUXI_PASSWORD",
+  "requiredKey": "FUXI_SSH_PASSWORD",
+  "plinkPath": "C:\\Program Files (x86)\\PuTTY\\plink.exe",
+  "pscpPath": "C:\\Program Files (x86)\\PuTTY\\pscp.exe"
+}
