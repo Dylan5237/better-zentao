@@ -2530,11 +2530,15 @@ export class TrackingService {
         ),
         requirementAssignedToMe ? state.me() : undefined,
       ]);
-      if (
-        requirementAssignedToMe &&
-        (!me?.account || (detail && detail.story.assignedTo !== me.account))
-      )
-        throw new BztError("NOT_FOUND", "没有找到指派给本人的用户需求。");
+      if (requirementAssignedToMe) {
+        if (!me?.account || !detail)
+          throw new BztError(
+            "ZENTAO_UNAVAILABLE",
+            "无法确认该用户需求的指派归属，已拒绝返回关联结果。",
+          );
+        if (detail.story.assignedTo !== me.account)
+          throw new BztError("NOT_FOUND", "没有找到指派给本人的用户需求。");
+      }
       ids = numericIds([
         ...(detail?.story.linkStories ?? []),
         ...(detail?.relations ?? [])

@@ -908,6 +908,40 @@ it("DS 用户需求权限边界：query_stories 与 get_story_progress(requireme
   expect(storyDetail.data).toMatchObject({ story: { id: 31 } });
 });
 
+it("DS 按 requirementId 查询在详情读取失败时即使存在历史 sourceLinks 也必须 fail-closed 拒绝", async () => {
+  const localStore = openLocalStore({
+    dbPath: ":memory:",
+    baseUrl,
+    account: "dev",
+    clock,
+  });
+  localStore.sourceLinks.upsert({
+    origin: "local",
+    verifiedAt: null,
+    fromType: "requirement",
+    fromId: "502",
+    toType: "story",
+    toId: "31",
+    relation: "links",
+  });
+  const { service } = setup({
+    stories: [story],
+    requirements: [],
+    localStore,
+    detailStatus: { 502: 503 },
+  });
+  await expect(
+    service.getStoryProgress(
+      { requirementId: 502 },
+      { requirementAssignedToMe: true },
+    ),
+  ).rejects.toMatchObject({ code: "ZENTAO_UNAVAILABLE" });
+  // 非 DS 角色仍保留原有历史 sourceLinks 兜底口径
+  const fallback = await service.getStoryProgress({ requirementId: 502 });
+  expect(fallback.data).toMatchObject({ story: { id: 31 } });
+  localStore.close();
+});
+
 it("N5/N6 较长文档保留可用内容，缺范围提示 R05，卡片不预计过去日期", async () => {
   const designRef = "章节：2.1。".repeat(400);
   const verify = "可以搜索。".repeat(75);
